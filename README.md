@@ -55,6 +55,15 @@ gh auth refresh -s project
 Python 3.9+. Standard library only — no dependencies, and no token is ever read,
 stored or passed by this tool. Authentication is `gh`'s job.
 
+## Mapping to the Gold Agile data model
+
+[GOLD_MODEL.md](GOLD_MODEL.md) maps every column onto ExperienceFlowAI's
+`agile_issues` and `agile_events`, so GitHub and Jira land in one shape. It also
+records the two things measurement turned up rather than documentation:
+GitHub emits **no event for a Projects v2 custom field change** (only Status has
+one), and the timeline is **eventually consistent** — a transition can take a
+minute or more to become readable.
+
 ## The rules it enforces
 
 `gh agile validate` checks what a machine can: every story has an epic, every

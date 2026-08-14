@@ -34,12 +34,22 @@ import sys
 from collections import defaultdict
 
 #: Statuses this tool considers legal. Mirrors POLICY.md §2; keep them in step.
-STATUSES = ("Todo", "In progress", "Blocked", "In review", "Done")
+#:
+#: Compared case-insensitively everywhere. GitHub's stock options are "Todo",
+#: "In Progress", "Done" -- capital P -- and a project whose option casing
+#: differs from this list is a naming quibble, not a data problem. Learned by
+#: measuring: with an exact comparison every cycle time came back null while the
+#: transitions were sitting right there in the timeline.
+STATUSES = ("Todo", "In Progress", "Blocked", "In Review", "Done")
 
 #: The status whose first entry starts the cycle-time clock, and the one that
 #: stops it. Named rather than positional so reordering STATUSES cannot silently
 #: change what every historical measurement means.
-CYCLE_START, CYCLE_END = "In progress", "Done"
+CYCLE_START, CYCLE_END = "In Progress", "Done"
+
+
+def same_status(a: str | None, b: str | None) -> bool:
+    return (a or "").strip().casefold() == (b or "").strip().casefold()
 
 
 def gh(args: list[str], **kwargs) -> str:
@@ -178,9 +188,9 @@ def history(issue_id: str) -> dict[str, object]:
             added = added or when
         elif kind == "ProjectV2ItemStatusChangedEvent":
             status = event.get("status")
-            if status == CYCLE_START and started is None:
+            if same_status(status, CYCLE_START) and started is None:
                 started = when
-            elif status == CYCLE_END:
+            elif same_status(status, CYCLE_END):
                 done = when
     return {"added_to_board_at": added, "started_at": started, "done_at": done}
 
@@ -258,15 +268,15 @@ def cmd_validate(args) -> int:
         labels = set(row["labels"].split(";")) if row["labels"] else set()
         status = row.get("field_status")
 
-        if status and status not in STATUSES:
+        if status and not any(same_status(status, s) for s in STATUSES):
             problems["status is not one of " + ", ".join(STATUSES)].append(f"{ident}: {status!r}")
         if "type:story" in labels and not row["epic_number"]:
             problems["story has no epic"].append(ident)
         if "type:epic" in labels and not row["sub_issues_total"]:
             problems["epic has no stories"].append(ident)
-        if row["state"] == "CLOSED" and status and status != CYCLE_END:
+        if row["state"] == "CLOSED" and status and not same_status(status, CYCLE_END):
             problems[f"closed but status is not {CYCLE_END}"].append(f"{ident}: {status!r}")
-        if row["state"] == "OPEN" and status == CYCLE_END:
+        if row["state"] == "OPEN" and same_status(status, CYCLE_END):
             problems[f"status {CYCLE_END} but still open"].append(ident)
         if not labels & {"type:epic", "type:story", "type:bug"}:
             problems["no type: label"].append(ident)
