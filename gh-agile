@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""gh-agile — export and validate a GitHub Projects v2 backlog.
+
+A `gh` extension. Install with:
+
+    gh extension install paulcaron16k/gh-agile
+
+Two commands, deliberately the read side first: the export schema is the thing
+that cannot be changed later without re-analysing everything already exported.
+
+    gh agile export   --owner @me --project 1 [--csv]
+    gh agile validate --owner @me --project 1
+
+**Why this exists at all**, when `gh project item-list` already returns JSON:
+that command gives a *snapshot*. `ProjectV2Item` exposes `createdAt`,
+`updatedAt` and current field values — no history — so a snapshot cannot say
+when an item entered `In progress`, which is every flow question worth asking.
+The history lives on the **issue timeline** instead, as
+`ProjectV2ItemStatusChangedEvent`. This tool runs both queries and joins them on
+the issue node ID, which is the whole difference between a board dump and
+something you can analyse the way you would a Jira export.
+
+Standard library only, and it shells out to `gh` for authentication so no token
+is ever read, stored, or passed here.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import subprocess
+import sys
+from collections import defaultdict
+
+#: Statuses this tool considers legal. Mirrors POLICY.md §2; keep them in step.
+STATUSES = ("Todo", "In progress", "Blocked", "In review", "Done")
+
+#: The status whose first entry starts the cycle-time clock, and the one that
+#: stops it. Named rather than positional so reordering STATUSES cannot silently
+#: change what every historical measurement means.
+CYCLE_START, CYCLE_END = "In progress", "Done"
+
+
+def gh(args: list[str], **kwargs) -> str:
+    """Run `gh` and return stdout, failing loudly.
+
+    Authentication is `gh`'s problem by design: this tool never sees a token.
+    """
+    result = subprocess.run(["gh", *args], capture_output=True, text=True, **kwargs)
+    if result.returncode != 0:
+        sys.exit(f"gh {' '.join(args[:2])} failed: {result.stderr.strip()}")
+    return result.stdout
+
+
+def graphql(query: str, **variables) -> dict:
+    args = ["api", "graphql", "-f", f"query={query}"]
+    for key, value in variables.items():
+        # -F coerces numbers and booleans; -f would send everything as a string
+        # and the schema rejects a String where it wants Int.
+        args.extend(["-F", f"{key}={value}"])
+    return json.loads(gh(args))
+
+
+# The owner may be a user or an organization and the schema exposes projectV2 on
+# both, but neither root reaches the other's projects -- so try user first and
+# fall back rather than making the caller know which their account is.
+ITEMS_QUERY = """
+query($login: String!, $number: Int!, $cursor: String) {
+  %s(login: $login) {
+    projectV2(number: $number) {
+      title
+      items(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          createdAt
+          updatedAt
+          isArchived
+          fieldValues(first: 20) {
+            nodes {
+              __typename
+              ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
+              ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
+              ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
+              ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
+              ... on ProjectV2ItemFieldIterationValue { title startDate duration field { ... on ProjectV2FieldCommon { name } } }
+            }
+          }
+          content {
+            __typename
+            ... on Issue {
+              id number title url state stateReason createdAt closedAt
+              labels(first: 20) { nodes { name } }
+              assignees(first: 10) { nodes { login } }
+              milestone { title }
+              parent { number title }
+              subIssuesSummary { total completed }
+            }
+            ... on PullRequest { id number title url state }
+            ... on DraftIssue { id title }
+          }
+        }
+      }
+    }
+  }
+}"""
+
+# Status history. Deliberately a separate query per issue: the timeline is not
+# reachable from ProjectV2Item, which is the fact this whole tool exists for.
+TIMELINE_QUERY = """
+query($id: ID!) {
+  node(id: $id) {
+    ... on Issue {
+      timelineItems(first: 100, itemTypes: [PROJECT_V2_ITEM_STATUS_CHANGED_EVENT, ADDED_TO_PROJECT_V2_EVENT]) {
+        nodes {
+          __typename
+          ... on ProjectV2ItemStatusChangedEvent { createdAt status previousStatus }
+          ... on AddedToProjectV2Event { createdAt }
+        }
+      }
+    }
+  }
+}"""
+
+
+def fetch_items(login: str, number: int) -> tuple[str, list[dict]]:
+    """Every item on the board, following pagination."""
+    for root in ("user", "organization"):
+        cursor, nodes, title = None, [], None
+        try:
+            while True:
+                data = graphql(
+                    ITEMS_QUERY % root,
+                    login=login,
+                    number=number,
+                    **({"cursor": cursor} if cursor else {}),
+                )
+                owner = (data.get("data") or {}).get(root)
+                if not owner or not owner.get("projectV2"):
+                    raise KeyError(root)
+                project = owner["projectV2"]
+                title = project["title"]
+                page = project["items"]
+                nodes.extend(page["nodes"])
+                if not page["pageInfo"]["hasNextPage"]:
+                    return title, nodes
+                cursor = page["pageInfo"]["endCursor"]
+        except (KeyError, TypeError, SystemExit):
+            continue  # not this root; try the other
+    sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
+
+
+def field_values(item: dict) -> dict[str, object]:
+    """Flatten the field-value union into {field name: value}."""
+    out: dict[str, object] = {}
+    for node in item["fieldValues"]["nodes"]:
+        field = node.get("field") or {}
+        name = field.get("name")
+        if not name:
+            continue
+        for key in ("text", "number", "date", "name", "title"):
+            if node.get(key) is not None:
+                out[name] = node[key]
+                break
+    return out
+
+
+def history(issue_id: str) -> dict[str, object]:
+    """First entry to CYCLE_START, arrival at CYCLE_END, and board entry."""
+    data = graphql(TIMELINE_QUERY, id=issue_id)
+    events = ((data.get("data") or {}).get("node") or {}).get("timelineItems", {}).get("nodes", [])
+    started = done = added = None
+    for event in events:
+        kind = event.get("__typename")
+        when = event.get("createdAt")
+        if kind == "AddedToProjectV2Event":
+            added = added or when
+        elif kind == "ProjectV2ItemStatusChangedEvent":
+            status = event.get("status")
+            if status == CYCLE_START and started is None:
+                started = when
+            elif status == CYCLE_END:
+                done = when
+    return {"added_to_board_at": added, "started_at": started, "done_at": done}
+
+
+def days_between(start: str | None, end: str | None) -> float | None:
+    if not (start and end):
+        return None
+    import datetime as dt
+
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    delta = dt.datetime.strptime(end, fmt) - dt.datetime.strptime(start, fmt)
+    return round(delta.total_seconds() / 86400, 2)
+
+
+def rows(login: str, number: int, *, with_history: bool) -> list[dict]:
+    _title, items = fetch_items(login, number)
+    out = []
+    for item in items:
+        content = item.get("content") or {}
+        if content.get("__typename") != "Issue":
+            continue  # draft items and pull requests are not backlog items
+        fields = field_values(item)
+        row = {
+            "number": content["number"],
+            "title": content["title"],
+            "url": content["url"],
+            "state": content["state"],
+            "state_reason": content.get("stateReason") or "",
+            "labels": ";".join(n["name"] for n in content["labels"]["nodes"]),
+            "assignees": ";".join(n["login"] for n in content["assignees"]["nodes"]),
+            "milestone": (content.get("milestone") or {}).get("title") or "",
+            "epic_number": (content.get("parent") or {}).get("number") or "",
+            "epic_title": (content.get("parent") or {}).get("title") or "",
+            "sub_issues_total": (content.get("subIssuesSummary") or {}).get("total") or 0,
+            "sub_issues_done": (content.get("subIssuesSummary") or {}).get("completed") or 0,
+            "created_at": content["createdAt"],
+            "closed_at": content.get("closedAt") or "",
+            "archived": item["isArchived"],
+        }
+        for name, value in fields.items():
+            row[f"field_{name.lower().replace(' ', '_')}"] = value
+        if with_history:
+            hist = history(content["id"])
+            row.update(hist)
+            row["cycle_time_days"] = days_between(hist["started_at"], hist["done_at"])
+            row["lead_time_days"] = days_between(hist["added_to_board_at"], hist["done_at"])
+        out.append(row)
+    return out
+
+
+def cmd_export(args) -> int:
+    data = rows(args.owner, args.project, with_history=not args.no_history)
+    if args.csv:
+        if not data:
+            return 0
+        columns: list[str] = []
+        for row in data:  # union of keys, first-seen order: fields vary per item
+            columns.extend(k for k in row if k not in columns)
+        writer = csv.DictWriter(sys.stdout, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(data)
+    else:
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    return 0
+
+
+def cmd_validate(args) -> int:
+    """The conventions a machine can check. POLICY.md §3."""
+    data = rows(args.owner, args.project, with_history=False)
+    problems: dict[str, list[str]] = defaultdict(list)
+
+    for row in data:
+        ident = f"#{row['number']} {row['title'][:48]}"
+        labels = set(row["labels"].split(";")) if row["labels"] else set()
+        status = row.get("field_status")
+
+        if status and status not in STATUSES:
+            problems["status is not one of " + ", ".join(STATUSES)].append(f"{ident}: {status!r}")
+        if "type:story" in labels and not row["epic_number"]:
+            problems["story has no epic"].append(ident)
+        if "type:epic" in labels and not row["sub_issues_total"]:
+            problems["epic has no stories"].append(ident)
+        if row["state"] == "CLOSED" and status and status != CYCLE_END:
+            problems[f"closed but status is not {CYCLE_END}"].append(f"{ident}: {status!r}")
+        if row["state"] == "OPEN" and status == CYCLE_END:
+            problems[f"status {CYCLE_END} but still open"].append(ident)
+        if not labels & {"type:epic", "type:story", "type:bug"}:
+            problems["no type: label"].append(ident)
+
+    if not problems:
+        print(f"{len(data)} item(s): no problems found")
+        return 0
+    for rule, offenders in problems.items():
+        print(f"\n{rule} ({len(offenders)}):")
+        for offender in offenders:
+            print(f"  {offender}")
+    print(f"\n{sum(len(v) for v in problems.values())} problem(s) across {len(data)} item(s)")
+    return 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="gh agile", description=__doc__.splitlines()[0])
+    parser.add_argument("--owner", default="@me", help='project owner; "@me" for yourself')
+    parser.add_argument("--project", type=int, required=True, help="project number")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    export = sub.add_parser("export", help="items, field values and status history")
+    export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
+    export.add_argument(
+        "--no-history",
+        action="store_true",
+        help="skip the per-issue timeline query -- much faster, and the result "
+        "is a snapshot with no cycle time",
+    )
+    export.set_defaults(func=cmd_export)
+
+    validate = sub.add_parser("validate", help="check the conventions in POLICY.md")
+    validate.set_defaults(func=cmd_validate)
+
+    args = parser.parse_args()
+    if args.owner == "@me":
+        args.owner = json.loads(gh(["api", "user"]))["login"]
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
