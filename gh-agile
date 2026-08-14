@@ -299,9 +299,23 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
 #: `agile_issues` without a translation step. See GOLD_MODEL.md.
 DEFAULT_SPEC = {
     "fields": [
+        # Named so the export column lands as `field_story_points`, which is the
+        # Gold model's `story_points` without a translation step. POLICY.md used
+        # to call it `Points`; the model's name wins.
         {"name": "Story Points", "type": "NUMBER"},
         {"name": "Priority", "type": "SINGLE_SELECT",
          "options": ["lowest", "low", "medium", "high", "highest"]},
+        # Requirement traceability, free text -- `FR-7.18` and the like.
+        {"name": "FR", "type": "TEXT"},
+        # `gh project field-create` cannot make one of these: its --data-type
+        # accepts only TEXT, SINGLE_SELECT, DATE and NUMBER. The GraphQL
+        # mutation does, which is why setup does not go through the CLI for it.
+        {"name": "Sprint", "type": "ITERATION"},
+        # Status exists on every new project with three options. The two the
+        # policy adds are not decoration: blocked_hours and review_hours are
+        # computed from time spent in them, so without the options those Gold
+        # columns can never be anything but null.
+        {"name": "Status", "type": "SINGLE_SELECT", "options": list(STATUSES)},
     ],
     "labels": [
         {"name": "type:epic", "color": "6f42c1"},
@@ -359,17 +373,31 @@ def cmd_setup(args) -> int:
     """
     spec = json.loads(open(args.spec).read()) if args.spec else DEFAULT_SPEC
     existing = fields_of(args.owner, args.project)
+    pid = project_id(args.owner, args.project)
+
     for field in spec.get("fields", []):
-        if field["name"] in existing:
-            print(f"  field {field['name']!r} already exists")
+        name, kind = field["name"], field["type"]
+        if name in existing:
+            added = reconcile_options(pid, existing[name], field.get("options") or [])
+            print(f"  field {name!r} exists" + (f", added option(s) {added}" if added else ""))
             continue
-        cmd = ["project", "field-create", str(args.project), "--owner", args.owner,
-               "--name", field["name"], "--data-type", field["type"]]
-        if field.get("options"):
-            cmd += ["--single-select-options", ",".join(field["options"])]
-        gh(cmd)
-        fields_of(args.owner, args.project, refresh=True)
-        print(f"  field {field['name']!r} created")
+        if kind in ("TEXT", "SINGLE_SELECT", "DATE", "NUMBER"):
+            cmd = ["project", "field-create", str(args.project), "--owner", args.owner,
+                   "--name", name, "--data-type", kind]
+            if field.get("options"):
+                cmd += ["--single-select-options", ",".join(field["options"])]
+            gh(cmd)
+        else:
+            # ITERATION and MULTI_SELECT have no CLI route; the mutation does.
+            graphql(
+                "mutation($p: ID!, $n: String!) { createProjectV2Field(input: "
+                "{projectId: $p, dataType: %s, name: $n}) "
+                "{ projectV2Field { ... on ProjectV2IterationField { id } "
+                "... on ProjectV2Field { id } } } }" % kind,
+                p=pid, n=name,
+            )
+        existing = fields_of(args.owner, args.project, refresh=True)
+        print(f"  field {name!r} created")
 
     if args.repo:
         for label in spec.get("labels", []):
@@ -384,6 +412,38 @@ def cmd_setup(args) -> int:
             state = "created" if result.returncode == 0 else "already exists"
             print(f"  label {label['name']!r} {state}")
     return 0
+
+
+def reconcile_options(pid: str, field: dict, wanted: list[str]) -> list[str]:
+    """Add missing options to an existing single-select. Never removes any.
+
+    The gap this closes: `setup` skipped a field that already existed, so
+    `Status` kept GitHub's stock three options and the two the policy declares
+    -- Blocked, In Review -- were legal in the validator and unsettable on the
+    board. Removing an option is deliberately not done here: it would silently
+    clear the field on every item holding it.
+    """
+    if not wanted or not field.get("options"):
+        return []
+    have = {o["name"].casefold() for o in field["options"]}
+    missing = [w for w in wanted if w.casefold() not in have]
+    if not missing:
+        return []
+    # Inlined as GraphQL literals rather than passed as a variable: `gh api
+    # graphql -F` sends every value as a scalar, so a list of input objects
+    # arrives as a string and is rejected. `color` is an enum, hence unquoted;
+    # names go through json.dumps, whose escaping is also valid GraphQL.
+    names = [o["name"] for o in field["options"]] + missing
+    literal = ", ".join(
+        f'{{name: {json.dumps(n)}, color: GRAY, description: ""}}' for n in names
+    )
+    graphql(
+        "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
+        "singleSelectOptions: [%s]}) { projectV2Field { "
+        "... on ProjectV2SingleSelectField { id } } } }" % literal,
+        f=field["id"],
+    )
+    return missing
 
 
 def create_issue(repo: str, title: str, body: str, labels: list[str]) -> tuple[int, str]:

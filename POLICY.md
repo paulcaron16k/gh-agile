@@ -35,9 +35,9 @@ language a person reads before creating an issue.
 | **Story** | An issue labelled `type:story`, attached as a sub-issue of exactly one epic | One parent, always. An orphan story is a validation failure, not a style choice |
 | **Task** | A markdown checklist inside the story | Tasks below story level are working notes. Promoting them to issues buys ceremony and costs signal |
 | **Bug** | An issue labelled `type:bug`; may or may not have an epic | Bugs arrive without asking whether they fit a plan |
-| **Sprint** | Project **iteration** field named `Sprint` | The one field GitHub genuinely provides for this |
-| **Status** | Project single-select: `Todo`, `In progress`, `Blocked`, `In review`, `Done` | Deliberately five. Every extra column is a state someone must decide between |
-| **Estimate** | Project number field `Points` | Number, not select, so it can be summed |
+| **Sprint** | Project **iteration** field named `Sprint` | The one field GitHub genuinely provides for this. `gh project field-create` cannot make one — its `--data-type` accepts only TEXT, SINGLE_SELECT, DATE and NUMBER — so `setup` creates it through the GraphQL mutation |
+| **Status** | Project single-select: `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` | Deliberately five. Every extra column is a state someone must decide between. GitHub ships three; `setup` adds the other two, because `blocked_hours` and `review_hours` are computed from time spent in them |
+| **Estimate** | Project number field `Story Points` | Number, not select, so it can be summed. Named for the Gold model's `story_points`, so the export column needs no translation |
 | **Traceability** | Project text field `FR`, free text | Carries the requirement id where one exists |
 
 **Identifiers.** GitHub's issue number is the address; it is assigned in one
@@ -57,7 +57,7 @@ column by hand, that is a bug in the tooling.
 |---|---|---|
 | Decide something is worth doing | Person | Judgement. Not automatable, not worth pretending |
 | Write the issue body: intent, acceptance, evidence | Person | The body is the artifact that survives; see §4 |
-| Create the project and its fields | **Machine** | `gh agile setup --spec agile.yml`, idempotent |
+| Create the project and its fields | **Machine** | `gh agile setup`, idempotent -- creates missing fields and adds missing options |
 | Create an epic or story with its labels, parent and fields | **Machine** | `gh agile epic` / `gh agile story` — one call, no multi-step dance |
 | Attach a story to its epic | **Machine** | Part of creation. Doing it after the fact is how orphans happen |
 | Move an item across the board | Person | The board is the interface; dragging is fine |
@@ -103,7 +103,7 @@ the export.
    condition is not ready. `gh agile validate` lists these; it is the agenda.
 2. **Plan** — assign items to the current `Sprint` iteration. Capacity is last
    sprint's completed points, not optimism.
-3. **Work** — one item in `In progress` per person. Moving to `In review` means a
+3. **Work** — one item in `In Progress` per person. Moving to `In Review` means a
    pull request exists and references the issue with `Fixes #N`.
 4. **Close** — the merge closes the issue; automation sets `Done`.
 5. **Review** — export, look at the numbers in §6, write down one thing to change.
@@ -122,7 +122,7 @@ known before designing a report than after.
 **Jira exports carry a per-field changelog. GitHub's project items do not.**
 `ProjectV2Item` exposes `createdAt`, `updatedAt`, and current field values —
 nothing else. An export built only from `gh project item-list` is a **snapshot**,
-and no amount of post-processing recovers when an item entered `In progress`.
+and no amount of post-processing recovers when an item entered `In Progress`.
 
 The history exists, but on the **issue timeline**:
 
@@ -140,11 +140,11 @@ What that makes measurable:
 
 | Metric | Derived from |
 |---|---|
-| **Cycle time** | First `In progress` → `Done`, per item |
+| **Cycle time** | First `In Progress` → `Done`, per item |
 | **Lead time** | `AddedToProjectV2Event` → `Done` |
 | **Throughput** | Items reaching `Done` per iteration |
 | **Blocked time** | Duration in `Blocked` |
-| **Estimate accuracy** | `Points` against cycle time |
+| **Estimate accuracy** | `Story Points` against cycle time |
 
 What stays unmeasurable, and should not be faked: **anything before the item
 joined a project.** An issue that sat open for a year and was added to the board

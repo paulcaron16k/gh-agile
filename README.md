@@ -37,6 +37,25 @@ Use `--no-history` to skip the per-issue timeline query. It is much faster and
 the result is a snapshot with no cycle time — which is fine for a board dump and
 useless for a flow report, so it is opt-in rather than the default.
 
+## The fields it creates
+
+`gh agile setup` is idempotent and converges: it creates what is missing and
+adds missing *options* to a single-select that already exists, never removing
+one — removing an option silently clears the field on every item holding it.
+
+| Field | Type | Gold model |
+|---|---|---|
+| `Story Points` | number | `story_points` |
+| `Priority` | single-select — `lowest…highest` | `priority_id` |
+| `FR` | text | requirement traceability |
+| `Sprint` | iteration | `sprint_id` |
+| `Status` | single-select — `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` | `state_id` |
+
+`Status` exists on every new project with three options; the other two are added,
+because `blocked_hours` and `review_hours` are computed from time spent in them
+and are otherwise permanently null. Epic, parent and sub-issue progress need no
+custom field — GitHub provides them natively.
+
 ## Incremental export
 
 For feeding another system on a schedule:
