@@ -67,10 +67,10 @@ timestamps are exact.
 
 ### A second measured caveat: the timeline is eventually consistent
 
-A status change is **not** visible on the timeline immediately. In testing, a
-transition made at 16:59:32 was readable within seconds, while one made at
-17:01:48 was still absent 46 seconds later. An export that runs straight after a
-board change can therefore miss it.
+A status change is **not** visible on the timeline immediately. Measured by
+polling every 15s: a transition made at **17:01:48Z became readable at
+17:03:57Z — a lag of ~75 seconds**, while an earlier one was readable within
+seconds. So the delay is real, variable, and on the order of a minute.
 
 Consequence for any scheduled export: **do not treat the latest export as
 complete for the last few minutes**, and prefer re-exporting a window rather than
