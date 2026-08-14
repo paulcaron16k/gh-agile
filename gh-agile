@@ -431,6 +431,27 @@ def cmd_story(args) -> int:
     return 0
 
 
+def cmd_set(args) -> int:
+    """Set a field on an issue already on the board.
+
+    The gap the first real repair found: `story` sets fields at creation and
+    nothing could set them afterwards, so a half-created item -- a rate limit
+    hit between two field writes -- could only be fixed by hand, which is what
+    this tool exists to avoid.
+    """
+    items = json.loads(gh(["project", "item-list", str(args.project), "--owner", args.owner,
+                           "--format", "json", "-L", "200"]))["items"]
+    item = next((i for i in items if (i.get("content") or {}).get("number") == args.issue), None)
+    if not item:
+        sys.exit(f"issue #{args.issue} is not on project {args.project}")
+    value = args.value
+    if args.number is not None:
+        value = args.number
+    set_field(args.owner, args.project, item["id"], args.field, value)
+    print(f"  #{args.issue} {args.field} = {value}")
+    return 0
+
+
 def cmd_export(args) -> int:
     data = rows(args.owner, args.project, with_history=not args.no_history)
     if args.csv:
@@ -607,6 +628,13 @@ def main() -> int:
     self_test.add_argument("--gap", type=int, default=20,
                            help="seconds between the two status transitions")
     self_test.set_defaults(func=cmd_self_test)
+
+    setter = sub.add_parser("set", help="set one field on an issue already on the board")
+    setter.add_argument("--issue", type=int, required=True)
+    setter.add_argument("--field", required=True, help='field name, e.g. "Story Points"')
+    setter.add_argument("--value", help="text or single-select option")
+    setter.add_argument("--number", type=float, help="numeric value")
+    setter.set_defaults(func=cmd_set)
 
     export = sub.add_parser("export", help="items, field values and status history")
     export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
