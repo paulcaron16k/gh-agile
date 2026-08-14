@@ -262,7 +262,17 @@ DEFAULT_SPEC = {
 }
 
 
+#: Per-invocation caches. Without them `set_field` re-fetched the whole field
+#: list *and* re-resolved the project id on every call -- three round trips to
+#: set one number. Creating a dozen stories exhausted a 5000-point GraphQL
+#: budget, which is how this was found: not by reading the code, by running out.
+_PROJECT_IDS: dict[tuple[str, int], str] = {}
+_FIELDS: dict[tuple[str, int], dict[str, dict]] = {}
+
+
 def project_id(login: str, number: int) -> str:
+    if (login, number) in _PROJECT_IDS:
+        return _PROJECT_IDS[(login, number)]
     for root in ("user", "organization"):
         data = graphql(
             "query($login: String!, $number: Int!) { %s(login: $login) "
@@ -271,15 +281,24 @@ def project_id(login: str, number: int) -> str:
         )
         owner = (data.get("data") or {}).get(root)
         if owner and owner.get("projectV2"):
-            return owner["projectV2"]["id"]
+            _PROJECT_IDS[(login, number)] = owner["projectV2"]["id"]
+            return _PROJECT_IDS[(login, number)]
     sys.exit(f"no project {number} for {login!r}")
 
 
-def fields_of(login: str, number: int) -> dict[str, dict]:
-    raw = json.loads(gh([
-        "project", "field-list", str(number), "--owner", login, "--format", "json", "-L", "50",
-    ]))
-    return {f["name"]: f for f in raw["fields"]}
+def fields_of(login: str, number: int, *, refresh: bool = False) -> dict[str, dict]:
+    """The project's fields, fetched once per run.
+
+    `refresh=True` after `setup` creates one, which is the only moment the set
+    changes under us.
+    """
+    key = (login, number)
+    if refresh or key not in _FIELDS:
+        raw = json.loads(gh([
+            "project", "field-list", str(number), "--owner", login, "--format", "json", "-L", "50",
+        ]))
+        _FIELDS[key] = {f["name"]: f for f in raw["fields"]}
+    return _FIELDS[key]
 
 
 def cmd_setup(args) -> int:
@@ -300,6 +319,7 @@ def cmd_setup(args) -> int:
         if field.get("options"):
             cmd += ["--single-select-options", ",".join(field["options"])]
         gh(cmd)
+        fields_of(args.owner, args.project, refresh=True)
         print(f"  field {field['name']!r} created")
 
     if args.repo:

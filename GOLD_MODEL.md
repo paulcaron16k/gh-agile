@@ -112,6 +112,24 @@ the org synthesis rules; GitHub has no team edge on an issue.
 
 ---
 
+## Rate limits are a design constraint, not an afterthought
+
+GraphQL is budgeted at **5000 points an hour**, and creating a dozen stories
+exhausted it. The cause was not volume but chattiness: setting one field
+re-fetched the entire field list and re-resolved the project id, three round
+trips to write one number, times three fields, times every story.
+
+Two rules follow, and they shape any tool that writes to a board:
+
+- **Resolve identifiers once per run.** Project id and field list are stable for
+  the duration; caching them cut the per-story cost by roughly two thirds.
+- **The export is chattier still.** History needs one timeline query *per issue*,
+  so a thousand-item board is a thousand queries plus paging. For anything
+  regular, export on a schedule and keep the output, rather than re-querying on
+  demand.
+
+Found by running out, not by reading the code.
+
 ## Consequences for the exporter
 
 1. **Two queries, joined on the issue node ID.** Current state from the project,
