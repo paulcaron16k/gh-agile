@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import pathlib
 import subprocess
 import sys
 from collections import defaultdict
@@ -104,7 +105,7 @@ query($login: String!, $number: Int!, $cursor: String) {
           content {
             __typename
             ... on Issue {
-              id number title url state stateReason createdAt closedAt
+              id number title url state stateReason createdAt updatedAt closedAt
               labels(first: 20) { nodes { name } }
               assignees(first: 10) { nodes { login } }
               milestone { title }
@@ -209,13 +210,60 @@ def days_between(start: str | None, end: str | None) -> float | None:
     return round(delta.total_seconds() / 86400, 2)
 
 
-def rows(login: str, number: int, *, with_history: bool) -> list[dict]:
+#: How far back to re-read on an incremental run, in seconds.
+#:
+#: Not caution -- arithmetic. A status change takes time to reach the timeline
+#: (measured at ~75s, variable), so an item whose `updatedAt` has already moved
+#: may still be missing its newest event. Cutting exactly at the last watermark
+#: would skip that event permanently, because the item never updates again.
+#: Re-reading a window means the row is emitted twice, which the target treats
+#: as latest-wins on the primary key. A duplicate is free; a hole is not.
+DEFAULT_OVERLAP_SECONDS = 900
+
+
+def _now() -> str:
+    import datetime as dt
+
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def file_stamp(iso: str) -> str:
+    """`2026-08-14T17:30:45Z` -> `20260814T173045Z`.
+
+    ISO 8601 basic format: no colons, so it is a legal filename everywhere, and
+    it still sorts lexicographically -- which is what lets a loader import a
+    directory of exports in order without parsing the names.
+    """
+    return iso.replace("-", "").replace(":", "")
+
+
+def read_state(path: str) -> dict:
+    try:
+        return json.loads(pathlib.Path(path).read_text())
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        sys.exit(f"{path} is not readable as JSON ({exc}); fix or delete it")
+
+
+def write_state(path: str, key: str, watermark: str, exported: int) -> None:
+    state = read_state(path)
+    state[key] = {"last_export_at": _now(), "watermark": watermark, "rows": exported}
+    pathlib.Path(path).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def rows(login: str, number: int, *, with_history: bool, since: str | None = None) -> list[dict]:
     _title, items = fetch_items(login, number)
     out = []
     for item in items:
         content = item.get("content") or {}
         if content.get("__typename") != "Issue":
             continue  # draft items and pull requests are not backlog items
+        if since and max(content["updatedAt"], item["updatedAt"]) < since:
+            # Client-side: the projects API has no server-side updatedAt filter.
+            # It saves nothing on the items query and everything on the timeline
+            # queries, which are one per issue and the real cost.
+            continue
         fields = field_values(item)
         row = {
             "number": content["number"],
@@ -231,6 +279,7 @@ def rows(login: str, number: int, *, with_history: bool) -> list[dict]:
             "sub_issues_total": (content.get("subIssuesSummary") or {}).get("total") or 0,
             "sub_issues_done": (content.get("subIssuesSummary") or {}).get("completed") or 0,
             "created_at": content["createdAt"],
+            "updated_at": content["updatedAt"],
             "closed_at": content.get("closedAt") or "",
             "archived": item["isArchived"],
         }
@@ -453,20 +502,66 @@ def cmd_set(args) -> int:
 
 
 def cmd_export(args) -> int:
-    data = rows(args.owner, args.project, with_history=not args.no_history)
-    if args.csv:
-        if not data:
-            return 0
-        columns: list[str] = []
-        for row in data:  # union of keys, first-seen order: fields vary per item
-            columns.extend(k for k in row if k not in columns)
-        writer = csv.DictWriter(sys.stdout, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(data)
+    """Full or incremental, to stdout or to a timestamped file.
+
+    Incremental is watermark-based and deliberately overlapping: see
+    DEFAULT_OVERLAP_SECONDS. Rows repeat across runs by design, and the target
+    resolves them latest-wins on its primary key.
+    """
+    import datetime as dt
+
+    key = f"{args.owner}/{args.project}"
+    state = read_state(args.state) if args.state else {}
+    since = args.since or (state.get(key, {}).get("watermark") if args.state else None)
+
+    started = _now()
+    data = rows(args.owner, args.project, with_history=not args.no_history, since=since)
+    for row in data:
+        # Stamped per row as well as in the filename: a loader that concatenates
+        # several exports keeps the ordering without re-deriving it from a path.
+        row["exported_at"] = started
+
+    if since:
+        print(f"  incremental since {since}: {len(data)} row(s)", file=sys.stderr)
     else:
-        json.dump(data, sys.stdout, indent=2)
-        sys.stdout.write("\n")
+        print(f"  full export: {len(data)} row(s)", file=sys.stderr)
+
+    if args.out_dir:
+        directory = pathlib.Path(args.out_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        suffix = "csv" if args.csv else "json"
+        path = directory / f"agile_issues_{file_stamp(started)}.{suffix}"
+        with path.open("w", newline="") as handle:
+            _write(data, handle, csv_format=args.csv)
+        print(f"  wrote {path}", file=sys.stderr)
+    else:
+        _write(data, sys.stdout, csv_format=args.csv)
+
+    if args.state:
+        # The watermark is pulled back by the overlap, so the next run re-reads
+        # the window in which the timeline may still have been catching up.
+        cut = dt.datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ") - dt.timedelta(
+            seconds=args.overlap_seconds
+        )
+        watermark = cut.strftime("%Y-%m-%dT%H:%M:%SZ")
+        write_state(args.state, key, watermark, len(data))
+        print(f"  watermark -> {watermark} in {args.state}", file=sys.stderr)
     return 0
+
+
+def _write(data: list[dict], handle, *, csv_format: bool) -> None:
+    if not csv_format:
+        json.dump(data, handle, indent=2)
+        handle.write("\n")
+        return
+    if not data:
+        return
+    columns: list[str] = []
+    for row in data:  # union of keys, first-seen order: fields vary per item
+        columns.extend(k for k in row if k not in columns)
+    writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(data)
 
 
 def cmd_validate(args) -> int:
@@ -638,6 +733,19 @@ def main() -> int:
 
     export = sub.add_parser("export", help="items, field values and status history")
     export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
+    export.add_argument("--since", help="ISO8601 lower bound on updated_at; overrides the state file")
+    export.add_argument(
+        "--state",
+        default=".gh_agile_export.json",
+        help="watermark file, keyed by owner/project. JSON rather than YAML: there is no "
+        "YAML parser in the standard library, and a partial one that reads only what this "
+        "tool writes is a trap the first time someone edits it by hand",
+    )
+    export.add_argument("--no-state", dest="state", action="store_const", const=None,
+                        help="do not read or write a watermark; always a full export")
+    export.add_argument("--out-dir", help="write agile_issues_<ISO8601>.<ext> here instead of stdout")
+    export.add_argument("--overlap-seconds", type=int, default=DEFAULT_OVERLAP_SECONDS,
+                        help="how far back the next run re-reads (default %(default)s)")
     export.add_argument(
         "--no-history",
         action="store_true",

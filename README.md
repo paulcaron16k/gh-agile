@@ -37,6 +37,46 @@ Use `--no-history` to skip the per-issue timeline query. It is much faster and
 the result is a snapshot with no cycle time — which is fine for a board dump and
 useless for a flow report, so it is opt-in rather than the default.
 
+## Incremental export
+
+For feeding another system on a schedule:
+
+```bash
+gh agile --project 4 export --csv --out-dir exports/     # full; writes a watermark
+gh agile --project 4 export --csv --out-dir exports/     # since the watermark
+gh agile --project 4 export --since 2026-08-01T00:00:00Z # explicit override
+gh agile --project 4 export --no-state                   # always full
+```
+
+Files are named `agile_issues_<ISO8601 basic>.csv` — `agile_issues_20260814T184850Z.csv`
+— which has no colons, so it is a legal filename everywhere, and still sorts
+lexicographically. A loader can import a directory in order without parsing the
+names. Each row also carries `exported_at`, so concatenated exports keep their
+ordering without re-deriving it from a path.
+
+State lives in `.gh_agile_export.json`, keyed by `owner/project`, so one file can
+track several boards:
+
+```json
+{ "paulcaron16k/4": { "last_export_at": "…", "watermark": "…", "rows": 4 } }
+```
+
+**The watermark is deliberately pulled back**, by `--overlap-seconds` (default
+900). A status change takes time to reach the timeline — measured at ~75s and
+variable — so an item whose `updatedAt` has already moved may still be missing
+its newest event. Cutting exactly at the last watermark would skip that event
+permanently, because the item never updates again. Re-reading a window emits the
+row twice, which the target resolves latest-wins on its primary key. **A
+duplicate is free; a hole is not.**
+
+Incrementality does not reduce the items query, which has no server-side
+`updatedAt` filter and is fetched in full. It reduces the *timeline* queries,
+which are one per issue and the real cost.
+
+> JSON rather than the `.yml` the design sketch suggested: there is no YAML
+> parser in the standard library, and a partial one that reads only what this
+> tool writes is a trap the first time someone edits it by hand.
+
 ## What it does not do yet
 
 Creation. `setup`, `epic` and `story` are the next iteration; until then use
