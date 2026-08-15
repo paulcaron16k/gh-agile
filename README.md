@@ -56,6 +56,25 @@ because `blocked_hours` and `review_hours` are computed from time spent in them
 and are otherwise permanently null. Epic, parent and sub-issue progress need no
 custom field — GitHub provides them natively.
 
+## Jira-style keys
+
+GitHub projects have a `title` and a `shortDescription` and **no key of any
+kind**. Since the issue-number sequence is per *repository* — and a project can
+span repositories — the key is recorded per repository:
+
+```bash
+gh agile key --repo paulcaron16k/Zamboni --key ZMBNI
+gh agile --project 4 key --repo paulcaron16k/gh-agile --key AGILE \
+         --name "gh-agile: Agile management on GitHub"
+gh agile key                                    # list what is recorded
+```
+
+The export then carries `issue_key` — `AGILE-14`, `ZMBNI-1817` — which is the
+Gold model's `issue_key`. Without a recorded key it falls back to
+`owner/repo#14`, so the column is never empty. `--name` additionally writes
+`"<name> [<KEY>]"` to the project's `shortDescription`, the nearest thing GitHub
+has to a place for the pair.
+
 ## Incremental export
 
 For feeding another system on a schedule:

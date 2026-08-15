@@ -106,6 +106,7 @@ query($login: String!, $number: Int!, $cursor: String) {
             __typename
             ... on Issue {
               id number title url state stateReason createdAt updatedAt closedAt
+              repository { nameWithOwner }
               labels(first: 20) { nodes { name } }
               assignees(first: 10) { nodes { login } }
               milestone { title }
@@ -237,6 +238,35 @@ def file_stamp(iso: str) -> str:
     return iso.replace("-", "").replace(":", "")
 
 
+#: Where repository keys live. Separate from the export watermark file: one is
+#: configuration a person writes, the other is state a machine rewrites, and
+#: mixing them means a `rm` to reset the watermark also loses the keys.
+CONFIG_PATH = ".gh_agile.json"
+
+
+def read_config(path: str = CONFIG_PATH) -> dict:
+    try:
+        return json.loads(pathlib.Path(path).read_text())
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        sys.exit(f"{path} is not readable as JSON ({exc}); fix or delete it")
+
+
+def issue_key(repo: str | None, number: int, keys: dict[str, str]) -> str:
+    """`ZMBNI-1817` when a key is known, `owner/repo#1817` when it is not.
+
+    **The key belongs to the repository, not the project.** GitHub's issue
+    numbers are a per-repository sequence, and a project may span repositories
+    (`ProjectV2.repositories` is plural), so a project-level key would make
+    `KEY-12` ambiguous the moment a second repository joined the board. Jira can
+    put the key on the project because there the number sequence is the
+    project's; here it is not.
+    """
+    key = keys.get(repo or "")
+    return f"{key}-{number}" if key else f"{repo}#{number}"
+
+
 def read_state(path: str) -> dict:
     try:
         return json.loads(pathlib.Path(path).read_text())
@@ -253,6 +283,7 @@ def write_state(path: str, key: str, watermark: str, exported: int) -> None:
 
 
 def rows(login: str, number: int, *, with_history: bool, since: str | None = None) -> list[dict]:
+    keys = read_config().get("keys", {})
     _title, items = fetch_items(login, number)
     out = []
     for item in items:
@@ -265,7 +296,10 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             # queries, which are one per issue and the real cost.
             continue
         fields = field_values(item)
+        repo = (content.get("repository") or {}).get("nameWithOwner")
         row = {
+            "issue_key": issue_key(repo, content["number"], keys),
+            "repository": repo,
             "number": content["number"],
             "title": content["title"],
             "url": content["url"],
@@ -540,6 +574,41 @@ def cmd_story(args) -> int:
     return 0
 
 
+def cmd_key(args) -> int:
+    """Record, or show, the key for a repository.
+
+    Also writes the project's `shortDescription`, which is the nearest GitHub
+    has to a place for this: a project carries a `title` and a
+    `shortDescription` and no key of any kind, so the human-readable pairing --
+    "Zamboni Iceberg table maintainer" / ZMBNI -- lives there while the machine
+    reads the config file.
+    """
+    config = read_config(args.config)
+    keys = config.setdefault("keys", {})
+
+    if not args.key:
+        if not keys:
+            print("  no keys recorded")
+        for repo, key in sorted(keys.items()):
+            print(f"  {key:10} {repo}")
+        return 0
+
+    if not args.key.replace("_", "").isalnum() or not args.key.isupper():
+        sys.exit(f"{args.key!r}: a key should be uppercase alphanumeric, e.g. ZMBNI")
+    keys[args.repo] = args.key
+    pathlib.Path(args.config).write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+    print(f"  {args.repo} -> {args.key}  (in {args.config})")
+
+    if args.project and args.name:
+        graphql(
+            "mutation($p: ID!, $d: String!) { updateProjectV2(input: "
+            "{projectId: $p, shortDescription: $d}) { projectV2 { shortDescription } } }",
+            p=project_id(args.owner, args.project), d=f"{args.name} [{args.key}]",
+        )
+        print(f"  project #{args.project} described as {args.name!r} [{args.key}]")
+    return 0
+
+
 def cmd_set(args) -> int:
     """Set a field on an issue already on the board.
 
@@ -783,6 +852,13 @@ def main() -> int:
     self_test.add_argument("--gap", type=int, default=20,
                            help="seconds between the two status transitions")
     self_test.set_defaults(func=cmd_self_test)
+
+    key = sub.add_parser("key", help="record a repository's key, e.g. ZMBNI, or list them")
+    key.add_argument("--repo", help="owner/name")
+    key.add_argument("--key", help="uppercase key; omit to list what is recorded")
+    key.add_argument("--name", help="human-readable project name, written to shortDescription")
+    key.add_argument("--config", default=CONFIG_PATH)
+    key.set_defaults(func=cmd_key)
 
     setter = sub.add_parser("set", help="set one field on an issue already on the board")
     setter.add_argument("--issue", type=int, required=True)

@@ -78,12 +78,38 @@ appending only what is new.
 
 ---
 
+## Project keys: name yes, key no
+
+`ProjectV2` carries `title`, `shortDescription` and `readme`. There is **no key,
+slug, prefix or abbreviation field** — checked against the schema, not assumed.
+So a Jira-style `ZMBNI-1817` has to be synthesised.
+
+**And it must be keyed on the repository, not the project.** Jira can put the key
+on the project because there the issue-number sequence *is* the project's. On
+GitHub the sequence is per **repository**, and `ProjectV2.repositories` is
+plural — a board may hold items from several. A project-level key would make
+`KEY-12` ambiguous the moment a second repository joined.
+
+So `gh agile key --repo owner/name --key ZMBNI` records the mapping in
+`.gh_agile.json`, and the export emits `issue_key` from it. Passing `--name` as
+well writes `"<name> [<KEY>]"` into the project's `shortDescription`, which is
+the closest GitHub offers to storing the pair where a person will see it:
+
+```
+title:            gh-agile
+shortDescription: gh-agile: Agile management on GitHub [AGILE]
+```
+
+The config is deliberately a different file from the export watermark: one is
+configuration a person writes, the other is state a machine rewrites, and a `rm`
+to reset the watermark should not lose the keys.
+
 ## `agile_issues` field mapping
 
 | Gold field | GitHub source | Notes |
 |---|---|---|
 | `ext_process_id` | `Issue.id` (node ID) | Stable across renames and transfers |
-| `issue_key` | `owner/repo#number` | GitHub has no project-prefixed key; the number is per repository |
+| `issue_key` | `KEY-number`, from `.gh_agile.json` | GitHub has no key of any kind — see below. Falls back to `owner/repo#number` when no key is recorded |
 | `state_id` / `state_name` | Project `Status` field | Map the option to the FSM: `new\|ready\|in_progress\|in_review\|in_qa\|blocked\|done` |
 | `issue_type_id` | `type:` label | Issue *types* would be better but are organization-only |
 | `created_date` | `Issue.createdAt` | |
