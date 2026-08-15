@@ -269,11 +269,37 @@ Two consequences that catch people out:
 - **A board's filter narrows what is already on the project.** It never reaches
   out and pulls issues in. An engineering board filtered `repo:owner/other-repo`
   shows nothing at all until those issues are added to the project.
-- **GitHub's built-in "auto-add" workflow does not close the gap.** It is
-  configured in the web UI only — the API can `deleteProjectV2Workflow` and has
-  no mutation to create or configure one, and `ProjectV2Workflow` exposes no
-  filter to read — and it is **forward-only**: it never backfills issues that
-  already existed.
+- **GitHub's built-in workflows help, and do not cover this.** They are worth
+  understanding rather than dismissing — see the table below. One of them adds
+  items automatically and is enabled by default; none of them adds an issue
+  merely because it matches a board's filter.
+
+### What the built-in workflows do
+
+Checked on a live user-owned project rather than read from documentation — the
+API lists six, and their names are the whole story:
+
+| Workflow | Adds items? | Default |
+|---|---|---|
+| **Auto-add sub-issues to project** | **Yes** — a sub-issue of an item already on the board joins it automatically | **enabled** |
+| Item added to project | No — reacts to an item that has just been added, e.g. to set its status | disabled |
+| Item closed · Auto-close issue | No — react to items already on the board | disabled |
+| Pull request merged · Pull request linked to issue | No | disabled |
+
+**Keep `Auto-add sub-issues` enabled.** It does real work: every story created
+as a sub-issue of a boarded epic arrives on the board without anything else
+happening. That is why `gh agile story` never needs `sync`.
+
+**What is missing is an auto-add by *filter*** — "put every issue in this repo
+with this label on this board". GitHub does offer such a workflow, and it was
+**not present on this user-owned project**: the six above are all there are.
+That is the same pattern as Issue Types and Issue Fields, both of which turned
+out to be organization-only.
+
+And workflows cannot be automated from here in any case: the only mutation is
+`deleteProjectV2Workflow` — none creates, enables or configures one — and
+`ProjectV2Workflow` exposes no filter to read. So even where an auto-add exists,
+it is a web-UI setting that cannot be reproduced from the profile.
 
 So:
 
@@ -312,15 +338,16 @@ else is current the moment it changes.
 someone remembering it is a rota, not a process, and it fails on the week it
 matters. Instead, in order of preference:
 
-1. **Enable GitHub's auto-add workflow in the project's UI settings**, once, per
-   repository. New issues then arrive on their own and `sync` becomes a backfill
-   tool. It cannot be automated from here — the API can delete a workflow and
-   has no mutation to create or configure one.
-2. **Run it on a schedule** if auto-add is not usable — hourly or daily from
-   cron or a GitHub Action. Frequency only bounds how long a newly filed issue
-   is missing from the board; nothing degrades in between.
-3. **Run it after the events that create a backlog of missing items**: adding a
-   repository to the profile, a bulk import, a migration.
+1. **Check the project's workflow settings for an auto-add.** If your project
+   offers one — an organization-owned project may — enable it, and `sync`
+   becomes a backfill tool rather than the mechanism. On the user-owned project
+   tested here it was not available.
+2. **Run `sync` on a schedule** otherwise: hourly or daily, from cron or a
+   GitHub Action. Frequency only bounds how long a newly filed issue is missing
+   from the board; nothing degrades in between, because nothing on the board is
+   going out of date.
+3. **Run it after the events that create a backlog**: adding a repository to the
+   profile, a bulk import, a migration.
 
 Issues created by `gh agile epic` and `gh agile story` are added at creation and
 never need it.
