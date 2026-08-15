@@ -414,6 +414,22 @@ DEFAULT_SPEC = {
 #: budget, which is how this was found: not by reading the code, by running out.
 _PROJECT_IDS: dict[tuple[str, int], str] = {}
 _FIELDS: dict[tuple[str, int], dict[str, dict]] = {}
+_ITEMS: dict[tuple[str, int], list[dict]] = {}
+
+
+def board_items(login: str, number: int, *, refresh: bool = False) -> list[dict]:
+    """Every item on the board, fetched once per run.
+
+    `set` fetched the whole list on every call, so restoring sixteen statuses in
+    a loop meant sixteen full board reads and a second exhausted rate budget --
+    the same defect as the field list, in a different place.
+    """
+    key = (login, number)
+    if refresh or key not in _ITEMS:
+        _ITEMS[key] = json.loads(gh([
+            "project", "item-list", str(number), "--owner", login, "--format", "json", "-L", "200",
+        ]))["items"]
+    return _ITEMS[key]
 
 
 def project_id(login: str, number: int) -> str:
@@ -462,6 +478,8 @@ def cmd_setup(args) -> int:
         name, kind = field["name"], field["type"]
         if name in existing:
             added = reconcile_options(pid, existing[name], field.get("options") or [])
+            if added:
+                existing = fields_of(args.owner, args.project, refresh=True)
             print(f"  field {name!r} exists" + (f", added option(s) {added}" if added else ""))
             continue
         if kind in ("TEXT", "SINGLE_SELECT", "DATE", "NUMBER"):
@@ -512,14 +530,26 @@ def reconcile_options(pid: str, field: dict, wanted: list[str]) -> list[str]:
     missing = [w for w in wanted if w.casefold() not in have]
     if not missing:
         return []
+    # **Every existing option must be sent back with its `id`.** The mutation
+    # replaces the option set wholesale, and an option arriving without an id is
+    # a *new* option -- which retires the old one and silently clears the field
+    # on every item holding it. Learned the hard way: re-sending five options by
+    # name alone wiped Status from 16 of 22 items on a live board, exactly the
+    # harm the docstring below warns about.
+    #
     # Inlined as GraphQL literals rather than passed as a variable: `gh api
     # graphql -F` sends every value as a scalar, so a list of input objects
-    # arrives as a string and is rejected. `color` is an enum, hence unquoted;
-    # names go through json.dumps, whose escaping is also valid GraphQL.
-    names = [o["name"] for o in field["options"]] + missing
-    literal = ", ".join(
-        f'{{name: {json.dumps(n)}, color: GRAY, description: ""}}' for n in names
-    )
+    # arrives as a string and is rejected. `color` is an enum, hence unquoted.
+    entries = [
+        f'{{id: {json.dumps(o["id"])}, name: {json.dumps(o["name"])}, '
+        f'color: {o.get("color", "GRAY") or "GRAY"}, '
+        f'description: {json.dumps(o.get("description") or "")}}}'
+        for o in field["options"]
+    ]
+    entries += [
+        f'{{name: {json.dumps(n)}, color: GRAY, description: ""}}' for n in missing
+    ]
+    literal = ", ".join(entries)
     graphql(
         "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
         "singleSelectOptions: [%s]}) { projectV2Field { "
@@ -561,6 +591,99 @@ def set_field(login: str, project: int, item_id: str, field_name: str, value) ->
     else:
         cmd += ["--text", str(value)]
     gh(cmd)
+
+
+#: The headings POLICY.md §4 requires, and what each is for. Used to build a
+#: body, to prompt for one, and to reject one that is missing a section.
+SECTIONS = (
+    ("Intent", "What changes for whom, and why it is worth doing"),
+    ("Acceptance", "The condition under which this is done, checkable by someone else"),
+    ("Evidence", "What was measured, tried, and ruled out -- filled in as work proceeds"),
+)
+
+#: A section left at this is not filled in. Written by `epic`/`story` when no
+#: text is supplied, and rejected by the validator when a state change needs it.
+PLACEHOLDER = "_TBD_"
+
+
+def read_template(args, *, required: tuple[str, ...], interactive_ok: bool = True) -> dict:
+    """Section text from a file, a flag, stdin, or a prompt -- in that order.
+
+    A tool that only prompts cannot be driven by an agent or run in CI; a tool
+    that only takes files makes a person author one to fix a typo. So: explicit
+    input always wins, and prompting happens only when a human is demonstrably
+    present at a terminal.
+    """
+    supplied = getattr(args, "evidence", None)
+    path = getattr(args, "evidence_file", None)
+    text = None
+    if path:
+        text = sys.stdin.read() if path == "-" else pathlib.Path(path).read_text()
+    elif supplied:
+        text = sys.stdin.read() if supplied == "-" else supplied
+
+    if text is not None:
+        sections = parse_sections(text)
+        # A bare blob with no headings is the common case for one section --
+        # treat it as that section rather than rejecting it on a technicality.
+        if not sections and len(required) == 1:
+            sections = {required[0]: text.strip()}
+        return sections
+
+    if interactive_ok and sys.stdin.isatty():
+        sections = {}
+        for name, hint in SECTIONS:
+            if name not in required:
+                continue
+            print(f"  ## {name} -- {hint}")
+            print("  (end with a blank line)")
+            lines = []
+            while True:
+                try:
+                    line = input("  > ")
+                except EOFError:
+                    break
+                if not line.strip():
+                    break
+                lines.append(line)
+            sections[name] = "\n".join(lines).strip()
+        return sections
+
+    sys.exit(
+        "no text supplied and no terminal to prompt at. Pass --evidence-file FILE, "
+        "--evidence TEXT, or - to read stdin"
+    )
+
+
+def parse_sections(text: str) -> dict[str, str]:
+    """Split `## Heading` blocks into {heading: body}."""
+    sections, current = {}, None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            current = stripped[3:].strip()
+            sections[current] = ""
+        elif current:
+            sections[current] += line + "\n"
+    return {k: v.strip() for k, v in sections.items()}
+
+
+def require_sections(sections: dict[str, str], required: tuple[str, ...]) -> None:
+    """Reject a body that is missing a section or has left one as a placeholder.
+
+    The point of POLICY.md §4 is that a closed issue saying only "done" has
+    thrown away the reasoning. A template nobody validates is a suggestion, so
+    this is where the rule stops being advisory.
+    """
+    problems = []
+    for name in required:
+        value = (sections.get(name) or "").strip()
+        if not value:
+            problems.append(f"## {name} is missing or empty")
+        elif value == PLACEHOLDER:
+            problems.append(f"## {name} is still {PLACEHOLDER}")
+    if problems:
+        sys.exit("the body is not complete:\n  - " + "\n  - ".join(problems))
 
 
 BODY_TEMPLATE = """## Intent
@@ -790,8 +913,7 @@ def cmd_set(args) -> int:
     hit between two field writes -- could only be fixed by hand, which is what
     this tool exists to avoid.
     """
-    items = json.loads(gh(["project", "item-list", str(args.project), "--owner", args.owner,
-                           "--format", "json", "-L", "200"]))["items"]
+    items = board_items(args.owner, args.project)
     item = next((i for i in items if (i.get("content") or {}).get("number") == args.issue), None)
     if not item:
         sys.exit(f"issue #{args.issue} is not on project {args.project}")
@@ -801,6 +923,66 @@ def cmd_set(args) -> int:
     set_field(args.owner, args.project, item["id"], args.field, value)
     print(f"  #{args.issue} {args.field} = {value}")
     return 0
+
+
+def cmd_move(args) -> int:
+    """Change an issue's status, requiring the evidence that status implies.
+
+    `In Progress` needs nothing new. `Done` requires Evidence, because that is
+    the transition after which nobody revisits the issue -- and an issue closed
+    with the word "done" has thrown away the reasoning that made it defensible.
+    """
+    required = tuple(REQUIRED_FOR.get(args.status.casefold(), ()))
+    sections = read_template(args, required=required) if required else {}
+    if required:
+        require_sections(sections, required)
+
+    items = board_items(args.owner, args.project)
+    item = next((i for i in items if (i.get("content") or {}).get("number") == args.issue), None)
+    if not item:
+        sys.exit(f"issue #{args.issue} is not on project {args.project}")
+    repo = item["content"]["repository"] if "repository" in item["content"] else args.repo
+
+    if sections:
+        body = json.loads(gh(["issue", "view", str(args.issue), "--repo", repo,
+                              "--json", "body"]))["body"]
+        for name, text in sections.items():
+            body = replace_section(body, name, text)
+        gh(["issue", "edit", str(args.issue), "--repo", repo, "--body", body])
+        print(f"  #{args.issue} body updated: {', '.join(sections)}")
+
+    set_field(args.owner, args.project, item["id"], "Status", args.status)
+    print(f"  #{args.issue} Status = {args.status}")
+
+    if args.close:
+        gh(["issue", "close", str(args.issue), "--repo", repo,
+            "--reason", "not planned" if args.not_planned else "completed"])
+        print(f"  #{args.issue} closed")
+    return 0
+
+
+def replace_section(body: str, name: str, text: str) -> str:
+    """Replace one `## Heading` block, appending the heading if absent."""
+    sections = parse_sections(body)
+    if name not in sections:
+        return body.rstrip() + f"\n\n## {name}\n{text}\n"
+    out, skipping = [], False
+    for line in body.splitlines():
+        if line.strip().startswith("## "):
+            heading = line.strip()[3:].strip()
+            skipping = heading == name
+            out.append(line)
+            if skipping:
+                out.append(text)
+            continue
+        if not skipping:
+            out.append(line)
+    return "\n".join(out).rstrip() + "\n"
+
+
+#: Which sections a transition demands. Only Done, deliberately: requiring
+#: evidence to start work is ceremony, requiring it to finish is the point.
+REQUIRED_FOR = {"done": ("Evidence",)}
 
 
 def cmd_export(args) -> int:
@@ -986,25 +1168,88 @@ def _latest_issue(repo: str) -> int:
     return listed[0]["number"]
 
 
+def field_help(rows: list[tuple[str, str, str, str]]) -> str:
+    """A table of argument, type, obligation, description -- mandatory first.
+
+    argparse lists arguments in declaration order and says nothing about what a
+    field means, so the obligation and the description have to be written out.
+    """
+    order = {"required": 0, "optional": 1}
+    rows = sorted(rows, key=lambda r: order.get(r[2], 2))
+    width = [max(len(r[i]) for r in rows) for i in range(3)]
+    lines = ["", "fields:"]
+    for name, kind, need, description in rows:
+        lines.append(
+            f"  {name:<{width[0]}}  {kind:<{width[1]}}  {need:<{width[2]}}  {description}"
+        )
+    return "\n".join(lines)
+
+
+SETUP_FIELDS = [
+    ("--repo", "owner/name", "optional", "repository to create the type: labels in"),
+    ("--spec", "path", "optional", "JSON field spec; the built-in default is used without one"),
+]
+
+EPIC_FIELDS = [
+    ("title", "text", "required", "the epic's title; positional"),
+    ("--repo", "owner/name", "required", "repository the issue is created in"),
+    ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
+    ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
+]
+
+STORY_FIELDS = [
+    ("title", "text", "required", "the story's title; positional"),
+    ("--repo", "owner/name", "required", "repository the issue is created in"),
+    ("--epic", "issue number", "required", "epic to attach to as a sub-issue"),
+    ("--points", "number", "optional", "Story Points; the Gold model's story_points"),
+    ("--priority", "lowest|low|medium|high|highest", "optional", "Priority field"),
+    ("--status", "one of STATUSES", "optional", "Status field; defaults to Todo"),
+    ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
+    ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
+]
+
+SET_FIELDS = [
+    ("--issue", "issue number", "required", "the issue, which must already be on the board"),
+    ("--field", "field name", "required", 'e.g. Status, "Story Points", Priority, FR, Sprint'),
+    ("--value", "text", "optional", "text, single-select option, sprint title, or @current"),
+    ("--number", "number", "optional", "numeric value; use instead of --value for a number field"),
+]
+
+MOVE_FIELDS = [
+    ("issue", "issue number", "required", "the issue; positional"),
+    ("--status", "one of STATUSES", "required", "the status to move to"),
+    ("--evidence", "text or -", "conditional", "required for Done; - reads stdin"),
+    ("--evidence-file", "path or -", "conditional", "file of ## Heading sections; - reads stdin"),
+    ("--close", "flag", "optional", "close the issue as well"),
+    ("--not-planned", "flag", "optional", "close as not planned rather than completed"),
+]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="gh agile", description=__doc__.splitlines()[0])
     parser.add_argument("--owner", default="@me", help='project owner; "@me" for yourself')
     parser.add_argument("--project", type=int, help="project number; self-test makes its own")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    setup = sub.add_parser("setup", help="create the project's fields and labels, idempotently")
+    setup = sub.add_parser("setup", help="create the project's fields and labels, idempotently",
+        epilog=field_help(SETUP_FIELDS) + """\n\nproject fields created:\n  Story Points  number                            the Gold model's story_points\n  Priority      single-select  lowest..highest    Gold priority_id\n  FR            text                              requirement traceability\n  Sprint        iteration                         Gold sprint_id; via GraphQL, gh cannot\n  Status        single-select  Todo..Done         Gold state_id; two options added to GitHub's three""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     setup.add_argument("--spec", help="JSON spec; the built-in default is used without one")
     setup.add_argument("--repo", help="repository to create the type: labels in")
     setup.set_defaults(func=cmd_setup)
 
-    epic = sub.add_parser("epic", help="create an epic issue on the board")
+    epic = sub.add_parser("epic", help="create an epic issue on the board",
+        epilog=field_help(EPIC_FIELDS) + """""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     epic.add_argument("title")
     epic.add_argument("--repo", required=True)
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
     epic.set_defaults(func=cmd_epic)
 
-    story = sub.add_parser("story", help="create a story, attach it to its epic, set its fields")
+    story = sub.add_parser("story", help="create a story, attach it to its epic, set its fields",
+        epilog=field_help(STORY_FIELDS) + """""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     story.add_argument("title")
     story.add_argument("--repo", required=True)
     story.add_argument("--epic", type=int, required=True, help="epic issue number")
@@ -1042,7 +1287,21 @@ def main() -> int:
     key.add_argument("--config", help=f"profile path; searched in order: {', '.join(CONFIG_PATHS)}")
     key.set_defaults(func=cmd_key)
 
-    setter = sub.add_parser("set", help="set one field on an issue already on the board")
+    move = sub.add_parser("move", help="change status, with the evidence that status requires",
+        epilog=field_help(MOVE_FIELDS) + """""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    move.add_argument("issue", type=int)
+    move.add_argument("--status", required=True, help=f"one of: {', '.join(STATUSES)}")
+    move.add_argument("--evidence", help="section text, or - for stdin")
+    move.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
+    move.add_argument("--close", action="store_true", help="close the issue as well")
+    move.add_argument("--not-planned", action="store_true", help="close as not planned")
+    move.add_argument("--repo", help="only needed if the item's repository cannot be read back")
+    move.set_defaults(func=cmd_move)
+
+    setter = sub.add_parser("set", help="set one field on an issue already on the board",
+        epilog=field_help(SET_FIELDS) + """""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     setter.add_argument("--issue", type=int, required=True)
     setter.add_argument("--field", required=True, help='field name, e.g. "Story Points"')
     setter.add_argument("--value", help="text or single-select option")

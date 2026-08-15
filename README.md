@@ -37,6 +37,21 @@ Use `--no-history` to skip the per-issue timeline query. It is much faster and
 the result is a snapshot with no cycle time — which is fine for a board dump and
 useless for a flow report, so it is opt-in rather than the default.
 
+## Getting started
+
+[USER_GUIDE.md](USER_GUIDE.md) is the walkthrough: the project profile and every
+property, creating a project, sprints, epics and stories, and the full workflow
+from epic created to epic closed — with a section on driving it from an agent.
+
+The profile lives in **`.github/agile.json`**, visible and checked in:
+
+```json
+{ "keys": { "owner/repo": "ZMBNI" },
+  "project": { "name": "Zamboni Iceberg table maintainer", "key": "ZMBNI" } }
+```
+
+A repository that is not the main one carries only `{"config_from": "owner/main-repo"}`.
+
 ## The fields it creates
 
 `gh agile setup` is idempotent and converges: it creates what is missing and
