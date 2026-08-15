@@ -2,5 +2,9 @@
   "keys": {
     "paulcaron16k/Zamboni": "ZMBNI",
     "paulcaron16k/gh-agile": "AGILE"
+  },
+  "project": {
+    "key": "AGILE",
+    "name": "gh-agile: Agile management on GitHub"
   }
 }

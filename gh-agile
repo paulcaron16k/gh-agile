@@ -238,19 +238,68 @@ def file_stamp(iso: str) -> str:
     return iso.replace("-", "").replace(":", "")
 
 
-#: Where repository keys live. Separate from the export watermark file: one is
-#: configuration a person writes, the other is state a machine rewrites, and
-#: mixing them means a `rm` to reset the watermark also loses the keys.
-CONFIG_PATH = ".gh_agile.json"
+#: Where the project profile is looked for, in order.
+#:
+#: `.github/agile.json` first and visible on purpose. A dotfile is right for
+#: machine state and wrong for a team convention: `ls` does not show it, so
+#: someone cloning the repo never learns the convention exists -- which is the
+#: failure this policy is written against. `.github/` is already where people
+#: look for repository metadata, and it sits beside the workflows that read it.
+#:
+#: The later paths are compatibility with what this tool wrote first.
+CONFIG_PATHS = (".github/agile.json", "agile.json", ".gh_agile.json")
+
+#: Default write target when no config exists yet.
+CONFIG_PATH = CONFIG_PATHS[0]
 
 
-def read_config(path: str = CONFIG_PATH) -> dict:
-    try:
-        return json.loads(pathlib.Path(path).read_text())
-    except FileNotFoundError:
+def find_config(explicit: str | None = None) -> pathlib.Path | None:
+    if explicit:
+        return pathlib.Path(explicit)
+    for candidate in CONFIG_PATHS:
+        path = pathlib.Path(candidate)
+        if path.is_file():
+            return path
+    return None
+
+
+def read_config(path: str | None = None) -> dict:
+    """The project profile, following a `config_from` pointer if present.
+
+    A project may span repositories while the profile belongs in one of them --
+    the "main" repository. A supporting repository carries only:
+
+        {"config_from": "owner/main-repo"}
+
+    resolved through the API rather than a raw URL, so it works for private
+    repositories on the token `gh` already holds and cannot rot into a dead
+    link.
+    """
+    found = find_config(path)
+    if found is None:
         return {}
+    try:
+        config = json.loads(found.read_text())
     except json.JSONDecodeError as exc:
-        sys.exit(f"{path} is not readable as JSON ({exc}); fix or delete it")
+        sys.exit(f"{found} is not readable as JSON ({exc}); fix or delete it")
+
+    pointer = config.get("config_from")
+    if not pointer:
+        return config
+    for candidate in CONFIG_PATHS:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{pointer}/contents/{candidate}",
+             "--jq", ".content", "-H", "Accept: application/vnd.github+json"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            import base64
+
+            remote = json.loads(base64.b64decode(result.stdout.strip()).decode())
+            # A pointer to a pointer is a loop waiting to happen; one hop only.
+            remote.pop("config_from", None)
+            return remote
+    sys.exit(f"{found} points at {pointer}, which has no profile at any of {list(CONFIG_PATHS)}")
 
 
 def issue_key(repo: str | None, number: int, keys: dict[str, str]) -> str:
@@ -498,7 +547,9 @@ def set_field(login: str, project: int, item_id: str, field_name: str, value) ->
         sys.exit(f"no field named {field_name!r} on project {project}; run `gh agile setup`")
     cmd = ["project", "item-edit", "--id", item_id,
            "--project-id", project_id(login, project), "--field-id", field["id"]]
-    if field.get("options"):
+    if field["type"] == "ProjectV2IterationField":
+        cmd += ["--iteration-id", resolve_iteration(login, project, str(value))]
+    elif field.get("options"):
         match = next(
             (o for o in field["options"] if o["name"].casefold() == str(value).casefold()), None
         )
@@ -574,6 +625,126 @@ def cmd_story(args) -> int:
     return 0
 
 
+ITERATIONS_QUERY = """
+query($login: String!, $number: Int!) {
+  %s(login: $login) {
+    projectV2(number: $number) {
+      field(name: "Sprint") {
+        ... on ProjectV2IterationField {
+          id
+          configuration {
+            duration
+            startDay
+            iterations { id title startDate duration }
+            completedIterations { id title startDate duration }
+          }
+        }
+      }
+    }
+  }
+}"""
+
+
+def sprint_field(login: str, number: int) -> dict:
+    """The Sprint iteration field, with its iterations.
+
+    Not reachable through `gh project field-list`, which reports the field but
+    not its iterations -- and the iterations are the part you need, since an
+    iteration is referenced by id, never by title.
+    """
+    for root in ("user", "organization"):
+        data = graphql(ITERATIONS_QUERY % root, login=login, number=number)
+        owner = (data.get("data") or {}).get(root)
+        field = (owner or {}).get("projectV2", {}).get("field") if owner else None
+        if field:
+            return field
+    sys.exit("no Sprint iteration field on this project; run `gh agile setup`")
+
+
+def iterations(login: str, number: int) -> tuple[list[dict], list[dict]]:
+    config = sprint_field(login, number)["configuration"]
+    return config["iterations"], config["completedIterations"]
+
+
+def resolve_iteration(login: str, number: int, value: str) -> str:
+    """Title, or `@current`, to an iteration id.
+
+    `@current` is the first *active* iteration: GitHub returns completed ones in
+    a separate list, so "the current sprint" is unambiguous rather than a date
+    comparison this tool would have to get right.
+    """
+    active, completed = iterations(login, number)
+    if value.strip().casefold() in ("@current", "current"):
+        if not active:
+            sys.exit("no active sprint; create one with `gh agile sprint create`")
+        return active[0]["id"]
+    for it in active + completed:
+        if it["title"].casefold() == value.casefold():
+            return it["id"]
+    known = ", ".join(i["title"] for i in active) or "none active"
+    sys.exit(f"no sprint titled {value!r}; active: {known}")
+
+
+def cmd_sprint(args) -> int:
+    if args.sprint_command == "list":
+        active, completed = iterations(args.owner, args.project)
+        if not active and not completed:
+            print("  no sprints; create one with `gh agile sprint create`")
+        for index, it in enumerate(active):
+            end = _iteration_end(it)
+            mark = "  (current)" if index == 0 else ""
+            print(f"  {it['title']:12} {it['startDate']} .. {end}{mark}")
+        for it in completed:
+            print(f"  {it['title']:12} {it['startDate']} .. {_iteration_end(it)}  (completed)")
+        return 0
+
+    field = sprint_field(args.owner, args.project)
+    duration = args.weeks * 7 if args.weeks else field["configuration"]["duration"]
+    start = args.start
+    if not start:
+        # Default to the day after the last iteration ends, so sprints abut
+        # rather than overlap -- an overlap makes "the current sprint"
+        # ambiguous, which @current then resolves arbitrarily.
+        import datetime as dt
+
+        active, completed = iterations(args.owner, args.project)
+        last = (active + completed)[-1] if (active or completed) else None
+        if last:
+            end = dt.date.fromisoformat(_iteration_end(last))
+            start = (end + dt.timedelta(days=1)).isoformat()
+        else:
+            start = dt.date.today().isoformat()
+    # The configuration is replaced wholesale, not appended to: `startDate` and
+    # `duration` are required at the top level and every existing iteration has
+    # to be sent back or it is dropped. Each iteration also needs an explicit
+    # title -- GitHub does not generate one through the API the way the UI does.
+    active, completed = iterations(args.owner, args.project)
+    existing = completed + active
+    title = args.title or f"Sprint {len(existing) + 1}"
+    entries = [
+        f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
+        f'title: {json.dumps(i["title"])}}}'
+        for i in existing
+    ]
+    entries.append(f'{{startDate: "{start}", duration: {duration}, title: {json.dumps(title)}}}')
+    graphql(
+        "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
+        'iterationConfiguration: {startDate: "%s", duration: %d, iterations: [%s]}}) '
+        "{ projectV2Field { ... on ProjectV2IterationField { id } } } }"
+        % (start, duration, ", ".join(entries)),
+        f=field["id"],
+    )
+    print(f"  {title}: {start}, {duration} day(s)")
+    return 0
+
+
+def _iteration_end(iteration: dict) -> str:
+    import datetime as dt
+
+    start = dt.date.fromisoformat(iteration["startDate"])
+    return (start + dt.timedelta(days=iteration["duration"] - 1)).isoformat()
+
+
 def cmd_key(args) -> int:
     """Record, or show, the key for a repository.
 
@@ -585,6 +756,7 @@ def cmd_key(args) -> int:
     """
     config = read_config(args.config)
     keys = config.setdefault("keys", {})
+    target = find_config(args.config) or pathlib.Path(CONFIG_PATH)
 
     if not args.key:
         if not keys:
@@ -596,8 +768,9 @@ def cmd_key(args) -> int:
     if not args.key.replace("_", "").isalnum() or not args.key.isupper():
         sys.exit(f"{args.key!r}: a key should be uppercase alphanumeric, e.g. ZMBNI")
     keys[args.repo] = args.key
-    pathlib.Path(args.config).write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-    print(f"  {args.repo} -> {args.key}  (in {args.config})")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+    print(f"  {args.repo} -> {args.key}  (in {target})")
 
     if args.project and args.name:
         graphql(
@@ -853,11 +1026,20 @@ def main() -> int:
                            help="seconds between the two status transitions")
     self_test.set_defaults(func=cmd_self_test)
 
+    sprint = sub.add_parser("sprint", help="list or create sprint iterations")
+    sprint_sub = sprint.add_subparsers(dest="sprint_command", required=True)
+    sprint_sub.add_parser("list", help="every sprint, active and completed")
+    sprint_new = sprint_sub.add_parser("create", help="append a sprint iteration")
+    sprint_new.add_argument("--start", help="ISO date; defaults to the day after the last ends")
+    sprint_new.add_argument("--weeks", type=int, help="length; defaults to the field's own duration")
+    sprint_new.add_argument("--title", help="defaults to 'Sprint <n>'")
+    sprint.set_defaults(func=cmd_sprint)
+
     key = sub.add_parser("key", help="record a repository's key, e.g. ZMBNI, or list them")
     key.add_argument("--repo", help="owner/name")
     key.add_argument("--key", help="uppercase key; omit to list what is recorded")
     key.add_argument("--name", help="human-readable project name, written to shortDescription")
-    key.add_argument("--config", default=CONFIG_PATH)
+    key.add_argument("--config", help=f"profile path; searched in order: {', '.join(CONFIG_PATHS)}")
     key.set_defaults(func=cmd_key)
 
     setter = sub.add_parser("set", help="set one field on an issue already on the board")
