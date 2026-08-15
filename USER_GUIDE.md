@@ -353,7 +353,7 @@ matters. Instead, in order of preference:
    PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
    HOME=/home/you
 
-   0 7 * * *  cd /srv/projects/Zamboni && gh-agile sync >> /var/log/gh-agile-sync.log 2>&1
+   0 7 * * *  cd /srv/projects/Zamboni && gh-agile sync >> ~/.local/state/gh-agile/sync.log 2>&1
    ```
 
    **`cd` into the repository first, and it is not optional.** The profile is
@@ -374,9 +374,23 @@ matters. Instead, in order of preference:
      environment, or its stored credentials from `$HOME/.config/gh` — and cron
      may not set `HOME` to what you expect. Either export `GH_TOKEN` in the
      crontab, or set `HOME=/home/you` there.
-   - **Keep the log.** `sync` prints what it added; without redirection cron
-     mails it or discards it, and the one run that added forty issues is the one
-     you will want to read.
+   - **Keep the log, somewhere you can actually write.** `/var/log` is
+     `root:syslog` and mode 755, so a *user* crontab redirecting there gets
+     `Permission denied` and the run produces nothing — the log line fails
+     before the command does. `~/.local/state/` is the XDG location for exactly
+     this, and it is yours. **Create the directory once**; cron will not:
+
+     ```bash
+     mkdir -p ~/.local/state/gh-agile
+     ```
+
+     Without redirection cron mails the output or discards it, and the one run
+     that added forty issues is the one you will want to read.
+
+     If the log genuinely belongs in `/var/log`, that is a *system* crontab —
+     a file in `/etc/cron.d/` with a user field — not a user one. Or send it to
+     syslog and let that place it:
+     `... | logger -t gh-agile`.
 
    Verify the line works before trusting it, in the environment cron will use:
 
