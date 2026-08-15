@@ -375,9 +375,14 @@ matters. Instead, in order of preference:
    Verify the line works before trusting it, in the environment cron will use:
 
    ```bash
-   env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin \
+   env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin \
      sh -c 'cd /srv/projects/Zamboni && gh-agile sync --dry-run'
    ```
+
+   `env -i` clears the environment, so this fails the same way cron would
+   rather than quietly succeeding on something your interactive shell
+   exports. Both failures are named: outside a repository it says so, and
+   without `gh` on `PATH` it says that too.
 
 3. **Run it after the events that create a backlog**: adding a repository to the
    profile, a bulk import, a migration.
