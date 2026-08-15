@@ -1032,6 +1032,57 @@ def make_board(login: str, project: int, name: str, kind: str, extra: str | None
             "filter": combined, "action": action}
 
 
+def cmd_sync(args) -> int:
+    """Add issues that belong on the board and are not on it.
+
+    Needed because **a project is a collection, not a filter** -- see the user
+    guide. Additive only: an item is never removed, because removing it discards
+    that item's Status, Points and Sprint, which live on the project item rather
+    than on the issue.
+    """
+    config = args._config
+    repos = [args.repo] if args.repo else sorted(
+        {e["repo"] for e in profile_keys(config) if e.get("repo")}
+    )
+    if not repos:
+        sys.exit("no repositories: pass --repo, or list keys in the profile")
+
+    on_board = {
+        (i["content"].get("repository"), i["content"].get("number"))
+        for i in board_items(args.owner, args.project)
+        if i.get("content")
+    }
+    # `gh project item-list` reports the repository as a bare name, so compare
+    # on the number and the trailing name rather than owner/name.
+    numbers_on_board = {
+        (str(repo).rsplit("/", 1)[-1] if repo else None, number)
+        for repo, number in on_board
+    }
+
+    added = skipped = 0
+    for repo in repos:
+        cmd = ["issue", "list", "--repo", repo, "--state", args.state,
+               "--limit", str(args.limit), "--json", "number,title,url"]
+        if args.query:
+            cmd += ["--search", args.query]
+        for issue in json.loads(gh(cmd)):
+            key = (repo.rsplit("/", 1)[-1], issue["number"])
+            if key in numbers_on_board:
+                skipped += 1
+                continue
+            if args.dry_run:
+                print(f"  would add {repo}#{issue['number']}  {issue['title'][:52]}")
+            else:
+                gh(["project", "item-add", str(args.project), "--owner", args.owner,
+                    "--url", issue["url"]])
+                print(f"  added {repo}#{issue['number']}  {issue['title'][:52]}")
+            added += 1
+
+    verb = "would add" if args.dry_run else "added"
+    print(f"  {verb} {added}, already present {skipped}, across {len(repos)} repo(s)")
+    return 0
+
+
 def cmd_board(args) -> int:
     if args.board_command == "list":
         # The profile is the authority on a board's type: filters overlap --
@@ -1368,17 +1419,26 @@ def cmd_self_test(args) -> int:
         project = created["number"]
         print(f"  scratch project #{project} created")
 
-        setup = argparse.Namespace(owner=args.owner, project=project, spec=None, repo=args.repo)
+        # `_config` is set by apply_defaults for a real invocation; the
+        # namespaces built here are synthetic and have to carry it too.
+        setup = argparse.Namespace(owner=args.owner, project=project, spec=None,
+                                   repo=args.repo, _config=args._config)
         cmd_setup(setup)
 
         common = dict(owner=args.owner, project=project, repo=args.repo,
-                      intent="self-test", acceptance="self-test")
-        cmd_epic(argparse.Namespace(title=f"{stamp} epic", **common))
+                      intent="self-test", acceptance="self-test", _config=args._config)
+        # Each issue is recorded the moment it exists, not after both do. The
+        # earlier version assigned the list once at the end, so a failure
+        # between the two -- a rate limit, say -- left the epic behind with
+        # nothing tracking it for teardown. Found by `sync`, which reported an
+        # orphaned "guide epic" nobody had noticed.
+        cmd_epic(argparse.Namespace(title=f"{stamp} epic", key=None, **common))
         epic_number = _latest_issue(args.repo)
+        issues.append(epic_number)
         cmd_story(argparse.Namespace(title=f"{stamp} story", epic=epic_number, points=3,
-                                     priority="high", status="Todo", **common))
+                                     priority="high", status="Todo", key=None, **common))
         story_number = _latest_issue(args.repo)
-        issues = [epic_number, story_number]
+        issues.append(story_number)
 
         # Drive the story through a real transition, then wait for the timeline
         # to catch up -- it is eventually consistent, measured at ~75s.
@@ -1538,6 +1598,31 @@ def main() -> int:
     self_test.add_argument("--gap", type=int, default=20,
                            help="seconds between the two status transitions")
     self_test.set_defaults(func=cmd_self_test)
+
+    sync = sub.add_parser(
+        "sync", help="add issues that belong on the board and are not on it",
+        epilog=field_help([
+            ("--repo", "owner/name", "optional", "one repository; default is every repo in the profile keys"),
+            ("--state", "open|closed|all", "optional", "which issues to consider; default open"),
+            ("--query", "search", "optional", "extra GitHub search terms, e.g. 'label:type:story'"),
+            ("--limit", "number", "optional", "maximum issues to examine per repository"),
+            ("--dry-run", "flag", "optional", "list what would be added and change nothing"),
+        ]) + """
+
+why this is needed:
+  A project is a collection, not a filter. It stores Status, Story Points and
+  Sprint *per item*, so an issue it does not hold has nowhere to put them.
+  GitHub's built-in auto-add workflow is UI-only -- the API can delete a
+  workflow but cannot create or configure one -- and it is forward-only, so it
+  never backfills. Hence sync.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sync.add_argument("--repo")
+    sync.add_argument("--state", default="open", choices=["open", "closed", "all"])
+    sync.add_argument("--query")
+    sync.add_argument("--limit", type=int, default=200)
+    sync.add_argument("--dry-run", action="store_true")
+    sync.set_defaults(func=cmd_sync)
 
     board = sub.add_parser(
         "board", help="scrum, kanban, backlog or roadmap boards over one project",

@@ -252,6 +252,50 @@ board is reproducible from the profile.
 **A view filters items already on the board; it does not pull them in.** The
 project must contain everything any view should show.
 
+### Why `sync` exists: a project is a collection, not a filter
+
+The natural assumption is that a project is a *saved search* over a repository's
+issues — that creating an issue makes it appear on the board, and that anything
+matching a board's filter is on that board. **It is not.** A project is a
+curated collection, and an issue is on it only because something put it there.
+
+The reason is where the data lives. `Status`, `Story Points` and `Sprint` are
+stored **per project item**, not on the issue — that is why the same issue can
+sit on two projects with two different statuses. A project therefore *cannot* be
+a filter: a filter has nowhere to put a value. The item has to exist first.
+
+Two consequences that catch people out:
+
+- **A board's filter narrows what is already on the project.** It never reaches
+  out and pulls issues in. An engineering board filtered `repo:owner/other-repo`
+  shows nothing at all until those issues are added to the project.
+- **GitHub's built-in "auto-add" workflow does not close the gap.** It is
+  configured in the web UI only — the API can `deleteProjectV2Workflow` and has
+  no mutation to create or configure one, and `ProjectV2Workflow` exposes no
+  filter to read — and it is **forward-only**: it never backfills issues that
+  already existed.
+
+So:
+
+```bash
+gh agile sync --dry-run                 # what is missing, changing nothing
+gh agile sync                           # every repo in the profile keys
+gh agile sync --repo owner/other-repo   # just one
+gh agile sync --query "label:type:story" --state all
+```
+```
+  added paulcaron16k/other-repo#12  Compact on a schedule
+  added 1, already present 10, across 2 repo(s)
+```
+
+Run it after adding a repository to the profile, after a bulk import, or on a
+schedule if issues arrive from outside the tool. Issues created by `gh agile
+epic` and `gh agile story` are added at creation and never need it.
+
+**`sync` only adds.** It never removes an item, because removing one discards
+that item's Status, Points and Sprint — the data lives on the project item, so
+taking it off the board destroys it.
+
 ## 4. Creating sprints
 
 ```bash
@@ -434,6 +478,7 @@ gh agile move --help
 | `setup` | Create fields and labels; converge on re-run |
 | `key` | Record a repository's key; list what is recorded |
 | `board list` / `board create` | Scrum, kanban, backlog and roadmap boards over one project |
+| `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint create` | Show or append iterations |
 | `epic` / `story` | Create work items with their parent, labels and fields |
 | `set` | Set one field on an item already on the board |
