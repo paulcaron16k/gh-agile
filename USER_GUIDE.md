@@ -195,7 +195,64 @@ gains the two the policy declares:
 Epics, parents and sub-issue progress need no custom field: GitHub provides
 them.
 
-## 3. Creating sprints
+## 3. Boards: scrum, kanban, backlog, roadmap
+
+**One project, many boards.** A second project is almost always the wrong
+answer, and the reason is field values: a `ProjectV2Item` belongs to exactly one
+project and holds its own `Status`, `Story Points` and `Sprint`. An issue on two
+projects therefore has **two independent sets** — move it to Done on the team
+board and the engineering board still shows it In Progress, with nothing
+reporting the divergence.
+
+So an engineering board across every repo, and a team board for one or two keys,
+are two **boards over one project**, each with its own filter.
+
+### Is a GitHub view a scrum board or a kanban board?
+
+**Neither, until you filter it.** GitHub has no such concept — it has a *view*
+with a layout and a filter. The filter is what makes it one or the other, and
+the distinction is the ordinary Agile one:
+
+| Board | What makes it that | Filter |
+|---|---|---|
+| **Scrum** | **Time-boxed.** Shows the work committed to the current iteration, and resets when the sprint does | `sprint:@current` |
+| **Kanban** | **Continuous flow.** No iteration boundary; everything in flight at once, limited by WIP rather than by a sprint | `-status:Done` |
+| **Backlog** | Not yet committed to an iteration | `no:sprint -status:Done` |
+| **Roadmap** | Epics over time | `label:type:epic`, roadmap layout |
+
+Same columns and same items in each; only the scoping differs. This is the
+choice Jira makes at board creation, which is why the command names it the same
+way:
+
+```bash
+gh agile board create --name "Team SPARK" --type scrum  --filter "label:key:SPARK" --save
+gh agile board create --name "Engineering"  --type kanban --save
+gh agile board create --name "Backlog"      --type backlog --save
+gh agile board list
+```
+```
+  #2   Team SPARK           scrum    board    sprint:@current label:key:SPARK
+  #3   Engineering          kanban   board    -status:Done
+  #4   Backlog              backlog  table    no:sprint -status:Done
+```
+
+`--filter` is ANDed with the type's own, so a scrum board for one key is the
+type plus one clause. `--save` records the board in the profile, after which
+`gh agile setup` converges it like any field — boards become reproducible rather
+than hand-built.
+
+Across repositories the team filter is `repo:owner/name`; in a mono-repo it is
+`label:key:SPARK`, which is what the key label exists for.
+
+**One honest limitation: WIP limits are not automatable.** A kanban board's
+column limits are not exposed in the API — `ProjectV2View` has no limit field of
+any kind — so if you want them, set them in the web UI. Everything else about a
+board is reproducible from the profile.
+
+**A view filters items already on the board; it does not pull them in.** The
+project must contain everything any view should show.
+
+## 4. Creating sprints
 
 ```bash
 gh agile sprint create --start 2026-08-17 --weeks 2
@@ -210,7 +267,7 @@ gh agile sprint list
 Without `--start`, a new sprint begins the day after the last one ends, because
 overlapping sprints make "the current sprint" ambiguous.
 
-## 4. Creating an epic and a story
+## 5. Creating an epic and a story
 
 ```bash
 gh agile epic "Snapshot expiry and orphan removal" \
@@ -230,7 +287,7 @@ complains.
 
 ---
 
-## 5. The workflow, end to end
+## 6. The workflow, end to end
 
 A story from creation to closed, then its epic. Every command here is
 non-interactive, so an agent can run the same sequence.
@@ -327,7 +384,7 @@ gh agile export --csv --out-dir exports/
 
 ---
 
-## 6. For an agent working on a developer's behalf
+## 7. For an agent working on a developer's behalf
 
 Everything above is non-interactive when given explicit input, which is the
 property that makes it drivable. A working sequence:
@@ -362,7 +419,7 @@ Two rules worth encoding in whatever drives it:
 
 ---
 
-## 7. Command reference
+## 8. Command reference
 
 Every command lists its own fields with type, obligation and description:
 
@@ -376,6 +433,7 @@ gh agile move --help
 |---|---|
 | `setup` | Create fields and labels; converge on re-run |
 | `key` | Record a repository's key; list what is recorded |
+| `board list` / `board create` | Scrum, kanban, backlog and roadmap boards over one project |
 | `sprint list` / `sprint create` | Show or append iterations |
 | `epic` / `story` | Create work items with their parent, labels and fields |
 | `set` | Set one field on an item already on the board |

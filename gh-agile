@@ -566,6 +566,11 @@ def cmd_setup(args) -> int:
         existing = fields_of(args.owner, args.project, refresh=True)
         print(f"  field {name!r} created")
 
+    for board in (spec.get("boards") or []) + (args._config.get("boards") or []):
+        result = make_board(args.owner, args.project, board["name"], board["type"],
+                            board.get("filter"))
+        print(f"  board {result['name']!r} {result['action']} [{result['type']}]")
+
     if args.repo:
         for label in spec.get("labels", []):
             result = subprocess.run(
@@ -945,6 +950,123 @@ def _iteration_end(iteration: dict) -> str:
 
     start = dt.date.fromisoformat(iteration["startDate"])
     return (start + dt.timedelta(days=iteration["duration"] - 1)).isoformat()
+
+
+#: Board types, as Agile means them. GitHub has no such concept: it has a *view*
+#: with a layout and a filter, and the **filter** is what makes a board scrum or
+#: kanban.
+#:
+#: A scrum board is time-boxed -- it shows the work committed to the current
+#: iteration and resets when the sprint does. A kanban board is continuous: no
+#: iteration, all work in flight, limited by WIP rather than by a sprint
+#: boundary. Same columns, same items; the difference is whether an iteration
+#: scopes it.
+BOARD_TYPES = {
+    "scrum": {
+        "layout": "BOARD_LAYOUT",
+        "filter": "sprint:@current",
+        "about": "the current sprint only; resets each iteration",
+    },
+    "kanban": {
+        "layout": "BOARD_LAYOUT",
+        "filter": "-status:Done",
+        "about": "continuous flow, no iteration boundary",
+    },
+    "backlog": {
+        "layout": "TABLE_LAYOUT",
+        "filter": "no:sprint -status:Done",
+        "about": "everything not yet committed to a sprint",
+    },
+    "roadmap": {
+        "layout": "ROADMAP_LAYOUT",
+        "filter": "label:type:epic",
+        "about": "epics over time",
+    },
+}
+
+
+def views_of(login: str, number: int) -> list[dict]:
+    for root in ("user", "organization"):
+        data = graphql(
+            "query($login: String!, $number: Int!) { %s(login: $login) { projectV2("
+            "number: $number) { views(first: 20) { nodes { id number name layout filter } } } } }"
+            % root,
+            login=login, number=number,
+        )
+        owner = (data.get("data") or {}).get(root)
+        if owner and owner.get("projectV2"):
+            return owner["projectV2"]["views"]["nodes"]
+    sys.exit(f"no project {number} for {login!r}")
+
+
+def make_board(login: str, project: int, name: str, kind: str, extra: str | None) -> dict:
+    """Create a board of the given type, or bring an existing one into line.
+
+    Idempotent by name, like every other `setup` step: running it twice leaves
+    one board, not two.
+    """
+    spec = BOARD_TYPES[kind]
+    clauses = [spec["filter"]] + ([extra] if extra else [])
+    combined = " ".join(c for c in clauses if c)
+
+    existing = next((v for v in views_of(login, project) if v["name"] == name), None)
+    if existing is None:
+        created = graphql(
+            'mutation($p: ID!, $n: String!) { createProjectV2View(input: {projectId: $p, '
+            'name: $n, layout: %s}) { projectV2View { id number } } }' % spec["layout"],
+            p=project_id(login, project), n=name,
+        )
+        view = created["data"]["createProjectV2View"]["projectV2View"]
+        action = "created"
+    else:
+        view, action = existing, "updated"
+
+    # Filter and layout are only settable through update -- the create input
+    # takes neither, which is why every board is a create followed by an update.
+    graphql(
+        'mutation($v: ID!, $f: String!) { updateProjectV2View(input: {viewId: $v, '
+        'filter: $f, layout: %s}) { projectV2View { number name filter } } }' % spec["layout"],
+        v=view["id"], f=combined,
+    )
+    return {"number": view["number"], "name": name, "type": kind,
+            "filter": combined, "action": action}
+
+
+def cmd_board(args) -> int:
+    if args.board_command == "list":
+        # The profile is the authority on a board's type: filters overlap --
+        # backlog's contains kanban's -- so substring matching alone reports
+        # `no:sprint -status:Done` as kanban. Longest filter first for boards
+        # the profile does not know about.
+        declared = {b["name"]: b["type"] for b in (args._config.get("boards") or [])}
+        by_specificity = sorted(
+            BOARD_TYPES.items(), key=lambda kv: len(kv[1]["filter"]), reverse=True
+        )
+        for view in views_of(args.owner, args.project):
+            kind = declared.get(view["name"]) or next(
+                (k for k, spec in by_specificity
+                 if spec["filter"] and spec["filter"] in (view.get("filter") or "")),
+                "custom",
+            )
+            layout = view["layout"].replace("_LAYOUT", "").lower()
+            print(f"  #{view['number']:<3} {view['name']:<28} {kind:<8} {layout:<8} "
+                  f"{view.get('filter') or ''}")
+        return 0
+
+    result = make_board(args.owner, args.project, args.name, args.type, args.filter)
+    print(f"  {result['action']} #{result['number']}: {result['name']} "
+          f"[{result['type']}]  filter: {result['filter']}")
+
+    if args.save:
+        config = args._config
+        boards = [b for b in config.get("boards", []) if b.get("name") != args.name]
+        boards.append({"name": args.name, "type": args.type,
+                       **({"filter": args.filter} if args.filter else {})})
+        config["boards"] = boards
+        target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+        target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        print(f"  saved to {target}; `gh agile setup` will keep it in step")
+    return 0
 
 
 def cmd_project(args) -> int:
@@ -1416,6 +1538,28 @@ def main() -> int:
     self_test.add_argument("--gap", type=int, default=20,
                            help="seconds between the two status transitions")
     self_test.set_defaults(func=cmd_self_test)
+
+    board = sub.add_parser(
+        "board", help="scrum, kanban, backlog or roadmap boards over one project",
+        epilog=field_help([
+            ("--name", "text", "required", "the board's name, and its identity for convergence"),
+            ("--type", "|".join(BOARD_TYPES), "required", "what kind of board; sets layout and base filter"),
+            ("--filter", "query", "optional", "extra filter, ANDed with the type's own"),
+            ("--save", "flag", "optional", "record it in the profile so setup keeps it in step"),
+        ]) + "\n\nboard types:\n" + "\n".join(
+            f"  {k:<9} {v['layout'].replace('_LAYOUT','').lower():<8} {v['filter']:<22} {v['about']}"
+            for k, v in BOARD_TYPES.items()
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    board_sub = board.add_subparsers(dest="board_command", required=True)
+    board_sub.add_parser("list", help="every board on the project")
+    board_new = board_sub.add_parser("create", help="create or converge a board")
+    board_new.add_argument("--name", required=True)
+    board_new.add_argument("--type", required=True, choices=sorted(BOARD_TYPES))
+    board_new.add_argument("--filter")
+    board_new.add_argument("--save", action="store_true")
+    board.set_defaults(func=cmd_board)
 
     project = sub.add_parser(
         "project", help="create the board and record it in the profile",
