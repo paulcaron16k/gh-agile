@@ -1,10 +1,19 @@
 {
-  "keys": {
-    "paulcaron16k/Zamboni": "ZMBNI",
-    "paulcaron16k/gh-agile": "AGILE"
-  },
+  "keys": [
+    {
+      "key": "AGILE",
+      "name": "GitHub Agile extension",
+      "repo": "paulcaron16k/gh-agile"
+    },
+    {
+      "key": "ZMBNI",
+      "name": "Zamboni Iceberg table maintainer",
+      "repo": "paulcaron16k/Zamboni"
+    }
+  ],
   "project": {
     "key": "AGILE",
-    "name": "gh-agile: Agile management on GitHub"
+    "name": "gh-agile: Agile management on GitHub",
+    "number": 4
   }
 }

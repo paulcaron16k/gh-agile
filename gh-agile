@@ -302,6 +302,60 @@ def read_config(path: str | None = None) -> dict:
     sys.exit(f"{found} points at {pointer}, which has no profile at any of {list(CONFIG_PATHS)}")
 
 
+#: Label prefix carrying an issue's key. Issue Fields would be the right home
+#: and are organization-only -- `createIssueField` requires an Organization
+#: ownerId and refuses a user account -- so the key rides a label instead. It
+#: lives on the issue rather than the board, shows in the UI, and is filterable
+#: as `is:issue label:key:ZMBNI`.
+KEY_LABEL = "key:"
+
+
+def profile_keys(config: dict) -> list[dict]:
+    """The `keys` list. Ordered, because the order is the default."""
+    return config.get("keys") or []
+
+
+def keys_for_repo(config: dict, repo: str) -> list[str]:
+    return [k["key"] for k in profile_keys(config) if k.get("repo") == repo]
+
+
+def repo_for_key(config: dict, key: str) -> str | None:
+    for entry in profile_keys(config):
+        if entry.get("key", "").casefold() == key.casefold():
+            return entry.get("repo")
+    return None
+
+
+def current_repo() -> str | None:
+    """`owner/name` of the repository the tool is being run in."""
+    result = subprocess.run(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        capture_output=True, text=True,
+    )
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
+def parse_issue_ref(value: str, config: dict, fallback_repo: str | None) -> tuple[str, int]:
+    """`ZMBNI-34` -> (owner/repo, 34); `34` -> (fallback_repo, 34).
+
+    The keyed form is unambiguous on its own, which is the whole point of having
+    a key: it names the repository as well as the number.
+    """
+    text = str(value).strip()
+    if text.isdigit():
+        if not fallback_repo:
+            sys.exit(f"--issue {text} needs a repository: run inside one, or pass --repo/--key")
+        return fallback_repo, int(text)
+    key, _, number = text.rpartition("-")
+    if not key or not number.isdigit():
+        sys.exit(f"{value!r} is neither an issue number nor a KEY-NUMBER reference")
+    repo = repo_for_key(config, key)
+    if not repo:
+        known = ", ".join(k["key"] for k in profile_keys(config)) or "none"
+        sys.exit(f"no repository for key {key!r}; the profile knows: {known}")
+    return repo, int(number)
+
+
 def issue_key(repo: str | None, number: int, keys: dict[str, str]) -> str:
     """`ZMBNI-1817` when a key is known, `owner/repo#1817` when it is not.
 
@@ -332,7 +386,11 @@ def write_state(path: str, key: str, watermark: str, exported: int) -> None:
 
 
 def rows(login: str, number: int, *, with_history: bool, since: str | None = None) -> list[dict]:
-    keys = read_config().get("keys", {})
+    config = read_config()
+    # First key per repo, as the fallback when an issue carries no key: label.
+    keys = {}
+    for entry in profile_keys(config):
+        keys.setdefault(entry.get("repo"), entry.get("key"))
     _title, items = fetch_items(login, number)
     out = []
     for item in items:
@@ -346,15 +404,23 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             continue
         fields = field_values(item)
         repo = (content.get("repository") or {}).get("nameWithOwner")
+        labels = [n["name"] for n in content["labels"]["nodes"]]
+        # Explicit beats assumed: a `key:` label on the issue wins over the
+        # profile's first-key-for-this-repo default, which is what makes a
+        # mono-repo with several keys distinguishable at all.
+        labelled = next((lb[len(KEY_LABEL):] for lb in labels if lb.startswith(KEY_LABEL)), None)
         row = {
-            "issue_key": issue_key(repo, content["number"], keys),
+            "issue_key": (
+                f"{labelled}-{content['number']}" if labelled
+                else issue_key(repo, content["number"], keys)
+            ),
             "repository": repo,
             "number": content["number"],
             "title": content["title"],
             "url": content["url"],
             "state": content["state"],
             "state_reason": content.get("stateReason") or "",
-            "labels": ";".join(n["name"] for n in content["labels"]["nodes"]),
+            "labels": ";".join(labels),
             "assignees": ";".join(n["login"] for n in content["assignees"]["nodes"]),
             "milestone": (content.get("milestone") or {}).get("title") or "",
             "epic_number": (content.get("parent") or {}).get("number") or "",
@@ -559,6 +625,15 @@ def reconcile_options(pid: str, field: dict, wanted: list[str]) -> list[str]:
     return missing
 
 
+def ensure_labels(repo: str, labels: list[str]) -> None:
+    """Create any label that does not exist. `gh issue create` fails on an unknown one."""
+    for label in labels:
+        subprocess.run(
+            ["gh", "label", "create", label, "--repo", repo, "--color", "ededed"],
+            capture_output=True, text=True,
+        )
+
+
 def create_issue(repo: str, title: str, body: str, labels: list[str]) -> tuple[int, str]:
     """Create an issue and return (number, node id)."""
     cmd = ["issue", "create", "--repo", repo, "--title", title, "--body", body]
@@ -703,10 +778,12 @@ def add_to_project(login: str, project: int, url: str) -> str:
 
 
 def cmd_epic(args) -> int:
+    labels = ["type:epic"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
+    ensure_labels(args.repo, labels)
     number, _node = create_issue(
         args.repo, args.title,
         BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
-        ["type:epic"],
+        labels,
     )
     url = f"https://github.com/{args.repo}/issues/{number}"
     item = add_to_project(args.owner, args.project, url)
@@ -723,10 +800,12 @@ def cmd_story(args) -> int:
     an issue created now and attached to its epic later is an orphan in every
     roll-up run in between, and nothing complains. POLICY.md §3.
     """
+    labels = ["type:story"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
+    ensure_labels(args.repo, labels)
     number, node = create_issue(
         args.repo, args.title,
         BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
-        ["type:story"],
+        labels,
     )
     url = f"https://github.com/{args.repo}/issues/{number}"
 
@@ -868,6 +947,45 @@ def _iteration_end(iteration: dict) -> str:
     return (start + dt.timedelta(days=iteration["duration"] - 1)).isoformat()
 
 
+def cmd_project(args) -> int:
+    """Create the board and record it in the profile.
+
+    Creation belongs to this tool rather than `gh project create` because two
+    things have to happen with it: `project.number` is written to the profile so
+    every later command can default `--project`, and a second project in the
+    same repository is refused -- with one profile holding one number, a second
+    board would make that default ambiguous.
+    """
+    config = args._config
+    existing = (config.get("project") or {}).get("number")
+    if existing and not args.force:
+        sys.exit(
+            f"the profile already names project #{existing}. One project per main "
+            "repository, because project.number is what every command defaults to.\n"
+            "  To start a different project: remove project.number from the profile "
+            "here, or work from the clone of that project's main repository."
+        )
+
+    created = json.loads(gh(["project", "create", "--owner", args.owner,
+                             "--title", args.title, "--format", "json"]))
+    number = created["number"]
+    print(f"  project #{number} created: {created['url']}")
+
+    config.setdefault("project", {})
+    config["project"].update({"number": number, "name": args.title})
+    if args.key:
+        config["project"]["key"] = args.key
+        entries = profile_keys(config)
+        if not any(e.get("key") == args.key for e in entries):
+            entries.append({"key": args.key, "name": args.title, "repo": args.repo})
+        config["keys"] = entries
+    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+    print(f"  profile updated: {target}")
+    return 0
+
+
 def cmd_key(args) -> int:
     """Record, or show, the key for a repository.
 
@@ -877,23 +995,25 @@ def cmd_key(args) -> int:
     "Zamboni Iceberg table maintainer" / ZMBNI -- lives there while the machine
     reads the config file.
     """
-    config = read_config(args.config)
-    keys = config.setdefault("keys", {})
-    target = find_config(args.config) or pathlib.Path(CONFIG_PATH)
+    config = args._config
+    entries = profile_keys(config)
+    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
 
     if not args.key:
-        if not keys:
+        if not entries:
             print("  no keys recorded")
-        for repo, key in sorted(keys.items()):
-            print(f"  {key:10} {repo}")
+        for entry in entries:
+            print(f"  {entry['key']:10} {entry.get('repo', '?'):28} {entry.get('name', '')}")
         return 0
 
     if not args.key.replace("_", "").isalnum() or not args.key.isupper():
         sys.exit(f"{args.key!r}: a key should be uppercase alphanumeric, e.g. ZMBNI")
-    keys[args.repo] = args.key
+    entries = [e for e in entries if e.get("key") != args.key]
+    entries.append({"key": args.key, "name": args.name or args.key, "repo": args.repo})
+    config["keys"] = entries
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-    print(f"  {args.repo} -> {args.key}  (in {target})")
+    print(f"  {args.key} -> {args.repo}  (in {target})")
 
     if args.project and args.name:
         graphql(
@@ -913,6 +1033,7 @@ def cmd_set(args) -> int:
     hit between two field writes -- could only be fixed by hand, which is what
     this tool exists to avoid.
     """
+    _repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
     items = board_items(args.owner, args.project)
     item = next((i for i in items if (i.get("content") or {}).get("number") == args.issue), None)
     if not item:
@@ -932,6 +1053,11 @@ def cmd_move(args) -> int:
     the transition after which nobody revisits the issue -- and an issue closed
     with the word "done" has thrown away the reasoning that made it defensible.
     """
+    # `ZMBNI-34` names the repository as well as the number, which is the point
+    # of having a key at all; a bare number takes the repository from --repo,
+    # --key, or the working directory.
+    repo, issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
+    args.issue = issue
     required = tuple(REQUIRED_FOR.get(args.status.casefold(), ()))
     sections = read_template(args, required=required) if required else {}
     if required:
@@ -941,7 +1067,6 @@ def cmd_move(args) -> int:
     item = next((i for i in items if (i.get("content") or {}).get("number") == args.issue), None)
     if not item:
         sys.exit(f"issue #{args.issue} is not on project {args.project}")
-    repo = item["content"]["repository"] if "repository" in item["content"] else args.repo
 
     if sections:
         body = json.loads(gh(["issue", "view", str(args.issue), "--repo", repo,
@@ -953,6 +1078,23 @@ def cmd_move(args) -> int:
 
     set_field(args.owner, args.project, item["id"], "Status", args.status)
     print(f"  #{args.issue} Status = {args.status}")
+
+    # Starting work puts the item in the current sprint, if it is not already in
+    # one. Anything else means a board where in-progress work sits outside every
+    # sprint, and a sprint report that quietly omits it. A warning rather than a
+    # refusal when no sprint is active: declining to start work because nobody
+    # created a sprint would be the tool making a process decision.
+    if same_status(args.status, CYCLE_START):
+        current = next(
+            (v for v in item.get("fieldValues", {}).get("nodes", []) if v.get("title")), None
+        )
+        if not current:
+            active, _completed = iterations(args.owner, args.project)
+            if active:
+                set_field(args.owner, args.project, item["id"], "Sprint", "@current")
+                print(f"  #{args.issue} Sprint = {active[0]['title']} (current)")
+            else:
+                print("  no active sprint; leaving Sprint unset", file=sys.stderr)
 
     if args.close:
         gh(["issue", "close", str(args.issue), "--repo", repo,
@@ -1228,7 +1370,9 @@ MOVE_FIELDS = [
 def main() -> int:
     parser = argparse.ArgumentParser(prog="gh agile", description=__doc__.splitlines()[0])
     parser.add_argument("--owner", default="@me", help='project owner; "@me" for yourself')
-    parser.add_argument("--project", type=int, help="project number; self-test makes its own")
+    parser.add_argument("--project", type=int,
+                        help="project number; defaults to project.number in the profile")
+    parser.add_argument("--config", help=f"profile path; searched: {', '.join(CONFIG_PATHS)}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     setup = sub.add_parser("setup", help="create the project's fields and labels, idempotently",
@@ -1242,7 +1386,8 @@ def main() -> int:
         epilog=field_help(EPIC_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     epic.add_argument("title")
-    epic.add_argument("--repo", required=True)
+    epic.add_argument("--repo")
+    epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
     epic.set_defaults(func=cmd_epic)
@@ -1251,7 +1396,8 @@ def main() -> int:
         epilog=field_help(STORY_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     story.add_argument("title")
-    story.add_argument("--repo", required=True)
+    story.add_argument("--repo")
+    story.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     story.add_argument("--epic", type=int, required=True, help="epic issue number")
     story.add_argument("--points", type=float)
     story.add_argument("--priority")
@@ -1271,6 +1417,24 @@ def main() -> int:
                            help="seconds between the two status transitions")
     self_test.set_defaults(func=cmd_self_test)
 
+    project = sub.add_parser(
+        "project", help="create the board and record it in the profile",
+        epilog=field_help([
+            ("--title", "text", "required", "the board's title"),
+            ("--key", "KEY", "optional", "project key, e.g. ZMBNI; added to the profile keys"),
+            ("--repo", "owner/name", "optional", "defaults to the repository this is run in"),
+            ("--force", "flag", "optional", "create a second project despite the profile"),
+        ]),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    project_sub = project.add_subparsers(dest="project_command", required=True)
+    project_new = project_sub.add_parser("create", help="create it")
+    project_new.add_argument("--title", required=True)
+    project_new.add_argument("--key")
+    project_new.add_argument("--repo")
+    project_new.add_argument("--force", action="store_true")
+    project.set_defaults(func=cmd_project)
+
     sprint = sub.add_parser("sprint", help="list or create sprint iterations")
     sprint_sub = sprint.add_subparsers(dest="sprint_command", required=True)
     sprint_sub.add_parser("list", help="every sprint, active and completed")
@@ -1284,13 +1448,13 @@ def main() -> int:
     key.add_argument("--repo", help="owner/name")
     key.add_argument("--key", help="uppercase key; omit to list what is recorded")
     key.add_argument("--name", help="human-readable project name, written to shortDescription")
-    key.add_argument("--config", help=f"profile path; searched in order: {', '.join(CONFIG_PATHS)}")
+
     key.set_defaults(func=cmd_key)
 
     move = sub.add_parser("move", help="change status, with the evidence that status requires",
         epilog=field_help(MOVE_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    move.add_argument("issue", type=int)
+    move.add_argument("issue", help="issue number, or a KEY-NUMBER reference")
     move.add_argument("--status", required=True, help=f"one of: {', '.join(STATUSES)}")
     move.add_argument("--evidence", help="section text, or - for stdin")
     move.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
@@ -1302,7 +1466,8 @@ def main() -> int:
     setter = sub.add_parser("set", help="set one field on an issue already on the board",
         epilog=field_help(SET_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    setter.add_argument("--issue", type=int, required=True)
+    setter.add_argument("--issue", required=True,
+                        help="issue number, or a KEY-NUMBER reference")
     setter.add_argument("--field", required=True, help='field name, e.g. "Story Points"')
     setter.add_argument("--value", help="text or single-select option")
     setter.add_argument("--number", type=float, help="numeric value")
@@ -1335,9 +1500,56 @@ def main() -> int:
     validate.set_defaults(func=cmd_validate)
 
     args = parser.parse_args()
-    if args.owner == "@me":
-        args.owner = json.loads(gh(["api", "user"]))["login"]
+    apply_defaults(args)
     return args.func(args)
+
+
+def apply_defaults(args) -> None:
+    """Fill --project, --repo and --key from the profile and the working directory.
+
+    Typing `--project 5 --repo owner/name` on every command is friction for the
+    common case of one project and one repository, and friction is what makes
+    people skip the tool and edit by hand.
+
+    Precedence, most explicit first: the flag; then `--key`, which names a
+    repository on its own; then the repository this is being run in; then the
+    profile.
+    """
+    config = read_config(getattr(args, "config", None))
+    args._config = config
+
+    if getattr(args, "owner", "@me") == "@me":
+        args.owner = json.loads(gh(["api", "user"]))["login"]
+
+    if getattr(args, "project", None) is None and args.command != "self-test":
+        number = (config.get("project") or {}).get("number")
+        if number:
+            args.project = number
+
+    key = getattr(args, "key", None)
+    repo = getattr(args, "repo", None)
+    if repo is None and hasattr(args, "repo"):
+        if key and args.command not in ("key",):
+            repo = repo_for_key(config, key)
+            if not repo:
+                sys.exit(f"no repository for key {key!r} in the profile")
+        else:
+            repo = current_repo()
+            if not repo:
+                sys.exit(
+                    "not inside a GitHub repository, and no --repo given. Run this from a "
+                    "clone, or pass --repo owner/name"
+                )
+        args.repo = repo
+
+    # The key an issue is created with: explicit, else the first for this repo.
+    if hasattr(args, "key") and args.command in ("epic", "story"):
+        available = keys_for_repo(config, args.repo) if args.repo else []
+        if key:
+            if available and key not in available:
+                sys.exit(f"key {key!r} is not listed for {args.repo} in the profile")
+        elif available:
+            args.key = available[0]
 
 
 if __name__ == "__main__":

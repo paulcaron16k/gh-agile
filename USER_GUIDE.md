@@ -28,18 +28,25 @@ workflows that read it.
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `keys` | object | yes | Maps `owner/repo` to a short uppercase key. Produces `ZMBNI-1817` in the export's `issue_key`, the Gold model's human-readable key |
-| `project.name` | string | no | Human-readable project name. Written to the project's `shortDescription` by `gh agile key --name` |
-| `project.key` | string | no | The key for the main repository; a convenience copy of the matching `keys` entry |
-| `config_from` | string | no | `owner/repo` of the repository holding the real profile. **Mutually exclusive with everything else** — a file with this property carries nothing else |
+| `keys` | **ordered list** | yes | One entry per key: `{"key", "name", "repo"}`. **The order is the default** — the first entry for a repository is the key used when `--key` is not given |
+| `keys[].key` | string | yes | Short uppercase key, `[A-Z0-9]+`. No hyphen: the hyphen separates key from number in `ZMBNI-34` |
+| `keys[].repo` | string | yes | `owner/name` the key applies to. Several keys may name the same repo — see Mono-repo support |
+| `keys[].name` | string | no | What that key is for, shown by `gh agile key` |
+| `project.number` | integer | no | The board's **number**, not its node id — what `--project` takes. Written by `gh agile project create`, and what every command defaults to |
+| `project.name` | string | no | Human-readable project name |
+| `project.key` | string | no | The main repository's key; a convenience copy of the matching `keys` entry |
+| `config_from` | string | no | `owner/repo` holding the real profile. **Carries nothing else** |
 
 ```json
 {
-  "keys": {
-    "paulcaron16k/Zamboni": "ZMBNI",
-    "paulcaron16k/gh-agile": "AGILE"
-  },
+  "keys": [
+    { "key": "ZMBNI", "name": "Zamboni Iceberg table maintainer", "repo": "paulcaron16k/Zamboni" },
+    { "key": "SPARK", "name": "Zamboni Spark maintainer",         "repo": "paulcaron16k/Zamboni" },
+    { "key": "TRINO", "name": "Zamboni Trino maintainer",         "repo": "paulcaron16k/Zamboni" },
+    { "key": "AGILE", "name": "GitHub Agile extension",           "repo": "paulcaron16k/gh-agile" }
+  ],
   "project": {
+    "number": 5,
     "name": "Zamboni Iceberg table maintainer",
     "key": "ZMBNI"
   }
@@ -50,6 +57,36 @@ workflows that read it.
 are a per-repository sequence and a project may span repositories, so a
 project-level key would make `KEY-12` ambiguous the moment a second repository
 joined the board.
+
+A key gives the Jira equivalent of `{PROJECT_KEY}-{ISSUE_ID}`: **`ZMBNI-34`
+identifies a repository and an issue in one string**, and is accepted anywhere
+an issue number is.
+
+### How an issue's key is decided, and where it is stored
+
+**Explicitly, on the issue, as a label — `key:ZMBNI`.** Written at creation by
+`epic` and `story`, so it is recorded rather than inferred.
+
+GitHub Issue Fields would be the natural home and are unavailable:
+`createIssueField` requires an **Organization** owner and refuses a user
+account, the same limitation as Issue Types. A label is the next best carrier —
+it lives on the issue rather than the board, shows in the UI, survives removal
+from a project, and is filterable with `is:issue label:key:ZMBNI`.
+
+On export, `issue_key` uses the `key:` label when present, and otherwise falls
+back to the **first** profile key for that issue's repository.
+
+### Mono-repo support
+
+A product in one repository with several services — which would be separate
+repos, or separate Jira projects with their own keys — can list **several keys
+against the same repo**. `--key SPARK` on creation labels the issue
+`key:SPARK`, and it exports as `SPARK-41`.
+
+The ids are not monotonic per key: `ZMBNI-34` may be followed by `SPARK-35`,
+because all keys share one repository sequence. That is a cosmetic difference
+from Jira and a real advantage — the numbers **cannot collide**, where Jira's
+per-project sequences require the key to disambiguate them.
 
 ### Where to check it in when a project spans repositories
 
@@ -69,6 +106,40 @@ pointer to a pointer is a loop waiting to happen, so the tool ignores
 Resolution order, first match wins: `.github/agile.json` → `agile.json` →
 `.gh_agile.json`.
 
+For consisency we recommend always store this file in `.github/agile.json`.
+
+### CLI defaults
+
+Typing `--project 5 --repo owner/name` on every command is friction, and
+friction is what makes people skip the tool and edit by hand. So both are
+inferred, and the inference is stated rather than clever.
+
+**gh-agile must be run inside a git repository.** If it is not, it says so and
+exits rather than guessing.
+
+| What | Precedence, most explicit first |
+|---|---|
+| **Project** | `--project`, else `project.number` from the profile. Absent both, an error |
+| **Repository** | `--repo`, else the repo named by `--key`, else the repository you are running in |
+| **Key for a new issue** | `--key` — which must be listed for that repo — else the **first** key listed for that repo |
+| **Issue** | `--issue 34` uses the repository resolved above; `--issue ZMBNI-34` names it itself, and then `--repo`/`--key` are not needed |
+
+### One project per main repository
+
+`gh agile project create` writes `project.number` into the profile, and refuses
+to create a second while one is recorded:
+
+```
+the profile already names project #4. One project per main repository, because
+project.number is what every command defaults to.
+  To start a different project: remove project.number from the profile here, or
+  work from the clone of that project's main repository.
+```
+
+A second board would make the default ambiguous, and an ambiguous default is
+worse than typing the flag. `--force` overrides it for the case where you mean
+it.
+
 ### What is *not* checked in
 
 `.gh_agile_export.json` — the incremental-export watermark. That is state a
@@ -87,17 +158,28 @@ source.
 
 ## 2. Creating a project
 
+Change directory to the main repo for this project. Files will be created which
+need to be checked in.
+
 ```bash
-# The board itself.
-gh project create --owner @me --title "Zamboni Iceberg table maintainer"
+# The board, with the project's key. Writes project.number into the profile,
+# which is what every later command defaults to.
+gh agile project create --title "Zamboni Iceberg table maintainer" --key ZMBNI
 
 # Its fields and labels. Idempotent -- run it again after editing the spec.
-gh agile --project 5 setup --repo paulcaron16k/Zamboni
+gh agile setup
 
-# The key, and the human-readable name on the project.
-gh agile --project 5 key --repo paulcaron16k/Zamboni --key ZMBNI \
-         --name "Zamboni Iceberg table maintainer"
+# Further keys, for a mono-repo holding several components.
+gh agile key --key SPARK --repo paulcaron16k/Zamboni \
+             --name "Zamboni Spark maintainer"
 ```
+
+After this, `--project` and `--repo` are unnecessary in the same repository.
+
+If a project is created in a repo where one already exists, as identified by a
+existing profile .github/gh-agile.json with project.id = INT present, an errors
+is printed and no over-writing action is taken. Manually remove the existing
+profile project.id, or change to the folder where that new project main repo resides.
 
 `setup` creates five fields. `Status` already exists with three options and
 gains the two the policy declares:
@@ -116,9 +198,9 @@ them.
 ## 3. Creating sprints
 
 ```bash
-gh agile --project 5 sprint create --start 2026-08-17 --weeks 2
-gh agile --project 5 sprint create --weeks 2      # abuts the previous one
-gh agile --project 5 sprint list
+gh agile sprint create --start 2026-08-17 --weeks 2
+gh agile sprint create --weeks 2      # abuts the previous one
+gh agile sprint list
 ```
 ```
   Sprint 1     2026-08-17 .. 2026-08-30  (current)
@@ -131,13 +213,11 @@ overlapping sprints make "the current sprint" ambiguous.
 ## 4. Creating an epic and a story
 
 ```bash
-gh agile --project 5 epic "Snapshot expiry and orphan removal" \
-  --repo paulcaron16k/Zamboni \
+gh agile epic "Snapshot expiry and orphan removal" \
   --intent "Nothing reclaims storage; 120 files on disk and 1 live after five days." \
   --acceptance "expire and remove-orphans delete only unreferenced files, and abort otherwise."
 
-gh agile --project 5 story "Compute the reachable file set" \
-  --repo paulcaron16k/Zamboni --epic 31 \
+gh agile story "Compute the reachable file set" --epic 31 \
   --points 5 --priority highest \
   --intent "Both operations depend on it; an omission here deletes live data." \
   --acceptance "Every referenced file across all six metadata categories is returned."
@@ -158,38 +238,45 @@ non-interactive, so an agent can run the same sequence.
 **1 — the epic exists**
 
 ```bash
-gh agile --project 5 epic "Snapshot expiry and orphan removal" --repo OWNER/REPO \
-  --intent "..." --acceptance "..."
+gh agile epic "Snapshot expiry and orphan removal" --intent "..." --acceptance "..."
 #   epic #31: Snapshot expiry and orphan removal
 ```
 
 **2 — a story under it**
 
 ```bash
-gh agile --project 5 story "Compute the reachable file set" --repo OWNER/REPO \
-  --epic 31 --points 5 --priority highest --intent "..." --acceptance "..."
-#   story #32 under epic #31
+gh agile story "Compute the reachable file set" --epic 31 \
+  --points 5 --priority highest --intent "..." --acceptance "..."
+#   story #32 under epic #31    (labelled key:ZMBNI, so it is ZMBNI-32)
 ```
 
-**3 — into the sprint**
+**3 — start work; the sprint follows**
 
 ```bash
-gh agile --project 5 set --issue 32 --field Sprint --value @current
+gh agile move ZMBNI-32 --status "In Progress"
+#   #32 Status = In Progress
+#   #32 Sprint = Sprint 1 (current)
 ```
 
-**4 — start work**
+**Starting work puts the item in the current sprint** if it is not in one
+already. Anything else means in-progress work sitting outside every sprint, and
+a sprint report that quietly omits it. With no active sprint it warns and
+continues — declining to start work because nobody made a sprint would be the
+tool making a process decision.
+
+To place it in a different sprint, say so:
 
 ```bash
-gh agile --project 5 move 32 --status "In Progress"
+gh agile set --issue ZMBNI-32 --field Sprint --value "Sprint 2"
 ```
 
-No evidence required to start. Requiring it here would be ceremony; requiring it
-to finish is the point.
+No evidence is required to start. Requiring it here would be ceremony; requiring
+it to finish is the point.
 
 **5 — fixed, with evidence**
 
 ```bash
-gh agile --project 5 move 32 --status Done --evidence-file evidence.md --close
+gh agile move ZMBNI-32 --status Done --evidence-file evidence.md --close
 ```
 
 where `evidence.md` is:
@@ -225,7 +312,7 @@ export.
 **6 — close the epic**
 
 ```bash
-gh agile --project 5 move 31 --status Done --evidence-file epic-evidence.md --close
+gh agile move ZMBNI-31 --status Done --evidence-file epic-evidence.md --close
 ```
 
 Close it when its stories are closed. `gh agile validate` reports an epic marked
@@ -234,8 +321,8 @@ Close it when its stories are closed. `gh agile validate` reports an epic marked
 **7 — check and export**
 
 ```bash
-gh agile --project 5 validate
-gh agile --project 5 export --csv --out-dir exports/
+gh agile validate
+gh agile export --csv --out-dir exports/
 ```
 
 ---
@@ -246,10 +333,11 @@ Everything above is non-interactive when given explicit input, which is the
 property that makes it drivable. A working sequence:
 
 ```bash
-PROJECT=5; REPO=OWNER/REPO
+# No --project or --repo: both come from the profile and the working directory.
+# $ISSUE may be 32 or ZMBNI-32.
 
-# Pick up the work, and say so on the board.
-gh agile --project $PROJECT move "$ISSUE" --status "In Progress"
+# Pick up the work, and say so on the board. The current sprint follows.
+gh agile move "$ISSUE" --status "In Progress"
 
 # ... make the change, run the tests ...
 
@@ -260,8 +348,7 @@ cat > /tmp/evidence.md <<'EOF'
 after the fix, verified by running the 25-line case against both.
 EOF
 
-gh agile --project $PROJECT move "$ISSUE" --status Done \
-         --evidence-file /tmp/evidence.md --close
+gh agile move "$ISSUE" --status Done --evidence-file /tmp/evidence.md --close
 ```
 
 Two rules worth encoding in whatever drives it:
