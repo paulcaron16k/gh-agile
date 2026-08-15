@@ -352,8 +352,9 @@ matters. Instead, in order of preference:
    ```cron
    PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
    HOME=/home/you
+   LOG=/home/you/.local/state/gh-agile/sync.log
 
-   0 7 * * *  cd /srv/projects/Zamboni && gh-agile sync >> ~/.local/state/gh-agile/sync.log 2>&1
+   0 7 * * *  cd /srv/projects/Zamboni && gh-agile sync >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
    ```
 
    **`cd` into the repository first, and it is not optional.** The profile is
@@ -386,6 +387,16 @@ matters. Instead, in order of preference:
 
      Without redirection cron mails the output or discards it, and the one run
      that added forty issues is the one you will want to read.
+
+   - **Truncate it, or it grows forever.** The `tail`/`mv` at the end of the
+     line keeps the last 1000 lines — a few months of daily runs. Writing to a
+     temporary file and moving it is what makes this safe: `tail -n 1000 f > f`
+     would truncate the file before `tail` read it, losing everything. `mv` over
+     the same filesystem is atomic, so a reader never sees a half-written log.
+
+     `LOG=` is a crontab variable; cron exports it and the shell running the
+     command expands `$LOG`, which keeps the line readable rather than repeating
+     the path three times.
 
      If the log genuinely belongs in `/var/log`, that is a *system* crontab —
      a file in `/etc/cron.d/` with a user field — not a user one. Or send it to

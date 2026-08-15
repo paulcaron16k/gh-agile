@@ -7,12 +7,13 @@ OWNER ?= paulcaron16k
 REPO  ?= paulcaron16k/gh-agile
 PROJECT ?= 1
 
-.PHONY: self-test scratch teardown lint help
+.PHONY: self-test scratch teardown lint check-guide help
 
 help:
 	@echo "make self-test           stand a scratch project up, exercise it, tear it down"
 	@echo "make scratch             leave a scratch project standing, for poking at by hand"
 	@echo "make teardown NUM=<n>    delete a scratch project left by 'make scratch'"
+	@echo "make check-guide         every command in USER_GUIDE.md exists; the safe ones run"
 	@echo "make lint                syntax and style"
 	@echo
 	@echo "OWNER=$(OWNER)  REPO=$(REPO)"
@@ -35,6 +36,15 @@ scratch:
 teardown:
 	@test -n "$(NUM)" || { echo "usage: make teardown NUM=<project number>"; exit 2; }
 	gh project delete $(NUM) --owner $(OWNER)
+
+# Every documented command is checked against the CLI's own help, and the
+# read-only ones are executed in a stripped, cron-like environment. Three
+# defects reached the published guide before this existed -- a traceback when
+# `gh` was off PATH, a cron PATH missing /snap/bin, and a log redirect into
+# /var/log that a user crontab cannot write -- and every one was found by
+# hand-running a command that had already been written down.
+check-guide:
+	python3 scripts/check_guide.py
 
 lint:
 	python3 -c "import ast,sys; ast.parse(open('gh-agile').read()); print('gh-agile parses')"
