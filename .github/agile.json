@@ -30,5 +30,12 @@
     "key": "AGILE",
     "name": "gh-agile: Agile management on GitHub",
     "number": 4
+  },
+  "sprint": {
+    "ahead": 2,
+    "autocreate": true,
+    "cadence_days": 14,
+    "name_template": "{key} Sprint {n}",
+    "start_day": "monday"
   }
 }

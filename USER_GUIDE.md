@@ -440,6 +440,69 @@ gh agile sprint list
 Without `--start`, a new sprint begins the day after the last one ends, because
 overlapping sprints make "the current sprint" ambiguous.
 
+### Keeping sprints stocked
+
+Creating a sprint by hand every fortnight is a rota, and a rota fails on the
+week it matters. `ensure` guarantees a sprint covering today plus `ahead` more:
+
+```bash
+gh agile sprint ensure            # uses the profile's `ahead`
+gh agile sprint ensure --ahead 4
+```
+
+Idempotent: it creates only the shortfall, so running it twice is a no-op. This
+is Jira's model — future sprints waiting in the backlog — and it means starting
+work never has to change the project's configuration.
+
+```cron
+0 7 * * 1  cd /srv/projects/Zamboni && gh-agile sprint ensure >> $LOG 2>&1
+```
+
+Configuration lives in the profile:
+
+| Property | Default | Description |
+|---|---|---|
+| `cadence_days` | `14` | Sprint length, 1–30. `"2-week"` is accepted and normalised |
+| `start_day` | `"monday"` | Weekday new sprints begin on |
+| `ahead` | `2` | Future sprints `ensure` keeps |
+| `autocreate` | `true` | Whether `move` may create one as a fallback |
+| `name_template` | `"{key} Sprint {n}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
+
+The template is `str.format`, not Jinja: this tool has no dependencies and
+Jinja2 would be its only one. The default follows Jira's `<Board> Sprint <n>`,
+so a board keyed `ZMBNI` produces `ZMBNI Sprint 3`. Sprints created before you
+set a template keep their names — renaming them would rewrite the sprint every
+historical item points at.
+
+**A sprint created today starts on the last `start_day`, not today.** Asked for
+on a Wednesday with `start_day: monday`, it runs Monday to Sunday and already
+covers two days of the past. That is deliberate: sprints landing on the same
+weekday are what a team can plan around, and it is what Jira does.
+
+**Gaps are skipped, not backfilled.** After an idle month, `ensure` creates the
+sprint covering today and numbering jumps — `Sprint 2` to `Sprint 5` — rather
+than inventing sprints nobody worked in.
+
+**If `ensure` has not run, `move` covers for it.** Moving a story to
+`In Progress` with no active sprint creates one and says so; set
+`autocreate: false` to have it warn and leave the field empty instead.
+
+> **Every change to the sprint configuration clears existing sprint
+> assignments**, and this is GitHub's behaviour rather than a choice. The
+> configuration is replaced wholesale and `ProjectV2Iteration` — the only input
+> accepted — carries `startDate`, `duration` and `title` and **no id**, so each
+> update mints new iteration ids and orphans every item pointing at an old one.
+> Verified by appending one sprint while re-sending the others identically: the
+> assignment vanished. `gh agile` therefore reads every assignment, makes the
+> change, and re-applies them, reporting how many it restored. Changing the
+> configuration in the **web UI** has no such protection.
+
+> `start_day` is this tool's alignment rule, not a GitHub setting. The API's
+> configuration input has no `startDay`, and GitHub does not derive one from a
+> start date — sending a Monday left the field reporting Sunday. It affects only
+> what the web UI suggests. `setup` therefore converges `cadence_days` and
+> leaves `startDay` alone.
+
 ## 5. Creating an epic and a story
 
 ```bash

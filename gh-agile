@@ -662,6 +662,41 @@ def cmd_setup(args) -> int:
         existing = fields_of(args.owner, args.project, refresh=True)
         print(f"  field {name!r} created")
 
+    # Cadence, converged like everything else: the profile declares it, the
+    # field is made to match. Iterations are re-sent unchanged, so existing
+    # sprints keep their dates -- only sprints created afterwards use the new
+    # duration.
+    settings = sprint_settings(args._config)
+    field = fields_of(args.owner, args.project).get("Sprint")
+    if field:
+        current = sprint_field(args.owner, args.project)["configuration"]
+        # Only `duration` converges. `startDay` is not settable through the
+        # API -- the configuration input accepts startDate, duration and
+        # iterations and nothing else, and GitHub does not derive startDay from
+        # a startDate either: sending a Monday left it reporting Sunday. It only
+        # affects what the web UI suggests, so the profile's `start_day` governs
+        # what this tool actually does, which is align the sprints it creates.
+        if current["duration"] != settings["cadence_days"]:
+            saved = sprint_assignments(args.owner, args.project)
+            iterations_now = current["completedIterations"] + current["iterations"]
+            entries = ", ".join(
+                f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
+                f'title: {json.dumps(i["title"])}}}' for i in iterations_now
+            )
+            graphql(
+                "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
+                'iterationConfiguration: {startDate: "%s", duration: %d, iterations: [%s]}}) '
+                "{ projectV2Field { ... on ProjectV2IterationField { id } } } }"
+                % (iterations_now[0]["startDate"] if iterations_now else "2026-01-05",
+                   settings["cadence_days"], entries),
+                f=field["id"],
+            )
+            restore_assignments(args.owner, args.project, saved)
+            print(f"  Sprint cadence -> {settings['cadence_days']} days")
+        else:
+            print(f"  Sprint cadence in step ({settings['cadence_days']} days, "
+                  f"new sprints aligned to {settings['start_day']})")
+
     for board in (spec.get("boards") or []) + (args._config.get("boards") or []):
         result = make_board(args.owner, args.project, board["name"], board["type"],
                             board.get("filter"))
@@ -988,7 +1023,160 @@ def resolve_iteration(login: str, number: int, value: str) -> str:
     sys.exit(f"no sprint titled {value!r}; active: {known}")
 
 
+def sprint_assignments(login: str, project: int) -> dict[str, str]:
+    """{project item id: sprint title} for every item currently in a sprint.
+
+    Read before any iteration change and re-applied after, because GitHub gives
+    no way to preserve them. `ProjectV2Iteration` -- the only input the
+    configuration mutation accepts -- carries `startDate`, `duration` and
+    `title` and **no id**, so every update mints fresh iteration ids and every
+    item pointing at an old one is silently cleared. Verified: appending one
+    sprint while re-sending the existing two identically cleared an assignment
+    made seconds earlier.
+    """
+    # Through GraphQL, not `gh project item-list`: that command returns only
+    # content, id, labels, repository, status and title -- no custom field
+    # values at all, so a sprint read from it is always absent.
+    _title, items = fetch_items(login, project)
+    out = {}
+    for item in items:
+        sprint = field_values(item).get("Sprint")
+        if sprint:
+            out[item["id"]] = sprint
+    return out
+
+
+def restore_assignments(login: str, project: int, saved: dict[str, str]) -> int:
+    """Re-apply saved sprint assignments by title. Costs one call per item."""
+    if not saved:
+        return 0
+    _FIELDS.pop((login, project), None)  # iteration ids changed
+    restored = 0
+    for item_id, title in saved.items():
+        try:
+            set_field(login, project, item_id, "Sprint", title)
+            restored += 1
+        except SystemExit:
+            # A sprint that no longer exists cannot be restored; say so rather
+            # than abandoning the remaining items.
+            print(f"  could not restore {title!r} for {item_id[:12]}…", file=sys.stderr)
+    return restored
+
+
+def ensure_sprints(login: str, project: int, config: dict, ahead: int,
+                   *, quiet: bool = False) -> list[str]:
+    """Guarantee a sprint covering today, plus `ahead` future ones.
+
+    Jira's model, and the reason `move` should not have to create anything: the
+    backlog always holds future sprints, so starting work never mutates the
+    project's configuration.
+
+    Gaps are **skipped, not backfilled**. After an idle month this creates the
+    sprint covering today and numbering jumps -- Sprint 2 to Sprint 5 -- rather
+    than inventing three sprints nobody worked in. Jira does the same.
+    """
+    import datetime as dt
+
+    settings = sprint_settings(config)
+    field = sprint_field(login, project)
+    existing = field["configuration"]["completedIterations"] + field["configuration"]["iterations"]
+    duration = settings["cadence_days"]
+    today = dt.date.today()
+
+    spans = sorted(
+        (dt.date.fromisoformat(i["startDate"]),
+         dt.date.fromisoformat(i["startDate"]) + dt.timedelta(days=i["duration"] - 1))
+        for i in existing
+    )
+
+    def overlaps(start, end):
+        """Any intersection at all, not containment.
+
+        The first version asked whether an existing sprint *contained* the
+        candidate window, so a partial overlap read as uncovered and three
+        overlapping sprints were created on a live board. Overlapping sprints
+        make "the current sprint" ambiguous, which is the thing @current exists
+        to resolve.
+        """
+        return any(s <= end and start <= e for s, e in spans)
+
+    key = (config.get("project") or {}).get("key") or ""
+    made, entries = [], [
+        f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
+        f'title: {json.dumps(i["title"])}}}' for i in existing
+    ]
+    number = len(existing)
+
+    # What is missing, rather than how many to make: a sprint covering today,
+    # and `ahead` that start after it. Counting what exists first is what makes
+    # this idempotent -- the first version created `ahead + 1` every run,
+    # because it only ever asked whether a window overlapped, never whether the
+    # requirement was already met.
+    covering = next((span for span in spans if span[0] <= today <= span[1]), None)
+    future = [span for span in spans if span[0] > today]
+    wanted = (0 if covering else 1) + max(0, ahead - len(future))
+
+    def append(start):
+        nonlocal number
+        end = start + dt.timedelta(days=duration - 1)
+        if overlaps(start, end):
+            return None
+        number += 1
+        title = settings["name_template"].format(
+            n=number, key=key, start=start.isoformat(), end=end.isoformat(),
+            year=start.year, iso_week=f"{start.isocalendar()[1]:02d}",
+        )
+        entries.append(
+            f'{{startDate: "{start.isoformat()}", duration: {duration}, '
+            f'title: {json.dumps(title)}}}'
+        )
+        spans.append((start, end))
+        spans.sort()
+        made.append(f"{title}  {start} .. {end}")
+        return end
+
+    if not covering:
+        # Aligned to the configured start day, so a sprint created on a
+        # Wednesday still begins on Monday and covers today.
+        append(aligned_start(today, settings["start_day"]))
+
+    while len([span for span in spans if span[0] > today]) < ahead:
+        last_end = max(end for _start, end in spans) if spans else today
+        if append(last_end + dt.timedelta(days=1)) is None:
+            break  # cannot place another without overlapping; stop rather than loop
+
+    saved = sprint_assignments(login, project) if made else {}
+    if made:
+        # Every existing iteration is re-sent. The configuration is replaced
+        # wholesale -- the same trap that cleared Status from 16 items when
+        # options were re-sent without their ids -- so anything omitted here is
+        # deleted, taking its items' sprint assignment with it.
+        graphql(
+            "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
+            'iterationConfiguration: {startDate: "%s", duration: %d, iterations: [%s]}}) '
+            "{ projectV2Field { ... on ProjectV2IterationField { id } } } }"
+            % (aligned_start(today, settings["start_day"]).isoformat(), duration,
+               ", ".join(entries)),
+            f=field["id"],
+        )
+        restored = restore_assignments(login, project, saved)
+        if restored:
+            print(f"  re-applied {restored} sprint assignment(s) the update cleared")
+    if not quiet:
+        for line in made:
+            print(f"  created {line}")
+        if not made:
+            print(f"  a current sprint and {ahead} ahead already exist")
+    return made
+
+
 def cmd_sprint(args) -> int:
+    if args.sprint_command == "ensure":
+        settings = sprint_settings(args._config)
+        ahead = args.ahead if args.ahead is not None else settings["ahead"]
+        ensure_sprints(args.owner, args.project, args._config, ahead)
+        return 0
+
     if args.sprint_command == "list":
         active, completed = iterations(args.owner, args.project)
         if not active and not completed:
@@ -1079,6 +1267,61 @@ BOARD_TYPES = {
         "about": "epics over time",
     },
 }
+
+
+#: Sprint defaults, overridden by the profile's "sprint" block.
+#:
+#: `name_template` takes Jira's shape -- Jira names a sprint "<Board> Sprint <n>"
+#: -- so a board keyed ZMBNI produces "ZMBNI Sprint 3". Boards created before
+#: this default arrived keep their existing names; renaming them would rewrite
+#: the sprint every historical item points at, for cosmetics.
+SPRINT_DEFAULTS = {
+    "cadence_days": 14,
+    "start_day": "monday",
+    "autocreate": True,
+    "ahead": 2,
+    "name_template": "{key} Sprint {n}",
+}
+
+#: GitHub numbers `startDay` 1=Sunday … 7=Saturday. Python's weekday() is
+#: 0=Monday … 6=Sunday. Two conventions, one off-by-one waiting to happen, so
+#: the mapping is written down rather than computed inline.
+WEEKDAYS = {
+    "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
+    "thursday": 5, "friday": 6, "saturday": 7,
+}
+
+
+def sprint_settings(config: dict) -> dict:
+    settings = {**SPRINT_DEFAULTS, **(config.get("sprint") or {})}
+    cadence = settings["cadence_days"]
+    if isinstance(cadence, str):
+        # "2-week" and "2 weeks" are sugar over the number of days GitHub
+        # actually stores; Jira offers the enumeration, GitHub does not.
+        digits = "".join(c for c in cadence if c.isdigit())
+        if not digits:
+            sys.exit(f"cadence_days {cadence!r} is not a duration; use days, or '2-week'")
+        settings["cadence_days"] = int(digits) * (7 if "week" in cadence.lower() else 1)
+    if not 1 <= settings["cadence_days"] <= 30:
+        sys.exit(f"cadence_days must be 1..30, not {settings['cadence_days']}")
+    if str(settings["start_day"]).lower() not in WEEKDAYS:
+        sys.exit(f"start_day must be one of {', '.join(WEEKDAYS)}")
+    return settings
+
+
+def aligned_start(today, start_day: str):
+    """The most recent `start_day` on or before today.
+
+    Snapping back rather than forward is what keeps sprints landing on the same
+    weekday, and what makes a sprint created mid-week still cover today. Jira
+    behaves this way; the alternative drifts the boundary across weekdays until
+    no two sprints start on the same one.
+    """
+    import datetime as dt
+
+    target = (WEEKDAYS[start_day.lower()] - 2) % 7  # GitHub numbering -> Monday=0
+    back = (today.weekday() - target) % 7
+    return today - dt.timedelta(days=back)
 
 
 def views_of(login: str, number: int) -> list[dict]:
@@ -1354,10 +1597,10 @@ def cmd_move(args) -> int:
     # refusal when no sprint is active: declining to start work because nobody
     # created a sprint would be the tool making a process decision.
     if same_status(args.status, CYCLE_START):
-        current = next(
-            (v for v in item.get("fieldValues", {}).get("nodes", []) if v.get("title")), None
-        )
-        if not current:
+        # Same reason: item-list carries no custom field values, so the sprint
+        # has to come from the GraphQL side.
+        assigned = sprint_assignments(args.owner, args.project)
+        if not assigned.get(item["id"]):
             active, _completed = iterations(args.owner, args.project)
             if active:
                 set_field(args.owner, args.project, item["id"], "Sprint", "@current")
@@ -1763,6 +2006,11 @@ why this is needed:
     sprint = sub.add_parser("sprint", help="list or create sprint iterations")
     sprint_sub = sprint.add_subparsers(dest="sprint_command", required=True)
     sprint_sub.add_parser("list", help="every sprint, active and completed")
+    sprint_ensure = sprint_sub.add_parser(
+        "ensure", help="guarantee a current sprint plus N ahead, aligned to start_day"
+    )
+    sprint_ensure.add_argument("--ahead", type=int,
+                               help="future sprints to keep; default from the profile")
     sprint_new = sprint_sub.add_parser("create", help="append a sprint iteration")
     sprint_new.add_argument("--start", help="ISO date; defaults to the day after the last ends")
     sprint_new.add_argument("--weeks", type=int, help="length; defaults to the field's own duration")
