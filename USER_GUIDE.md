@@ -350,7 +350,10 @@ matters. Instead, in order of preference:
    Daily at 07:00, from the main repository's clone:
 
    ```cron
-   0 7 * * *  cd /srv/projects/Zamboni && /usr/local/bin/gh-agile sync >> /var/log/gh-agile-sync.log 2>&1
+   PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
+   HOME=/home/you
+
+   0 7 * * *  cd /srv/projects/Zamboni && gh-agile sync >> /var/log/gh-agile-sync.log 2>&1
    ```
 
    **`cd` into the repository first, and it is not optional.** The profile is
@@ -361,9 +364,12 @@ matters. Instead, in order of preference:
 
    Three things that bite in cron and not in a shell:
 
-   - **`PATH` is minimal.** Use absolute paths for both `gh-agile` and `gh`, or
-     set `PATH=` at the top of the crontab. `gh-agile` shells out to `gh`, so
-     `gh` being unreachable fails it just as surely.
+   - **`PATH` is minimal**, which is why the crontab sets it. `gh-agile` shells
+     out to `gh` for every call, so `gh` being unreachable fails the run as
+     surely as `gh-agile` being unreachable. Check where yours is with
+     `command -v gh` and include that directory. **On Ubuntu it is often
+     `/snap/bin/gh`** — which no default cron `PATH` contains, and which is why
+     `/snap/bin` appears above.
    - **Authentication must be non-interactive.** `gh` reads `GH_TOKEN` from the
      environment, or its stored credentials from `$HOME/.config/gh` — and cron
      may not set `HOME` to what you expect. Either export `GH_TOKEN` in the
