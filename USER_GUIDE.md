@@ -346,6 +346,39 @@ matters. Instead, in order of preference:
    GitHub Action. Frequency only bounds how long a newly filed issue is missing
    from the board; nothing degrades in between, because nothing on the board is
    going out of date.
+
+   Daily at 07:00, from the main repository's clone:
+
+   ```cron
+   0 7 * * *  cd /srv/projects/Zamboni && /usr/local/bin/gh-agile sync >> /var/log/gh-agile-sync.log 2>&1
+   ```
+
+   **`cd` into the repository first, and it is not optional.** The profile is
+   found relative to the working directory — `.github/agile.json` — and it is
+   what supplies `--project` and the repositories to sync. Run from anywhere
+   else and the tool exits saying it is not inside a GitHub repository, which is
+   the right failure but a daily one.
+
+   Three things that bite in cron and not in a shell:
+
+   - **`PATH` is minimal.** Use absolute paths for both `gh-agile` and `gh`, or
+     set `PATH=` at the top of the crontab. `gh-agile` shells out to `gh`, so
+     `gh` being unreachable fails it just as surely.
+   - **Authentication must be non-interactive.** `gh` reads `GH_TOKEN` from the
+     environment, or its stored credentials from `$HOME/.config/gh` — and cron
+     may not set `HOME` to what you expect. Either export `GH_TOKEN` in the
+     crontab, or set `HOME=/home/you` there.
+   - **Keep the log.** `sync` prints what it added; without redirection cron
+     mails it or discards it, and the one run that added forty issues is the one
+     you will want to read.
+
+   Verify the line works before trusting it, in the environment cron will use:
+
+   ```bash
+   env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin \
+     sh -c 'cd /srv/projects/Zamboni && gh-agile sync --dry-run'
+   ```
+
 3. **Run it after the events that create a backlog**: adding a repository to the
    profile, a bulk import, a migration.
 

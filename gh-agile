@@ -62,7 +62,17 @@ def gh(args: list[str], **kwargs) -> str:
 
     Authentication is `gh`'s problem by design: this tool never sees a token.
     """
-    result = subprocess.run(["gh", *args], capture_output=True, text=True, **kwargs)
+    try:
+        result = subprocess.run(["gh", *args], capture_output=True, text=True, **kwargs)
+    except FileNotFoundError:
+        # The cron failure mode: PATH is minimal there, and a traceback saying
+        # FileNotFoundError: 'gh' is a poor way to learn it. Found by running
+        # the guide's own cron-equivalent command.
+        sys.exit(
+            "the `gh` CLI is not on PATH. gh-agile shells out to it for every "
+            "call and for authentication.\n"
+            "  In cron, set PATH= at the top of the crontab or use absolute paths."
+        )
     if result.returncode != 0:
         sys.exit(f"gh {' '.join(args[:2])} failed: {result.stderr.strip()}")
     return result.stdout
