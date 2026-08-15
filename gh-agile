@@ -1757,7 +1757,12 @@ def apply_defaults(args) -> None:
 
     key = getattr(args, "key", None)
     repo = getattr(args, "repo", None)
-    if repo is None and hasattr(args, "repo"):
+    # Every command that can touch an issue needs a repository, whether or not
+    # it declares a --repo flag. `set --issue 26` had none to attach to, so the
+    # attribute never existed and a bare issue number could not be resolved even
+    # from inside the repository it belongs to.
+    NEEDS_REPO = {"epic", "story", "set", "move", "sync", "key", "project"}
+    if repo is None and args.command in NEEDS_REPO:
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)
             if not repo:

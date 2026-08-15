@@ -288,9 +288,42 @@ gh agile sync --query "label:type:story" --state all
   added 1, already present 10, across 2 repo(s)
 ```
 
-Run it after adding a repository to the profile, after a bulk import, or on a
-schedule if issues arrive from outside the tool. Issues created by `gh agile
-epic` and `gh agile story` are added at creation and never need it.
+### How often, and what goes wrong if you do not
+
+**GitHub recommends nothing about this**, because `sync` is not a GitHub
+concept. GitHub's own answer to the same gap is the auto-add workflow, which
+runs continuously on their side and is configured in the web UI.
+
+**The board is never *stale*. It can be *incomplete*.** The distinction matters:
+
+| | Needs sync? |
+|---|---|
+| Status, points, sprint, assignee on an item **already on the board** | **No.** Read live — a change shows immediately |
+| Issues created by `gh agile epic` / `story` | **No.** Added at creation |
+| Sub-issues of an epic already on the board | **No** — the built-in *Auto-add sub-issues* workflow is enabled by default |
+| An issue filed in the web UI, or by `gh issue create`, or by any other tool | **Yes.** It is simply not on the board |
+
+Measured, not assumed: an issue created with plain `gh issue create` in a repo
+whose other issues are on the board did **not** appear on it. Nothing on the
+board goes out of date; issues that were never added are absent, and everything
+else is current the moment it changes.
+
+**So do not run it before a meeting.** A correctness step that depends on
+someone remembering it is a rota, not a process, and it fails on the week it
+matters. Instead, in order of preference:
+
+1. **Enable GitHub's auto-add workflow in the project's UI settings**, once, per
+   repository. New issues then arrive on their own and `sync` becomes a backfill
+   tool. It cannot be automated from here — the API can delete a workflow and
+   has no mutation to create or configure one.
+2. **Run it on a schedule** if auto-add is not usable — hourly or daily from
+   cron or a GitHub Action. Frequency only bounds how long a newly filed issue
+   is missing from the board; nothing degrades in between.
+3. **Run it after the events that create a backlog of missing items**: adding a
+   repository to the profile, a bulk import, a migration.
+
+Issues created by `gh agile epic` and `gh agile story` are added at creation and
+never need it.
 
 **`sync` only adds.** It never removes an item, because removing one discards
 that item's Status, Points and Sprint — the data lives on the project item, so
