@@ -1,31 +1,117 @@
 #!/usr/bin/env python3
-"""gh-agile — export and validate a GitHub Projects v2 backlog.
+"""gh-agile — Agile project management using GitHub Projects v2.
 
 A `gh` extension. Install with:
 
     gh extension install paulcaron16k/gh-agile
 
-    gh agile setup     --project 1 [--spec agile.json] [--title "..."]
-    gh agile epic      --project 1 --repo owner/repo "Title"
-    gh agile story     --project 1 --repo owner/repo "Title" --epic 4 [--points 3]
-    gh agile export    --project 1 [--csv]
-    gh agile validate  --project 1
+GitHub gives two primitives, the **issue** and the **project field**, and no
+epic, story, sprint, story point or board type. All of those are conventions
+layered on top. This tool implements them, enforces the ones a machine can
+check, and gets the data back out in a shape that can be analysed beside Jira's.
+
+What it is for
+--------------
+
+**1. Export of issues and events in a generic Agile shape.**
+    `export` produces one row per work item with every custom field flattened,
+    joined to the item's **status history**. That join is the reason this exists
+    rather than a wrapper over `gh project item-list`: that command returns a
+    *snapshot*. `ProjectV2Item` carries `createdAt`, `updatedAt` and current
+    values and no history at all, so it cannot say when an item entered
+    `In Progress` — which is every flow question worth asking. The history lives
+    on the **issue timeline**, as `ProjectV2ItemStatusChangedEvent`, and the two
+    are joined on the issue node ID. Columns map onto the Gold Agile model's
+    `agile_issues` and `agile_events`; see GOLD_MODEL.md.
+
+**2. Jira-style issue identification: `KEY-ID`.**
+    `ZMBNI-1817` names a repository and an issue in one string, and is accepted
+    anywhere an issue number is. GitHub has no key of any kind, so the key is
+    recorded per repository in the profile and stored **on the issue** as a
+    `key:ZMBNI` label — explicit rather than inferred. Issue Fields would be the
+    natural home and are organization-only.
+
+**3. A CLI-forward epic and story tool, for a developer or an agent.**
+    `epic`, `story`, `move` and `set` do in one call what the web UI does in
+    several: create the issue, attach it to its epic as a sub-issue, board it,
+    label it, and set its fields. Every command is non-interactive when given
+    explicit input, so an agent can drive the same sequence a person types;
+    prompting happens only at a TTY.
+
+**4. Project and team boards: scrum, kanban, backlog, roadmap.**
+    A board is a *view with a filter*, and the filter is what makes it scrum
+    (time-boxed to `sprint:@current`) or kanban (continuous). `board create
+    --type` builds them, `--save` records them in the profile, and `setup`
+    converges them thereafter. One project, many boards — a second project would
+    give each item a second, independently divergent set of field values.
+
+**5. Multi-repo and mono-repo.**
+    A project may span repositories: the profile lives in the main one and
+    supporting repositories carry a `config_from` pointer. A mono-repo goes the
+    other way — several keys against one repository, so components that would
+    elsewhere be separate Jira projects stay distinguishable as `SPARK-41` and
+    `TRINO-42`.
+
+Also, because Jira has them and their absence is felt
+------------------------------------------------------
+
+**Sprints as first-class iterations.** `sprint create` appends an iteration —
+    which `gh` itself cannot do, its `--data-type` covering only TEXT,
+    SINGLE_SELECT, DATE and NUMBER — and new sprints abut the previous one so
+    "current" is never ambiguous. Moving a story to `In Progress` assigns the
+    current sprint if it has none.
+
+**A validated issue template.** `move --status Done` requires an `## Evidence`
+    section and refuses a body that is missing it, empty, or still `_TBD_`. A
+    template nobody validates is a suggestion, and a closed issue saying only
+    "done" has thrown away the reasoning.
+
+**Convention enforcement.** `validate` checks what a machine can: every story
+    has an epic, every epic has stories, statuses are legal, closed items are
+    `Done` and open ones are not, everything carries a `type:` label.
+
+**Incremental export with a watermark**, for feeding another system on a
+    schedule. Files are named `agile_issues_<ISO8601 basic>.csv`, which sorts
+    lexicographically, and the watermark is pulled *back* by an overlap because
+    the timeline is eventually consistent — a duplicate row is free, a hole is
+    not.
+
+**`sync`**, because a project is a collection rather than a filter: field values
+    live on the project *item*, so an issue the project does not hold has
+    nowhere to put them, and nothing arrives on a board by matching a query.
+
+What Jira has and this cannot
+-----------------------------
+
+Stated here so nobody designs a report around them. **Custom-field history**:
+GitHub emits no event when a project field other than Status changes, so
+`data_from`/`data_to` for points or sprint must come from diffing scheduled
+snapshots. **WIP limits**: not exposed by the API at all. **Issue types and
+issue fields**: organization-only, which is why type and key ride labels here.
+
+Standard library only, and it shells out to `gh` for authentication, so no token
+is ever read, stored or passed by this tool.
+
+Commands
+--------
+
+    gh agile project create --title "..." [--key ZMBNI]
+    gh agile setup                          fields, labels and saved boards
+    gh agile key --key ZMBNI [--repo ...]   record or list repository keys
+    gh agile board create --name "..." --type scrum|kanban|backlog|roadmap
+    gh agile sprint create|list
+    gh agile epic  "Title" [--key ...]
+    gh agile story "Title" --epic 4 [--points 3] [--priority high]
+    gh agile move  ZMBNI-34 --status Done --evidence-file notes.md --close
+    gh agile set   --issue ZMBNI-34 --field Sprint --value @current
+    gh agile sync [--dry-run]
+    gh agile validate
+    gh agile export [--csv] [--out-dir DIR] [--since ...]
     gh agile self-test --repo owner/repo
 
-The read side was built first on purpose: the export schema is the thing that
-cannot be changed later without re-analysing everything already exported.
-
-**Why this exists at all**, when `gh project item-list` already returns JSON:
-that command gives a *snapshot*. `ProjectV2Item` exposes `createdAt`,
-`updatedAt` and current field values — no history — so a snapshot cannot say
-when an item entered `In progress`, which is every flow question worth asking.
-The history lives on the **issue timeline** instead, as
-`ProjectV2ItemStatusChangedEvent`. This tool runs both queries and joins them on
-the issue node ID, which is the whole difference between a board dump and
-something you can analyse the way you would a Jira export.
-
-Standard library only, and it shells out to `gh` for authentication so no token
-is ever read, stored, or passed here.
+`--project` and `--repo` default from the profile and the working directory.
+The rules are in POLICY.md, the walkthrough in USER_GUIDE.md, and the data
+mapping in GOLD_MODEL.md.
 """
 
 from __future__ import annotations
