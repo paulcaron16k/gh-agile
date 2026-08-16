@@ -208,6 +208,9 @@ query($login: String!, $number: Int!, $cursor: String) {
               milestone { title }
               parent { number title }
               subIssuesSummary { total completed }
+              closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
+                nodes { number createdAt merged author { login } }
+              }
             }
             ... on PullRequest { id number title url state }
             ... on DraftIssue { id title }
@@ -309,16 +312,43 @@ def field_values(item: dict) -> dict[str, object]:
     return out
 
 
-def event_rows(issue: dict, events: list[dict], project: str) -> list[dict]:
-    """Timeline events as `agile_events` rows -- one row per event.
+def event_rows(issue: dict, events: list[dict], project: str,
+               closing_prs: list[dict] | None = None) -> list[dict]:
+    """Timeline events as `github_events` rows -- one row per event.
 
-    A different grain from `agile_issues`, hence a different file: one row per
-    thing that happened, rather than one row per work item. GOLD_MODEL.md maps
-    the columns.
+    **Silver, not gold.** These are GitHub's facts under GitHub's names;
+    `agile_events` is the ExperienceFlow Gold model and is the output of a
+    silver -> gold transform that lives in the IWS pipeline, where
+    `org_master_employees` exists to resolve a login into an `actor_id`.
+
+    An event is *what happened, who did it, and when* -- and the who is the
+    point. An assignee is a point-in-time value that moves from developer to
+    reviewer to QA; `actor` on `change-request-opened` is the durable
+    action-to-staff mapping: this person did this work at this time.
+
+    *Why* is not encoded. It would have to come from commit messages or the pull
+    request body, and inventing a summary is worse than a null.
     """
     import hashlib
 
     out = []
+    for pull in closing_prs or []:
+        author = (pull.get("author") or {}).get("login") or ""
+        out.append({
+            "event_hash": hashlib.sha256(
+                f"{issue['id']}|change-request-opened|{pull['createdAt']}".encode()
+            ).hexdigest(),
+            "function_code": "github", "process_type": "issues",
+            "process_id": issue["number"], "issue_key": issue["issue_key"],
+            "ext_process_id": issue["id"], "project_id": project,
+            "event_category": "activity",
+            # Named for the action rather than for GitHub's object, so the
+            # transform maps it without knowing what a pull request is.
+            "event_name": "change-request-opened",
+            "occurred_at": pull["createdAt"], "actor_name": author, "ext_actor_id": author,
+            "state": "", "prior_state": "", "state_changed": False, "was_automated": "",
+            "detail": f"PR #{pull['number']}",
+        })
     for event in events:
         kind = event.get("__typename", "")
         occurred = event.get("createdAt")
@@ -332,7 +362,7 @@ def event_rows(issue: dict, events: list[dict], project: str) -> list[dict]:
             "event_hash": hashlib.sha256(
                 f"{issue['id']}|{kind}|{occurred}".encode()
             ).hexdigest(),
-            "function_code": "agile",
+            "function_code": "github",
             "process_type": "issues",
             "process_id": issue["number"],
             "issue_key": issue["issue_key"],
@@ -360,6 +390,21 @@ def event_rows(issue: dict, events: list[dict], project: str) -> list[dict]:
         }
         out.append(row)
     return out
+
+
+def first_actor(events: list[dict], statuses: tuple[str, ...]) -> str | None:
+    """Who first moved this into one of `statuses`.
+
+    The weaker of the two `worked_by` signals: a status change records who
+    clicked, which is usually the developer and sometimes whoever was running
+    the standup. Used only when no pull request closed the issue.
+    """
+    for event in sorted(events, key=lambda e: e.get("createdAt") or ""):
+        if event.get("__typename") != "ProjectV2ItemStatusChangedEvent":
+            continue
+        if any(same_status(event.get("status"), s) for s in statuses):
+            return (event.get("actor") or {}).get("login")
+    return None
 
 
 def history(issue_id: str) -> dict[str, object]:
@@ -627,11 +672,23 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             row.update(hist)
             row["cycle_time_days"] = days_between(hist["started_at"], hist["done_at"])
             row["lead_time_days"] = days_between(hist["added_to_board_at"], hist["done_at"])
+            pulls = (content.get("closedByPullRequestsReferences") or {}).get("nodes") or []
+            # Who actually did the work. The pull request that closes an issue
+            # names its author as a fact; the assignee is a point-in-time value
+            # that moves from developer to reviewer to QA, and whoever dragged a
+            # card may be a manager. Falls back to the actor who moved it into
+            # review or done, which is weaker but retroactive.
+            row["worked_by"] = (
+                ((pulls[0].get("author") or {}).get("login") if pulls else None)
+                or first_actor(raw_events, ("In Review", CYCLE_END))
+                or ""
+            )
+            row["closing_pr"] = pulls[0]["number"] if pulls else ""
             if events is not None:
                 events.extend(event_rows(
                     {"id": content["id"], "number": content["number"],
                      "issue_key": row["issue_key"]},
-                    raw_events, f"{login}/{number}",
+                    raw_events, f"{login}/{number}", pulls,
                 ))
         out.append(row)
     return out
@@ -1781,7 +1838,7 @@ def cmd_export(args) -> int:
         for grain, payload in (("issues", data), ("events", events)):
             if payload is None or (grain == "issues" and args.grain == "events"):
                 continue
-            path = directory / f"agile_{grain}_{file_stamp(started)}.{suffix}"
+            path = directory / f"github_{grain}_{file_stamp(started)}.{suffix}"
             with path.open("w", newline="") as handle:
                 _write(payload, handle, csv_format=args.csv)
             print(f"  wrote {path}", file=sys.stderr)

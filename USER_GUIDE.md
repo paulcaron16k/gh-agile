@@ -783,7 +783,52 @@ Monthly, after that day's export:
 0 7 1 * *  cd /srv/projects/Zamboni && uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI compact >> $LOG 2>&1
 ```
 
-## 9. Command reference
+## 9. Who did the work
+
+An **assignee is a point-in-time value**. It is the developer while a story is
+in progress, then often a reviewer, then QA. It answers "who has this now",
+which a board needs and a report cannot use.
+
+**An event answers who did what, and when** — and that is the durable record.
+`github_events` carries `actor_name` on every row, so the question "which
+developer fixed this" is answered by the actor of `change-request-opened`: the
+person who opened the pull request that closed the issue. That is a fact about
+an action, not a mutable field somebody may have changed since.
+
+*Why* is not recorded. It would have to be synthesised from commit messages or
+a pull request body, and an invented summary is worse than a null.
+
+`github_issues` carries the derivation ready-made:
+
+| Column | From |
+|---|---|
+| `worked_by` | The closing pull request's author; failing that, whoever first moved the issue into *In Review* or *Done* |
+| `closing_pr` | That pull request's number, or empty |
+
+The fallback is weaker on purpose and labelled as such: a status change records
+who *clicked*, which is usually the developer and sometimes whoever was running
+the standup. The pull request author is a fact; the card-mover is an inference.
+
+### Do you need the two GitHub automations?
+
+**Neither is required. Both are good practice, for the board rather than the
+report.**
+
+| | What it does | Verdict |
+|---|---|---|
+| Built-in workflow **"Pull request linked to issue"** | Moves an item's status when a PR is linked, so Todo → In Progress happens without anyone dragging | **Best practice.** Enable it in the project's workflow settings. It cannot be automated: the API can only *delete* a workflow, so this is a UI setting and is not reproducible from the profile |
+| `.github/workflows/auto-assign.yml` | Adds the PR author to the closing issues' assignees | **Best practice**, and cheap — a template ships in `templates/`. It needs only `permissions: issues: write`, which the default `GITHUB_TOKEN` grants for the same repository. **No stored credential**, unlike anything writing to a project |
+
+Neither is *required* because `worked_by` is derived at export time from the
+same `closingIssuesReferences` edge the workflow reads. The export is therefore
+correct on history that predates either automation — which is the argument for
+deriving rather than depending on somebody having switched something on.
+
+The template assigns **additively**. An existing assignee is a deliberate act,
+a reviewer or QA taking the story on, and replacing it with the author would
+destroy the very information the board is there to show.
+
+## 10. Command reference
 
 Every command lists its own fields with type, obligation and description:
 

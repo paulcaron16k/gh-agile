@@ -1,0 +1,59 @@
+# Add whoever opened a pull request to the assignees of the issues it closes.
+#
+# Copy to `.github/workflows/auto-assign.yml` in each repository on the board.
+#
+# **Best practice, not required.** `gh agile export` derives `worked_by` from
+# the closing pull request's author, so the reporting answer exists whether or
+# not this runs — and it works retroactively, over issues closed before anyone
+# set a workflow up. What this adds is the *board* showing who is on a story
+# while the work is happening, which is what a standup reads.
+#
+# It costs no stored credential: assigning an issue in the same repository is
+# within the default `GITHUB_TOKEN`'s reach, unlike writing to a project, which
+# needs a PAT. That asymmetry is the reason this is a repository workflow and
+# not something `gh-agile` does.
+name: Auto-assign issue to the PR author
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+  issues: write          # the whole grant: no project scope, no stored token
+
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign the closing issues to the author
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # `closingIssuesReferences` is the same edge `worked_by` reads from
+          # the other end, so the board and the export agree by construction.
+          issues=$(gh api graphql -f query='
+            query($owner:String!, $name:String!, $pr:Int!) {
+              repository(owner:$owner, name:$name) {
+                pullRequest(number:$pr) {
+                  closingIssuesReferences(first:10) { nodes { number } }
+                }
+              }
+            }' -F owner="${REPO%/*}" -F name="${REPO#*/}" -F pr="$PR" \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number')
+
+          if [ -z "$issues" ]; then
+            echo "PR #$PR closes no issues; nothing to assign."
+            exit 0
+          fi
+
+          for issue in $issues; do
+            # Additive: an existing assignee is a deliberate act -- a reviewer
+            # or QA taking it on -- and must not be replaced by the author.
+            echo "assigning $AUTHOR to #$issue"
+            gh issue edit "$issue" --repo "$REPO" --add-assignee "$AUTHOR"
+          done

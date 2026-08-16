@@ -3,7 +3,13 @@
 # requires-python = ">=3.11"
 # dependencies = ["duckdb>=1.0"]
 # ///
-"""Compact daily exports into monthly files, and compute Agile metrics.
+"""Compact daily GitHub exports into monthly files, and compute Agile metrics.
+
+Reads `github_issues_*.csv` and `github_events_*.csv` -- the **silver** tables,
+GitHub's facts under GitHub's names. The Gold `agile_*` tables belong to the
+ExperienceFlow model and are produced by a silver -> gold transform in the IWS
+pipeline, where `org_master_employees` exists to resolve a login into an
+`actor_id`. Nothing here writes an `agile_*` file.
 
 **Why this is not part of `gh-agile`.** `gh extension install` clones the
 repository and installs nothing -- there is no dependency step for a script
@@ -41,8 +47,8 @@ def compact(directory: Path, month: str | None, keep: bool) -> int:
     """Fold daily exports into one file per month, newest row per key winning."""
     written = 0
     for grain, (key, order) in GRAINS.items():
-        pattern = str(directory / f"agile_{grain}_*.csv")
-        daily = sorted(directory.glob(f"agile_{grain}_*.csv"))
+        pattern = str(directory / f"github_{grain}_*.csv")
+        daily = sorted(directory.glob(f"github_{grain}_*.csv"))
         # Monthly outputs must not be re-read as inputs, or each run folds its
         # own output back in and the file grows without bound.
         daily = [p for p in daily if "_monthly_" not in p.name]
@@ -56,7 +62,7 @@ def compact(directory: Path, month: str | None, keep: bool) -> int:
         for (stamp,) in months:
             if month and stamp != month:
                 continue
-            out = directory / f"agile_{grain}_monthly_{stamp}.csv"
+            out = directory / f"github_{grain}_monthly_{stamp}.csv"
             duckdb.sql(f"""
                 COPY (
                     SELECT * EXCLUDE (rn) FROM (
@@ -143,11 +149,20 @@ def periods(kind: str, start_date, count: int = 5) -> list[tuple[str, object, ob
 
 
 def metrics(directory: Path, kind: str, start_date, context: str) -> int:
-    issues = str(directory / "agile_issues_*.csv")
-    if not list(directory.glob("agile_issues_*.csv")):
+    issues = str(directory / "github_issues_*.csv")
+    if not list(directory.glob("github_issues_*.csv")):
         sys.exit(f"no agile_issues_*.csv in {directory}")
-    duckdb.sql(f"CREATE OR REPLACE VIEW issues AS "
-               f"SELECT * FROM read_csv_auto('{issues}', union_by_name = true)")
+    # Deduplicated, not merely unioned. The glob matches daily *and* monthly
+    # files, so a compacted directory counts every row twice -- 24 issues read
+    # as 48 created. Overlapping incremental exports do the same thing on their
+    # own. Newest row per key wins, exactly as `compact` resolves it.
+    duckdb.sql(f"""
+        CREATE OR REPLACE VIEW issues AS
+        SELECT * EXCLUDE (rn) FROM (
+            SELECT *, row_number() OVER (PARTITION BY number ORDER BY exported_at DESC) AS rn
+            FROM read_csv_auto('{issues}', union_by_name = true)
+        ) WHERE rn = 1
+    """)
 
     spans = periods(kind, start_date)
     # The last column is the period we are inside, and it is labelled so nobody

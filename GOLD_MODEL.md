@@ -1,5 +1,25 @@
 # Mapping GitHub to the Gold Agile data model
 
+> **What this tool exports is silver.** `github_issues` and `github_events` are
+> GitHub's facts under GitHub's names. The Gold `agile_*` tables belong to the
+> ExperienceFlow model and are the output of a **silver → gold transform that
+> lives in the IWS Partner pipeline**, not here — that is where
+> `org_master_employees` exists to resolve a login into an `actor_id`, and
+> where `team_id` can be synthesised. Measured against the catalog, the gap is
+> real and the transform is not optional:
+>
+> | | Gold fields | Silver columns | Names matching |
+> |---|---|---|---|
+> | issues | 58 | 32 | **2** |
+> | events | 22 | 18 | **14** |
+>
+> The events grain was built to Gold's vocabulary and is close. The issues grain
+> is not: names differ (`number` → `process_id`, `created_at` → `created_date`)
+> and so do **units** — `cycle_time_days` against `cycle_time_hours`, a factor
+> of 24 that would corrupt a dashboard quietly rather than fail loudly. The
+> transform must rename, convert, derive `process_guid`, resolve employee ids,
+> and leave what GitHub cannot supply null.
+
 How GitHub Projects v2 fills `agile_issues` and `agile_events`, where it matches
 Jira, and the one place it genuinely cannot.
 
