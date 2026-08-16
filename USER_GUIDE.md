@@ -768,6 +768,35 @@ sprint_closed_in  = '2026-08-24'
 **Where they disagree, believe the labels.** Set `sprint.record_label: false` to
 turn the stamping off.
 
+### Backfilling issues that predate the stamping
+
+```bash
+gh agile sprint backfill --dry-run     # list what would be stamped
+gh agile sprint backfill               # apply; re-running is a no-op
+```
+
+Two sources, and the choice matters more than it looks:
+
+| `--source` | What it reads | Coverage on this project |
+|---|---|---|
+| `timeline` (default) | Each Status transition — In Progress, Done — mapped into the sprint whose window contains it | **16 of 25** items, and every one of the 15 closed items got a closing sprint |
+| `field` | The project item's `Sprint` value | **2 of 25**. The other 23 had already been wiped by ordinary sprint creation |
+
+`timeline` is a derivation rather than a record, and worth preferring anyway,
+because Status is the one thing GitHub keeps a real history of. It also
+reconstructs carryover, which the field cannot: an item started in one sprint
+and finished in another gets both labels.
+
+**The field can be actively wrong as history.** On this project `#36` was
+started *and* finished on 2026-08-15, inside `AGILE Sprint 4`
+(08-03 .. 08-16) — while its `Sprint` field read `Sprint 1`, which starts
+08-17. The field records where an item is *planned*; the timeline records where
+it was *worked*. Backfilling from the field would have stamped an issue closed
+on the 15th as belonging to a sprint that had not begun.
+
+Neither source invents a sprint. A transition falling in a gap — normal, since
+sprints are created on demand — is reported and skipped.
+
 The field still earns its place: `sprint:@current` is what makes a scrum board
 show the current sprint, and no label can do that without being edited every
 fortnight. Field for the board, labels for the record.

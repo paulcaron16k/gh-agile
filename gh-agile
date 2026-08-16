@@ -1528,7 +1528,90 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
     return made
 
 
+def backfill_sprint_labels(args) -> int:
+    """Stamp `sprint:` labels on issues that predate the stamping.
+
+    Two sources, because the obvious one barely works:
+
+    `field` reads the project item's `Sprint` value. Honest, but it holds one
+    value and any iteration write clears it board-wide -- on the board this was
+    written for, 2 of 25 items still had one, the other 23 having been wiped by
+    ordinary sprint creation. It also cannot show carryover: the field forgot
+    every sprint but the last.
+
+    `timeline` maps the Status transitions -- when the item reached In Progress
+    and when it reached Done -- into the sprint whose window contains each
+    moment. That is a derivation rather than a record, and it is stated as one,
+    but Status changes are the one thing GitHub keeps a real history of, so it
+    recovers what the field has already lost. It also reconstructs carryover:
+    an item started in one sprint and finished in another gets both labels.
+
+    Neither invents a sprint. A moment falling in a gap -- and gaps are normal,
+    since sprints are created on demand -- is reported and skipped.
+    """
+    import datetime as dt
+
+    active, completed = iterations(args.owner, args.project)
+    spans = []
+    for it in active + completed:
+        start = dt.date.fromisoformat(it["startDate"])
+        spans.append((start, start + dt.timedelta(days=it["duration"] - 1), it["title"]))
+    spans.sort()
+    if not spans:
+        sys.exit("no sprints exist on this project; nothing to backfill from")
+
+    def covering(stamp: str):
+        if not stamp:
+            return None
+        when = dt.date.fromisoformat(stamp[:10])
+        return next((sp for sp in spans if sp[0] <= when <= sp[1]), None)
+
+    data = rows(args.owner, args.project, with_history=args.source == "timeline")
+    stamped = skipped = uncovered = 0
+    for row in data:
+        labels = set(row["labels"].split(";")) if row["labels"] else set()
+        wanted = []
+        if args.source == "field":
+            match = next((sp for sp in spans if sp[2] == row.get("field_sprint")), None)
+            if match:
+                wanted.append(match)
+        else:
+            for stamp in (row.get("started_at"), row.get("done_at")):
+                if not stamp:
+                    continue
+                match = covering(stamp)
+                if match:
+                    wanted.append(match)
+                else:
+                    uncovered += 1
+        # Oldest first, so the last label written is the sprint it finished in.
+        for start, _end, _title in sorted({(w[0], w[1], w[2]) for w in wanted}):
+            label = f"{SPRINT_LABEL}{start.isoformat()}"
+            if label in labels:
+                skipped += 1
+                continue
+            ident = f"{row['repository']}#{row['number']}"
+            if args.dry_run:
+                print(f"  would stamp {ident}  {label}")
+            else:
+                ensure_labels(row["repository"], [label])
+                gh(["issue", "edit", str(row["number"]), "--repo", row["repository"],
+                    "--add-label", label])
+                print(f"  stamped {ident}  {label}")
+            stamped += 1
+
+    verb = "would stamp" if args.dry_run else "stamped"
+    print(f"  {verb} {stamped}, already present {skipped}, across {len(data)} item(s)")
+    if uncovered:
+        print(f"  {uncovered} transition(s) fell outside every sprint and were skipped; "
+              f"no sprint covers those dates", file=sys.stderr)
+    return 0
+
+
 def cmd_sprint(args) -> int:
+    if args.sprint_command == "backfill":
+        return backfill_sprint_labels(args)
+
     if args.sprint_command == "ensure":
         require_sprint_config(args._config, "`sprint ensure`")
         settings = sprint_settings(args._config)
@@ -2674,6 +2757,28 @@ why this is needed:
     )
     sprint_ensure.add_argument("--ahead", type=int,
                                help="future sprints to keep; default from the profile")
+    sprint_fill = sprint_sub.add_parser(
+        "backfill", help="stamp sprint: labels on issues that predate the stamping",
+        epilog=field_help([
+            ("--source", "field|timeline", "optional", "where to recover the sprint from"),
+            ("--dry-run", "flag", "optional", "list what would be stamped and change nothing"),
+        ]) + """
+
+sources:
+  timeline  (default) map each Status transition -- In Progress, Done -- into
+            the sprint whose window contains it. A derivation, not a record,
+            but Status is the one thing GitHub keeps a history of, so it
+            recovers what the field has already lost, carryover included.
+  field     read the project item's Sprint value. A record, but it holds one
+            value and any iteration write clears it board-wide, so on an
+            established project most items have nothing left to read.
+
+Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sprint_fill.add_argument("--source", choices=["timeline", "field"], default="timeline")
+    sprint_fill.add_argument("--dry-run", action="store_true")
+
     sprint_new = sprint_sub.add_parser("create", help="append a sprint iteration")
     sprint_new.add_argument("--start", help="ISO date; defaults to the day after the last ends")
     sprint_new.add_argument("--weeks", type=int, help="length; defaults to the field's own duration")

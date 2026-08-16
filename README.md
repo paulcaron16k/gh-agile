@@ -348,6 +348,13 @@ gh agile move 53 --status "In Progress"       #53 + sprint:2026-08-10
 gh agile move 53 --status Done --close        #53 + sprint:2026-08-24
 ```
 
+Issues that predate the stamping are recovered with `gh agile sprint backfill`,
+which maps Status transitions into the sprint containing them. Prefer it over
+`--source field`: on this project the field could recover 2 of 25 items, and for
+one of those it was wrong — `#36` finished on 2026-08-15 while its field read a
+sprint starting 08-17. The field records where an item is planned; the timeline
+records where it was worked.
+
 The export carries `sprint_starts` (every sprint the issue lived in, oldest
 first) and `sprint_closed_in` beside the live `field_sprint`. Demonstrated by
 renaming an unused future sprint and exporting immediately afterwards:
