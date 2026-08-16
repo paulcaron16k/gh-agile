@@ -601,9 +601,32 @@ Configuration lives in the profile:
 
 The template is `str.format`, not Jinja: this tool has no dependencies and
 Jinja2 would be its only one. The default follows Jira's `<Board> Sprint <n>`,
-so a board keyed `ZMBNI` produces `ZMBNI Sprint 3`. Sprints created before you
-set a template keep their names — renaming them would rewrite the sprint every
-historical item points at.
+so a board keyed `ZMBNI` produces `ZMBNI Sprint 3`.
+
+**Changing the template is safe, and affects only sprints created afterwards.**
+Existing sprints keep their names because nothing rewrites them: `ensure`
+re-sends every existing iteration with its *own* title and applies the template
+only to the ones it creates. Numbering continues rather than restarting, so the
+sequence stays intact across a rename. Measured, by changing the template and
+creating one sprint:
+
+```
+  AGILE Sprint 4          2026-08-03 .. 2026-08-16   ← unchanged
+  Sprint 1                2026-08-17 .. 2026-08-30   ← unchanged
+  Sprint 2                2026-08-31 .. 2026-09-13   ← unchanged
+  Sprint 3                2026-09-14 .. 2026-09-27   ← unchanged
+  AGILE-2026W40 Sprint 5  2026-09-28 .. 2026-10-11   ← the new template
+```
+
+Sprint assignments survived that change, as they do any other: they are saved
+and re-applied around it.
+
+**Renaming a sprint that already exists is a different act, and this tool will
+not do it.** The name is what every historical item points at, and rewriting the
+iteration configuration to change one title clears every assignment on the
+board — recoverable, since the tool re-applies them, but it rewrites what a
+burndown from last quarter refers to. Live with the seam: names are cosmetic and
+the dates are the truth.
 
 **A sprint created today starts on the last `start_day`, not today.** Asked for
 on a Wednesday with `start_day: monday`, it runs Monday to Sunday and already
