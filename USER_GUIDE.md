@@ -35,6 +35,7 @@ workflows that read it.
 | `project.number` | integer | no | The board's **number**, not its node id — what `--project` takes. Written by `gh agile project create`, and what every command defaults to |
 | `project.name` | string | no | Human-readable project name |
 | `project.key` | string | no | The main repository's key; a convenience copy of the matching `keys` entry |
+| `project.issue_title_prefix` | `off` \| `key` \| `key+type` | no | Whether new issue titles carry `KEY-ID` and the type — see Issue titles. Default `off`; an unrecognised value stops every command |
 | `config_from` | string | no | `owner/repo` holding the real profile. **Carries nothing else** |
 
 ```json
@@ -690,7 +691,73 @@ complains.
 
 ---
 
-## 6. The workflow, end to end
+## 6. Issue titles: making the key and number visible
+
+GitHub calls the issue above `#31`. Nobody in the standup can say "thirty-one"
+and have it mean anything outside that one repository — and on a board spanning
+two repositories, there are two `#31`s. Jira teams say "ZMBNI-34" and everyone
+knows what is meant, including which project it belongs to.
+
+`project.issue_title_prefix` writes that identifier into the title itself. Three
+values, `off` by default:
+
+| Mode | Title of epic 34, key ZMBNI | What it buys |
+|---|---|---|
+| `off` | `Retention policy` | GitHub's own convention, untouched |
+| `key` | `ZMBNI-34 Retention policy` | An identifier people can say out loud |
+| `key+type` | `ZMBNI-34 Epic: Retention policy` | Epics stand out from stories in a flat list |
+
+```bash
+gh agile project title-prefix --mode key
+```
+
+**It applies to issues created after it is set.** Existing issues are left
+alone: renaming a board's worth of issues emits a timeline event for each, and a
+title changing under someone mid-sprint is worse than a board that is consistent
+only from here on.
+
+### What it costs, and the alternative for half of it
+
+The number does not exist until the issue does, so a prefixed issue is created
+and then renamed — two API calls, and a `RenamedTitleEvent` in the timeline that
+`gh agile export` faithfully carries into `github_events`. Expected noise rather
+than a defect, but it is the reason `off` is the default.
+
+It also makes a third copy of something already recorded twice: the key is on
+the `key:ZMBNI` label and in the export's `issue_key` column, and the type is on
+`type:epic`. Move a component to a different key later and every title it
+created is wrong, because a title is a string and not a reference.
+
+So separate the two complaints:
+
+- **"I can't see the type or key on the board card."** That is board
+  configuration, not naming. Add Labels to the card's visible fields and both
+  appear on the card face, with no rename and no duplicated truth.
+- **"We can't refer to an issue in conversation."** Only the prefix fixes that,
+  because it is the *title* that appears in a notification, a commit message, a
+  search result and a pull request body — none of which read the board.
+
+Pick `key` if the goal is vocabulary; add `+type` only if your backlog is long
+enough that epics get lost among stories.
+
+### An illegal value stops everything
+
+The setting decides what every issue is called, so a near-miss is not guessed at:
+
+```
+$ gh agile board list
+project.issue_title_prefix is 'key-type', which is not one of the three legal values.
+  Fix the profile before running anything else -- this setting decides what every
+  issue is called, so a guess here is a guess written into issue titles:
+```
+
+It is checked on every command, not only on `epic` and `story`, so a typo is
+reported the first time anything runs rather than on the day someone creates an
+epic. `true` and `false` are accepted as hand-edits and read as `key` and `off`.
+
+---
+
+## 7. The workflow, end to end
 
 A story from creation to closed, then its epic. Every command here is
 non-interactive, so an agent can run the same sequence.
@@ -787,7 +854,7 @@ gh agile export --csv --out-dir exports/
 
 ---
 
-## 7. For an agent working on a developer's behalf
+## 8. For an agent working on a developer's behalf
 
 Everything above is non-interactive when given explicit input, which is the
 property that makes it drivable. A working sequence:
@@ -822,7 +889,7 @@ Two rules worth encoding in whatever drives it:
 
 ---
 
-## 8. Exporting issues and events
+## 9. Exporting issues and events
 
 Two grains, because they answer different questions and cannot share a file:
 
@@ -950,7 +1017,7 @@ Monthly, after that day's export:
 0 7 1 * *  cd /srv/projects/Zamboni && uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI compact >> $LOG 2>&1
 ```
 
-## 9. Who did the work
+## 10. Who did the work
 
 An **assignee is a point-in-time value**. It is the developer while a story is
 in progress, then often a reviewer, then QA. It answers "who has this now",
@@ -996,7 +1063,7 @@ The template assigns **additively**. An existing assignee is a deliberate act,
 a reviewer or QA taking the story on, and replacing it with the author would
 destroy the very information the board is there to show.
 
-## 10. Command reference
+## 11. Command reference
 
 Every command lists its own fields with type, obligation and description:
 
@@ -1010,6 +1077,7 @@ gh agile move --help
 |---|---|
 | `setup` | Create fields and labels; converge on re-run |
 | `key` | Record a repository's key; list what is recorded |
+| `project create` / `project sprint-template` / `project title-prefix` | Create the board and record it; choose the sprint cadence; choose the issue-title form |
 | `board list` / `board create` | Scrum, kanban, backlog and roadmap boards over one project |
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint create` | Show or append iterations |

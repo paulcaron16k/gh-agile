@@ -542,6 +542,29 @@ def read_config(path: str | None = None) -> dict:
 KEY_LABEL = "key:"
 
 
+def key_problem(key: str) -> str | None:
+    """Jira's own rules for a project key, and one of ours.
+
+    Jira requires uppercase, starting with a letter, letters and digits only,
+    2-10 characters. The hyphen exclusion is additionally *load-bearing here*:
+    `ZMBNI-34` is parsed by splitting on the last hyphen, so a key containing
+    one makes the reference ambiguous. Underscores were accepted before this --
+    legal to parse, illegal in Jira, and a silent incompatibility for anyone
+    moving between the two.
+    """
+    if not 2 <= len(key) <= 10:
+        return "a key is 2 to 10 characters"
+    if not key[0].isalpha():
+        return "a key starts with a letter"
+    if not key.isalnum():
+        return "a key is letters and digits only -- no hyphen, underscore or space"
+    if not key.isupper():
+        return "a key is uppercase"
+    if not key.isascii():
+        return "a key is ASCII"
+    return None
+
+
 def profile_keys(config: dict) -> list[dict]:
     """The `keys` list. Ordered, because the order is the default."""
     return config.get("keys") or []
@@ -930,6 +953,70 @@ def ensure_labels(repo: str, labels: list[str]) -> None:
         )
 
 
+#: What `project.issue_title_prefix` may be set to, and what each produces for
+#: epic 34 of key ZMBNI titled "Retention policy".
+TITLE_PREFIX_MODES = {
+    "off": "Retention policy",
+    "key": "ZMBNI-34 Retention policy",
+    "key+type": "ZMBNI-34 Epic: Retention policy",
+}
+
+
+def title_prefix_mode(config: dict) -> str:
+    """Read and validate `project.issue_title_prefix`; default `off`.
+
+    Validated for every command rather than only the two that write titles, so
+    a typo in the profile is reported the first time anything runs and not on
+    the day someone happens to create an epic. There is no nearest-legal guess:
+    silently reading `key-type` as `key+type` would rename issues in a way the
+    profile does not say, and titles are the one thing here that is awkward to
+    walk back.
+    """
+    mode = (config.get("project") or {}).get("issue_title_prefix", "off")
+    if mode is True:
+        mode = "key"          # a plausible hand-edit, and unambiguous
+    elif mode is False:
+        mode = "off"
+    if mode not in TITLE_PREFIX_MODES:
+        options = "\n".join(
+            f"    {name:10} {example}" for name, example in TITLE_PREFIX_MODES.items()
+        )
+        sys.exit(
+            f"project.issue_title_prefix is {mode!r}, which is not one of the three "
+            f"legal values.\n"
+            f"  Fix the profile before running anything else -- this setting decides "
+            f"what every\n  issue is called, so a guess here is a guess written into "
+            f"issue titles:\n\n{options}\n\n"
+            f"    gh agile project title-prefix --mode key\n\n"
+            f"  Or edit `project.issue_title_prefix` in the profile by hand."
+        )
+    return mode
+
+
+def prefixed_title(mode: str, key: str, number: int, kind: str, title: str) -> str:
+    """The title an issue carries once its number is known. `kind` is Epic/Story."""
+    if mode == "off":
+        return title
+    label = f"{kind.capitalize()}: " if mode == "key+type" else ""
+    return f"{key}-{number} {label}{title}"
+
+
+def apply_title_prefix(config, repo: str, number: int, key, kind: str, title: str) -> str:
+    """Rename a just-created issue to carry its key and number.
+
+    Two calls rather than one because the number does not exist until the issue
+    does. The rename is a real edit and shows up as a `RenamedTitleEvent` in the
+    timeline, which the event export carries -- expected noise, not a defect,
+    and the reason `off` is the default.
+    """
+    mode = title_prefix_mode(config)
+    if mode == "off":
+        return title
+    new = prefixed_title(mode, key, number, kind, title)
+    gh(["issue", "edit", str(number), "--repo", repo, "--title", new])
+    return new
+
+
 def create_issue(repo: str, title: str, body: str, labels: list[str]) -> tuple[int, str]:
     """Create an issue and return (number, node id)."""
     cmd = ["issue", "create", "--repo", repo, "--title", title, "--body", body]
@@ -1073,8 +1160,23 @@ def add_to_project(login: str, project: int, url: str) -> str:
     return out["id"]
 
 
+def require_key_for_prefix(config: dict, key) -> None:
+    """Refuse before creating anything if the prefix has no key to use.
+
+    Checked up front: the alternative is an issue that exists with a title the
+    profile says it should not have, and a second run to fix it.
+    """
+    if title_prefix_mode(config) != "off" and not key:
+        sys.exit(
+            "project.issue_title_prefix is set, but no key applies to this repository, "
+            "so there is\n  nothing to prefix the title with. Pass --key, or list one:\n\n"
+            "    gh agile key --key ZMBNI --repo owner/name"
+        )
+
+
 def cmd_epic(args) -> int:
     require_sprint_config(args._config, "creating an epic")
+    require_key_for_prefix(args._config, getattr(args, "key", None))
     labels = ["type:epic"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, _node = create_issue(
@@ -1082,10 +1184,13 @@ def cmd_epic(args) -> int:
         BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
         labels,
     )
+    title = apply_title_prefix(
+        args._config, args.repo, number, getattr(args, "key", None), "epic", args.title
+    )
     url = f"https://github.com/{args.repo}/issues/{number}"
     item = add_to_project(args.owner, args.project, url)
     set_field(args.owner, args.project, item, "Status", "Todo")
-    print(f"  epic #{number}: {args.title}")
+    print(f"  epic #{number}: {title}")
     print(f"  {url}")
     return 0
 
@@ -1098,12 +1203,16 @@ def cmd_story(args) -> int:
     roll-up run in between, and nothing complains. POLICY.md §3.
     """
     require_sprint_config(args._config, "creating a story")
+    require_key_for_prefix(args._config, getattr(args, "key", None))
     labels = ["type:story"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, node = create_issue(
         args.repo, args.title,
         BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
         labels,
+    )
+    title = apply_title_prefix(
+        args._config, args.repo, number, getattr(args, "key", None), "story", args.title
     )
     url = f"https://github.com/{args.repo}/issues/{number}"
 
@@ -1120,7 +1229,7 @@ def cmd_story(args) -> int:
         set_field(args.owner, args.project, item, "Story Points", args.points)
     if args.priority:
         set_field(args.owner, args.project, item, "Priority", args.priority)
-    print(f"  story #{number} under epic #{args.epic}: {args.title}")
+    print(f"  story #{number} under epic #{args.epic}: {title}")
     print(f"  {url}")
     return 0
 
@@ -1710,6 +1819,22 @@ def cmd_project(args) -> int:
     """
     config = args._config
     target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    if args.project_command == "title-prefix":
+        # Existing issues are deliberately left alone. Renaming a board's worth
+        # of issues emits a RenamedTitleEvent for each, and a title changing
+        # under someone mid-sprint is worse than a board that is consistent only
+        # from here on.
+        project = config.setdefault("project", {})
+        project["issue_title_prefix"] = args.mode
+        if args.mode != "off" and not (config.get("keys") or []):
+            sys.exit("no keys are listed in the profile, so there is nothing to prefix "
+                     "titles with.\n  Add one first: gh agile key --key ZMBNI")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        print(f"  issue title prefix: {args.mode}  e.g. {TITLE_PREFIX_MODES[args.mode]}")
+        print(f"  written to {target}; applies to issues created from now on")
+        return 0
+
     if args.project_command == "sprint-template":
         settings = write_sprint_template(config, args.template, target)
         print(f"  sprint cadence: {args.template} "
@@ -1777,8 +1902,8 @@ def cmd_key(args) -> int:
             print(f"  {entry['key']:10} {entry.get('repo', '?'):28} {entry.get('name', '')}")
         return 0
 
-    if not args.key.replace("_", "").isalnum() or not args.key.isupper():
-        sys.exit(f"{args.key!r}: a key should be uppercase alphanumeric, e.g. ZMBNI")
+    if problem := key_problem(args.key):
+        sys.exit(f"{args.key!r}: {problem}")
     entries = [e for e in entries if e.get("key") != args.key]
     entries.append({"key": args.key, "name": args.name or args.key, "repo": args.repo})
     config["keys"] = entries
@@ -1786,7 +1911,12 @@ def cmd_key(args) -> int:
     target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
     print(f"  {args.key} -> {args.repo}  (in {target})")
 
-    if args.project and args.name:
+    # Only when the key being recorded *is* this project's key. A key's name
+    # describes the key -- "Zamboni Iceberg table maintainer" for ZMBNI -- and
+    # writing it into the project's shortDescription relabelled a project called
+    # gh-agile as Zamboni. Two different things, one flag.
+    project_key = (config.get("project") or {}).get("key")
+    if args.project and args.name and project_key and args.key == project_key:
         graphql(
             "mutation($p: ID!, $d: String!) { updateProjectV2(input: "
             "{projectId: $p, shortDescription: $d}) { projectV2 { shortDescription } } }",
@@ -2124,9 +2254,23 @@ def cmd_self_test(args) -> int:
 
         # Drive the story through a real transition, then wait for the timeline
         # to catch up -- it is eventually consistent, measured at ~75s.
-        item = next(i for i in json.loads(gh(["project", "item-list", str(project),
-                                              "--owner", args.owner, "--format", "json"]))["items"]
-                    if i["content"]["number"] == story_number)
+        # Polled, not read once. `item-list` is eventually consistent like the
+        # rest of the API, and a story added a second ago is sometimes not in it
+        # yet -- which surfaced as a bare StopIteration traceback after teardown
+        # had already run, with nothing saying what was missing.
+        item = None
+        for _attempt in range(10):
+            item = next(
+                (i for i in json.loads(gh(["project", "item-list", str(project), "--owner",
+                                           args.owner, "--format", "json"]))["items"]
+                 if (i.get("content") or {}).get("number") == story_number),
+                None,
+            )
+            if item:
+                break
+            time.sleep(3)
+        if not item:
+            sys.exit(f"story #{story_number} never appeared on project #{project} after 30s")
         for index, status in enumerate((CYCLE_START, CYCLE_END)):
             if index:
                 # Separated deliberately. Two transitions a second apart risk
@@ -2350,6 +2494,14 @@ why this is needed:
         "sprint-template", help="choose the sprint cadence for an existing project"
     )
     tmpl.add_argument("--template", required=True, choices=sorted(SPRINT_TEMPLATES))
+    prefix = project_sub.add_parser(
+        "title-prefix", help="whether new issue titles carry their key and type",
+        epilog="modes:\n" + "\n".join(
+            f"  {name:<10} {example}" for name, example in TITLE_PREFIX_MODES.items()
+        ) + "\n\nExisting issues are not renamed.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    prefix.add_argument("--mode", required=True, choices=list(TITLE_PREFIX_MODES))
     project.set_defaults(func=cmd_project)
 
     sprint = sub.add_parser("sprint", help="list or create sprint iterations")
@@ -2445,6 +2597,7 @@ def apply_defaults(args) -> None:
     """
     config = read_config(getattr(args, "config", None))
     args._config = config
+    title_prefix_mode(config)   # reject an illegal value now, not at create time
 
     if getattr(args, "owner", "@me") == "@me":
         args.owner = json.loads(gh(["api", "user"]))["login"]
