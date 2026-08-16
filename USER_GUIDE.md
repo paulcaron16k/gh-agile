@@ -731,16 +731,47 @@ export deliberately creates collapses:
 
 48 daily issue rows became 24. `--keep` leaves the dailies in place.
 
-`metrics` computes six, each one SQL statement over the export:
+`metrics` reports six numbers per period, as a matrix — metrics down, periods
+across:
+
+```bash
+uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI metrics \
+    --time-range quarterly --context key
+```
+```
+  context                    2025-Q3    2025-Q4    2026-Q1    2026-Q2  2026-Q3 in-progress
+  throughput                       0          0          0          0                   14
+  points_done                    0.0        0.0        0.0        0.0                 54.0
+  created                          0          0          0          0                   24
+  cycle_time_median                                                                    0.0
+  lead_time_median                                                                    0.45
+  carryover                        0          0          0          0                    1
+  AGILE - throughput               0          0          0          0                   14
+  …
+```
 
 | Metric | Answers |
 |---|---|
-| `throughput` | items reaching Done per month |
-| `cycle_time` | mean, median and worst days from first *In Progress* to *Done* |
-| `lead_time` | mean and median days from joining the board to *Done* |
-| `wip` | how many items sit in each status now |
-| `sprint_load` | items, points and completions per sprint |
-| `flow_churn` | items with the most status changes — thrash, or a story too big |
+| `throughput` | items reaching Done |
+| `points_done` | story points completed |
+| `created` | items created |
+| `cycle_time_median` | median days *In Progress* → *Done* |
+| `lead_time_median` | median days on the board → *Done* |
+| `carryover` | started but not finished |
+
+`--time-range quarterly|monthly|yearly`, four complete periods plus the one in
+progress. **Quarters start 1 January**, so the boundaries match a planning cycle
+rather than counting back from today. The final column is labelled
+`in-progress` because a third of a quarter otherwise reads as a collapse.
+
+Weekly and daily are deliberately not offered: a fortnight's throughput on a
+small team is three items and a week's is one, and a number that swings 100% on
+a single story says nothing about the process.
+
+`--context project` totals everything; `--context key` adds a row per key,
+labelled `AGILE - throughput`. A project with one key shows identical project
+and team rows, which is correct rather than redundant. `--start-date` drops
+periods ending before it.
 
 DuckDB rather than pandas: it reads a glob of CSVs directly, deduplicates with a
 window function and writes CSV in one statement, and nothing has to fit in
