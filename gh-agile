@@ -224,16 +224,47 @@ TIMELINE_QUERY = """
 query($id: ID!) {
   node(id: $id) {
     ... on Issue {
-      timelineItems(first: 100, itemTypes: [PROJECT_V2_ITEM_STATUS_CHANGED_EVENT, ADDED_TO_PROJECT_V2_EVENT]) {
+      timelineItems(first: 200, itemTypes: [
+        PROJECT_V2_ITEM_STATUS_CHANGED_EVENT, ADDED_TO_PROJECT_V2_EVENT,
+        REMOVED_FROM_PROJECT_V2_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT,
+        LABELED_EVENT, UNLABELED_EVENT, CLOSED_EVENT, REOPENED_EVENT,
+        MILESTONED_EVENT, DEMILESTONED_EVENT, SUB_ISSUE_ADDED_EVENT,
+        SUB_ISSUE_REMOVED_EVENT, PARENT_ISSUE_ADDED_EVENT, RENAMED_TITLE_EVENT
+      ]) {
         nodes {
           __typename
-          ... on ProjectV2ItemStatusChangedEvent { createdAt status previousStatus }
-          ... on AddedToProjectV2Event { createdAt }
+          ... on ProjectV2ItemStatusChangedEvent { createdAt status previousStatus wasAutomated actor { login } }
+          ... on AddedToProjectV2Event { createdAt actor { login } }
+          ... on RemovedFromProjectV2Event { createdAt actor { login } }
+          ... on AssignedEvent { createdAt actor { login } assignee { ... on User { login } } }
+          ... on UnassignedEvent { createdAt actor { login } }
+          ... on LabeledEvent { createdAt actor { login } label { name } }
+          ... on UnlabeledEvent { createdAt actor { login } label { name } }
+          ... on ClosedEvent { createdAt actor { login } stateReason }
+          ... on ReopenedEvent { createdAt actor { login } }
+          ... on MilestonedEvent { createdAt actor { login } milestoneTitle }
+          ... on DemilestonedEvent { createdAt actor { login } milestoneTitle }
+          ... on SubIssueAddedEvent { createdAt actor { login } }
+          ... on SubIssueRemovedEvent { createdAt actor { login } }
+          ... on ParentIssueAddedEvent { createdAt actor { login } }
+          ... on RenamedTitleEvent { createdAt actor { login } previousTitle currentTitle }
         }
       }
     }
   }
 }"""
+
+#: Which Gold `event_category` each timeline event belongs to. Status changes are
+#: the only true state_change GitHub emits for a project field; everything else
+#: is activity. `data_change` stays empty because GitHub emits no event when a
+#: project custom field other than Status is set -- see GOLD_MODEL.md.
+EVENT_CATEGORY = {
+    "ProjectV2ItemStatusChangedEvent": "state_change",
+    "AddedToProjectV2Event": "activity",
+    "RemovedFromProjectV2Event": "activity",
+    "ClosedEvent": "state_change",
+    "ReopenedEvent": "state_change",
+}
 
 
 def fetch_items(login: str, number: int) -> tuple[str, list[dict]]:
@@ -278,8 +309,66 @@ def field_values(item: dict) -> dict[str, object]:
     return out
 
 
+def event_rows(issue: dict, events: list[dict], project: str) -> list[dict]:
+    """Timeline events as `agile_events` rows -- one row per event.
+
+    A different grain from `agile_issues`, hence a different file: one row per
+    thing that happened, rather than one row per work item. GOLD_MODEL.md maps
+    the columns.
+    """
+    import hashlib
+
+    out = []
+    for event in events:
+        kind = event.get("__typename", "")
+        occurred = event.get("createdAt")
+        if not occurred:
+            continue
+        actor = (event.get("actor") or {}).get("login") or ""
+        row = {
+            # Stable across exports so the target can dedupe on it: the same
+            # event re-exported by an overlapping incremental run hashes the
+            # same and overwrites itself rather than duplicating.
+            "event_hash": hashlib.sha256(
+                f"{issue['id']}|{kind}|{occurred}".encode()
+            ).hexdigest(),
+            "function_code": "agile",
+            "process_type": "issues",
+            "process_id": issue["number"],
+            "issue_key": issue["issue_key"],
+            "ext_process_id": issue["id"],
+            "project_id": project,
+            "event_category": EVENT_CATEGORY.get(kind, "activity"),
+            "event_name": kind.replace("Event", ""),
+            "occurred_at": occurred,
+            "actor_name": actor,
+            "ext_actor_id": actor,
+            "state": event.get("status") or "",
+            "prior_state": event.get("previousStatus") or "",
+            "state_changed": bool(
+                event.get("status") and event.get("status") != event.get("previousStatus")
+            ),
+            "was_automated": event.get("wasAutomated", ""),
+            "detail": (
+                (event.get("label") or {}).get("name")
+                or event.get("milestoneTitle")
+                or event.get("stateReason")
+                or (event.get("assignee") or {}).get("login")
+                or event.get("currentTitle")
+                or ""
+            ),
+        }
+        out.append(row)
+    return out
+
+
 def history(issue_id: str) -> dict[str, object]:
-    """First entry to CYCLE_START, arrival at CYCLE_END, and board entry."""
+    """First entry to CYCLE_START, arrival at CYCLE_END, and board entry.
+
+    Returns the raw events too: the timeline query is the expensive part of an
+    export -- one call per issue -- and the event grain is the same data
+    reshaped, so it comes at no extra cost.
+    """
     data = graphql(TIMELINE_QUERY, id=issue_id)
     events = ((data.get("data") or {}).get("node") or {}).get("timelineItems", {}).get("nodes", [])
     started = done = added = None
@@ -294,7 +383,8 @@ def history(issue_id: str) -> dict[str, object]:
                 started = when
             elif same_status(status, CYCLE_END):
                 done = when
-    return {"added_to_board_at": added, "started_at": started, "done_at": done}
+    return {"added_to_board_at": added, "started_at": started, "done_at": done,
+            "_events": events}
 
 
 def days_between(start: str | None, end: str | None) -> float | None:
@@ -481,7 +571,8 @@ def write_state(path: str, key: str, watermark: str, exported: int) -> None:
     pathlib.Path(path).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
-def rows(login: str, number: int, *, with_history: bool, since: str | None = None) -> list[dict]:
+def rows(login: str, number: int, *, with_history: bool, since: str | None = None,
+         events: list[dict] | None = None) -> list[dict]:
     config = read_config()
     # First key per repo, as the fallback when an issue carries no key: label.
     keys = {}
@@ -532,9 +623,16 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             row[f"field_{name.lower().replace(' ', '_')}"] = value
         if with_history:
             hist = history(content["id"])
+            raw_events = hist.pop("_events", [])
             row.update(hist)
             row["cycle_time_days"] = days_between(hist["started_at"], hist["done_at"])
             row["lead_time_days"] = days_between(hist["added_to_board_at"], hist["done_at"])
+            if events is not None:
+                events.extend(event_rows(
+                    {"id": content["id"], "number": content["number"],
+                     "issue_key": row["issue_key"]},
+                    raw_events, f"{login}/{number}",
+                ))
         out.append(row)
     return out
 
@@ -1653,7 +1751,9 @@ def cmd_export(args) -> int:
     since = args.since or (state.get(key, {}).get("watermark") if args.state else None)
 
     started = _now()
-    data = rows(args.owner, args.project, with_history=not args.no_history, since=since)
+    events: list[dict] | None = [] if args.grain in ("events", "both") else None
+    data = rows(args.owner, args.project, with_history=not args.no_history,
+                since=since, events=events)
     for row in data:
         # Stamped per row as well as in the filename: a loader that concatenates
         # several exports keeps the ordering without re-deriving it from a path.
@@ -1664,16 +1764,29 @@ def cmd_export(args) -> int:
     else:
         print(f"  full export: {len(data)} row(s)", file=sys.stderr)
 
+    if events is not None:
+        for event in events:
+            event["exported_at"] = started
+        print(f"  {len(events)} event row(s)", file=sys.stderr)
+
     if args.out_dir:
+        # One directory per project key, so several projects can export into one
+        # tree without colliding: exports/ZMBNI/agile_issues_....csv
         directory = pathlib.Path(args.out_dir)
+        key = (args._config.get("project") or {}).get("key")
+        if key and directory.name != key:
+            directory = directory / key
         directory.mkdir(parents=True, exist_ok=True)
         suffix = "csv" if args.csv else "json"
-        path = directory / f"agile_issues_{file_stamp(started)}.{suffix}"
-        with path.open("w", newline="") as handle:
-            _write(data, handle, csv_format=args.csv)
-        print(f"  wrote {path}", file=sys.stderr)
+        for grain, payload in (("issues", data), ("events", events)):
+            if payload is None or (grain == "issues" and args.grain == "events"):
+                continue
+            path = directory / f"agile_{grain}_{file_stamp(started)}.{suffix}"
+            with path.open("w", newline="") as handle:
+                _write(payload, handle, csv_format=args.csv)
+            print(f"  wrote {path}", file=sys.stderr)
     else:
-        _write(data, sys.stdout, csv_format=args.csv)
+        _write(data if args.grain != "events" else events, sys.stdout, csv_format=args.csv)
 
     if args.state:
         # The watermark is pulled back by the overlap, so the next run re-reads
@@ -2048,6 +2161,9 @@ why this is needed:
 
     export = sub.add_parser("export", help="items, field values and status history")
     export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
+    export.add_argument("--grain", default="issues", choices=["issues", "events", "both"],
+                        help="issues is one row per work item; events is one row per timeline "
+                             "event. Both come from the same queries (default: %(default)s)")
     export.add_argument("--since", help="ISO8601 lower bound on updated_at; overrides the state file")
     export.add_argument(
         "--state",

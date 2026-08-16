@@ -655,7 +655,104 @@ Two rules worth encoding in whatever drives it:
 
 ---
 
-## 8. Command reference
+## 8. Exporting issues and events
+
+Two grains, because they answer different questions and cannot share a file:
+
+| Grain | One row per | Gold table |
+|---|---|---|
+| `issues` | work item, every custom field flattened, joined to its status history | `agile_issues` |
+| `events` | thing that happened — status change, assignment, label, close, reopen | `agile_events` |
+
+```bash
+gh agile export --grain both --csv --out-dir exports/
+```
+```
+  full export: 24 row(s)
+  163 event row(s)
+  wrote exports/AGILE/agile_issues_20260816T031917Z.csv
+  wrote exports/AGILE/agile_events_20260816T031917Z.csv
+```
+
+**Events cost no extra API calls.** The expensive part of an export is the
+timeline query, one per issue, and it already runs to produce the history
+columns — `started_at`, `done_at`, `cycle_time_days`. The event grain is that
+same data reshaped.
+
+**Output goes under the project key**, so several projects can export into one
+tree without colliding and a loader can tell whose rows it is reading from the
+path alone: `--out-dir exports/` writes `exports/AGILE/…`.
+
+Event rows carry `event_hash`, a digest of issue, event type and timestamp,
+stable across exports. An overlapping incremental run re-emits the same event
+with the same hash, so the target overwrites rather than duplicating.
+
+### A daily incremental export
+
+06:00 UTC, both grains, into a per-key folder:
+
+```cron
+CRON_TZ=UTC
+PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
+HOME=/home/you
+LOG=/home/you/.local/state/gh-agile/export.log
+
+0 6 * * *  cd /srv/projects/Zamboni && gh-agile export --grain both --csv --out-dir /srv/exports >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
+```
+
+`CRON_TZ=UTC` because cron otherwise uses the system timezone, and a job named
+for one clock and scheduled by another is a confusion that surfaces months
+later. The watermark makes each run incremental; the first is a full export.
+
+### Compacting and measuring: an optional companion
+
+**The extension has no dependencies, and cannot have any.** `gh extension
+install` clones the repository and installs nothing — there is no dependency
+step for a script extension — so an `import duckdb` inside `gh-agile` would
+break every install that happened not to have it. It is standard library only,
+permanently.
+
+Analysis lives in a companion script, which declares its dependency with PEP 723
+inline metadata so `uv` fetches it into an ephemeral environment:
+
+```bash
+uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI compact
+uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI metrics
+```
+
+`compact` folds the daily files into one per month, keeping the newest row per
+key — `number` for issues, `event_hash` for events — so the overlap incremental
+export deliberately creates collapses:
+
+```
+  agile_issues_monthly_202608.csv: 24 row(s) from 2 daily file(s)
+  agile_events_monthly_202608.csv: 158 row(s) from 2 daily file(s)
+```
+
+48 daily issue rows became 24. `--keep` leaves the dailies in place.
+
+`metrics` computes six, each one SQL statement over the export:
+
+| Metric | Answers |
+|---|---|
+| `throughput` | items reaching Done per month |
+| `cycle_time` | mean, median and worst days from first *In Progress* to *Done* |
+| `lead_time` | mean and median days from joining the board to *Done* |
+| `wip` | how many items sit in each status now |
+| `sprint_load` | items, points and completions per sprint |
+| `flow_churn` | items with the most status changes — thrash, or a story too big |
+
+DuckDB rather than pandas: it reads a glob of CSVs directly, deduplicates with a
+window function and writes CSV in one statement, and nothing has to fit in
+memory. Either would work; this is less code.
+
+Monthly, after that day's export:
+
+```cron
+0 7 1 * *  cd /srv/projects/Zamboni && uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI compact >> $LOG 2>&1
+```
+
+## 9. Command reference
 
 Every command lists its own fields with type, obligation and description:
 
@@ -676,5 +773,5 @@ gh agile move --help
 | `set` | Set one field on an item already on the board |
 | `move` | Change status, with the evidence that status requires |
 | `validate` | Check the conventions a machine can check |
-| `export` | Items joined to status history, full or incremental |
+| `export` | Issues and events, full or incremental, to stdout or timestamped files |
 | `self-test` | Stand up a scratch project, exercise everything, tear it down |

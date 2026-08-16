@@ -7,13 +7,14 @@ OWNER ?= paulcaron16k
 REPO  ?= paulcaron16k/gh-agile
 PROJECT ?= 1
 
-.PHONY: self-test scratch teardown lint check-guide help
+.PHONY: self-test scratch teardown lint check-guide metrics help
 
 help:
 	@echo "make self-test           stand a scratch project up, exercise it, tear it down"
 	@echo "make scratch             leave a scratch project standing, for poking at by hand"
 	@echo "make teardown NUM=<n>    delete a scratch project left by 'make scratch'"
 	@echo "make check-guide         every command in USER_GUIDE.md exists; the safe ones run"
+	@echo "make metrics DIR=<path>  compact an export directory and report Agile metrics"
 	@echo "make lint                syntax and style"
 	@echo
 	@echo "OWNER=$(OWNER)  REPO=$(REPO)"
@@ -45,6 +46,14 @@ teardown:
 # hand-running a command that had already been written down.
 check-guide:
 	python3 scripts/check_guide.py
+
+# Needs uv: the analytics script declares duckdb with PEP 723 inline metadata,
+# because `gh extension install` installs no dependencies and the extension
+# itself must stay standard library only.
+metrics:
+	@test -n "$(DIR)" || { echo "usage: make metrics DIR=exports/KEY"; exit 2; }
+	uv run scripts/agile_analytics.py --dir $(DIR) compact --keep
+	uv run scripts/agile_analytics.py --dir $(DIR) metrics
 
 lint:
 	python3 -c "import ast,sys; ast.parse(open('gh-agile').read()); print('gh-agile parses')"
