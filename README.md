@@ -11,6 +11,165 @@ gh agile --project 1 validate          # do the conventions hold?
 gh agile --project 1 export --csv      # backlog with status history
 ```
 
+## The object model
+
+Where each piece of state lives, and why some of it is on the project rather
+than on the issue.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class Repository {
+        +name
+        +issue number sequence
+    }
+    class Issue {
+        +number  per repo, shared with PRs
+        +title, body
+        +state  OPEN | CLOSED
+        +stateReason  COMPLETED | NOT_PLANNED
+        +labels[]  type:story, key:ZMBNI
+        +assignees[]  many, point-in-time
+        +author  no separate reporter
+    }
+    class SubIssueEdge {
+        parent to child
+        +epic to story
+    }
+    class TimelineEvent {
+        +actor  WHO
+        +occurredAt  WHEN
+        +status / previousStatus
+        +wasAutomated
+    }
+    class PullRequest {
+        +author  who did the work
+        +closingIssuesReferences
+    }
+
+    class ProjectV2 {
+        +number, title
+        +shortDescription  holds the KEY
+        +no key field of its own
+    }
+    class ProjectV2Item {
+        one per project, per issue
+        +createdAt, updatedAt  no history
+    }
+    class FieldValue {
+        +Status  Todo..Done
+        +Sprint  iteration
+        +Story Points, Priority, FR
+    }
+    class ProjectV2View {
+        +layout  BOARD | TABLE | ROADMAP
+        +filter  makes it scrum or kanban
+    }
+
+    Repository "1" --> "*" Issue
+    Issue "1" --> "*" SubIssueEdge
+    SubIssueEdge "*" --> "1" Issue : epic holds stories
+    Issue "1" --> "*" TimelineEvent : HISTORY lives here
+    PullRequest "*" --> "*" Issue : closes
+    Repository "1" --> "*" PullRequest
+
+    ProjectV2 "1" --> "*" ProjectV2Item
+    ProjectV2 "1" --> "*" ProjectV2View
+    ProjectV2Item "*" --> "1" Issue : references
+    ProjectV2Item "1" --> "*" FieldValue : PLANNING STATE lives here
+```
+
+### Why the planning state is not on the issue
+
+An issue has one `state` and it has two values: `OPEN` and `CLOSED`. There is no
+`In Progress`, no story point, no sprint — GitHub does not model them, and issue
+*fields*, which would, are organization-only.
+
+So planning state lives on the **project item**: a join row between one project
+and one issue, holding that project's values for that issue. Three consequences
+follow, and every design decision in this tool descends from one of them.
+
+- **The same issue on two projects has two independent sets of values.** Move it
+  to Done on a team board and an engineering board still shows it In Progress,
+  with nothing reporting the divergence. This is why boards are *views over one
+  project* rather than separate projects.
+- **A project cannot be a filter.** A filter has nowhere to put a value, so an
+  item must exist before it can hold one — which is why `sync` exists and why
+  nothing arrives on a board by matching a query.
+- **Only `Status` has history.** `ProjectV2Item` carries `createdAt`,
+  `updatedAt` and current values; the past lives on the *issue's* timeline as
+  `ProjectV2ItemStatusChangedEvent`. Every other field's history must be
+  reconstructed from snapshots.
+
+`Sprint` is worse still: `ProjectV2Iteration` has no `id`, so any change to the
+iteration configuration mints new ids and **clears every item's sprint
+assignment**. This tool saves and re-applies them around any such change.
+
+### Project properties this tool sets
+
+| Property | Description | Value / enum |
+|---|---|---|
+| `title` | The board's name, as GitHub shows it | e.g. `gh-agile` |
+| `shortDescription` | Human name **and key**, because ProjectV2 has no key field | `"<name> [<KEY>]"`, e.g. `gh-agile: Agile management on GitHub [AGILE]` |
+| `number` | Assigned by GitHub; recorded in the profile as `project.number` and defaulted from there | integer |
+
+### Field properties this tool sets
+
+`setup` creates these on the project and converges them on every run.
+
+| Field | Description | Value / enum |
+|---|---|---|
+| `Status` | Workflow state. Five, deliberately — every extra column is a decision someone has to make | `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` |
+| `Story Points` | Estimate. Number, not select, so it can be summed | number |
+| `Priority` | Jira's five, so the two systems map without translation | `lowest`, `low`, `medium`, `high`, `highest` |
+| `Sprint` | Iteration. Cadence and start day come from the profile | iteration, default 14 days |
+| `FR` | Requirement traceability | free text, e.g. `FR-7.18` |
+
+### Board properties this tool sets
+
+A board is a **view**: a layout plus a filter. The filter is what makes it scrum
+or kanban.
+
+| Property | Description | Value |
+|---|---|---|
+| `name` | Identity for convergence — `setup` matches on it | e.g. `Team: AGILE only` |
+| `layout` | How items are drawn | `BOARD_LAYOUT`, `TABLE_LAYOUT`, `ROADMAP_LAYOUT` |
+| `filter` | The type's base filter, ANDed with any extra | scrum `sprint:@current` · kanban `-status:Done` · backlog `no:sprint -status:Done` · roadmap `label:type:epic` |
+
+Live example from this repository's own board:
+
+```
+#2  Team: AGILE only       scrum    board  sprint:@current label:key:AGILE
+#3  Engineering: all work  kanban   board  -status:Done
+#4  Backlog                backlog  table  no:sprint -status:Done
+```
+
+**Column limits are not settable.** `ProjectV2View` exposes no limit field, so a
+kanban board's WIP limits stay a web-UI setting.
+
+### A complete view of one issue
+
+Neither source is sufficient alone; a reader needs both.
+
+| Property | Where | Description | Value / enum |
+|---|---|---|---|
+| `number` | issue | Per repository, shared with pull requests, never reused | integer |
+| `issue_key` | derived | Jira-style identity, from the `key:` label or the profile | `ZMBNI-1817` |
+| `title`, `body` | issue | Body carries `## Intent`, `## Acceptance`, `## Evidence` | markdown |
+| `state` | issue | GitHub's only two | `OPEN`, `CLOSED` |
+| `stateReason` | issue | Distinguishes finished from abandoned | `COMPLETED`, `NOT_PLANNED` |
+| `labels[]` | issue | Type and key ride here, since issue types are org-only | `type:epic\|story\|bug`, `key:<KEY>` |
+| `assignees[]` | issue | **Many**, where Jira has one. Point-in-time: developer, then reviewer, then QA | logins |
+| `author` | issue | GitHub has no separate reporter field | login |
+| `parent` | issue | The sub-issue edge — this is what an epic *is* | issue number |
+| `closingIssuesReferences` | pull request | Names who did the work; the source of `worked_by` | PR number + author |
+| `Status` | **project item** | Workflow state | see above |
+| `Sprint` | **project item** | Iteration | sprint title |
+| `Story Points`, `Priority`, `FR` | **project item** | Estimate, priority, traceability | see above |
+| `started_at`, `done_at` | timeline | First `In Progress`, arrival at `Done` | timestamps |
+| `worked_by` | derived | Closing PR's author, else who moved it to review/done | login |
+
 ## Why not just `gh project item-list`?
 
 Because that gives you a **snapshot**. `ProjectV2Item` exposes `createdAt`,
