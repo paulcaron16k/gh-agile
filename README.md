@@ -7,8 +7,8 @@ would a Jira export.
 ```bash
 gh extension install paulcaron16k/gh-agile
 
-gh agile --project 1 validate          # do the conventions hold?
-gh agile --project 1 export --csv      # backlog with status history
+gh agile validate          # do the conventions hold?
+gh agile export --csv      # backlog with status history
 ```
 
 ## The object model
@@ -238,7 +238,7 @@ span repositories — the key is recorded per repository:
 
 ```bash
 gh agile key --repo paulcaron16k/Zamboni --key ZMBNI
-gh agile --project 4 key --repo paulcaron16k/gh-agile --key AGILE \
+gh agile key --repo paulcaron16k/gh-agile --key AGILE \
          --name "gh-agile: Agile management on GitHub"
 gh agile key                                    # list what is recorded
 ```
@@ -249,15 +249,44 @@ Gold model's `issue_key`. Without a recorded key it falls back to
 `"<name> [<KEY>]"` to the project's `shortDescription`, the nearest thing GitHub
 has to a place for the pair.
 
-## Incremental export
+## Export: silver tables, three grains
 
-For feeding another system on a schedule:
+**What is exported is silver.** `github_issues` and `github_events` are GitHub's
+facts under GitHub's names. The Gold `agile_*` tables belong to the
+ExperienceFlow model and are produced by a **silver → gold transform in the IWS
+Partner pipeline** — the place where `org_master_employees` exists to resolve a
+login into an `actor_id`. Nothing here writes an `agile_*` file, and the `github_`
+prefix is the reminder.
+
+The transform is not cosmetic. Of the Gold model's 58 `agile_issues` fields only
+two names match, and where they do the **units differ**: `cycle_time_days`
+against `cycle_time_hours`, a factor of 24 that corrupts a dashboard quietly
+rather than failing loudly. Events fare better — 14 of 22 — having been built to
+Gold's vocabulary. See [GOLD_MODEL.md](GOLD_MODEL.md).
+
+| Grain | Rows | Refresh |
+|---|---|---|
+| `github_issues` | one per work item, fields flattened, joined to status history | incremental |
+| `github_events` | one per timeline event, with actor and timestamp | incremental |
+| `github_project`, `github_boards`, `github_sprints` | the configuration | **always full** |
 
 ```bash
-gh agile --project 4 export --csv --out-dir exports/     # full; writes a watermark
-gh agile --project 4 export --csv --out-dir exports/     # since the watermark
-gh agile --project 4 export --since 2026-08-01T00:00:00Z # explicit override
-gh agile --project 4 export --no-state                   # always full
+gh agile export --grain all --csv --out-dir exports/   # everything
+gh agile export --grain both --csv --out-dir exports/  # issues + events
+gh agile export --grain master --csv --out-dir exports/
+```
+
+Master data is small, changes rarely, and is reloaded whole every time. A
+watermark over it would be a way to miss the one change that mattered — a
+board's filter edited, a key added — so the question of what changed belongs to
+the loader.
+
+### Incremental, for the two large grains
+
+```bash
+gh agile export --grain both --csv --out-dir exports/   # since the watermark
+gh agile export --since 2026-08-01T00:00:00Z            # explicit override
+gh agile export --no-state                              # always full
 ```
 
 Files are named `agile_issues_<ISO8601 basic>.csv` — `agile_issues_20260814T184850Z.csv`
@@ -289,12 +318,30 @@ which are one per issue and the real cost.
 > parser in the standard library, and a partial one that reads only what this
 > tool writes is a trap the first time someone edits it by hand.
 
-## What it does not do yet
+## What it does not do
 
-Creation. `setup`, `epic` and `story` are the next iteration; until then use
-`gh project item-create` and the web UI. The read side came first deliberately:
-the export schema is the one thing that cannot be changed later without
-re-analysing everything already exported.
+**Custom-field history.** GitHub emits a timeline event when `Status` changes
+and for nothing else, so the history of points, sprint or priority has to be
+reconstructed by diffing scheduled exports. `ProjectV2Iteration` carries no id
+either, which is why any sprint-configuration change clears every assignment and
+why this tool saves and re-applies them.
+
+**WIP limits.** `ProjectV2View` exposes no limit field. A kanban board's column
+limits stay a web-UI setting.
+
+**Issue types and issue fields.** Both organization-only —
+`/repos/{owner}/{repo}/issues/types` returns 404 on a user-owned repository and
+`createIssueField` resolves only an Organization node. Type and key therefore
+ride labels: `type:story`, `key:ZMBNI`.
+
+**Pull requests, reviews and review comments** are not yet a grain of their own.
+Issue-linked PR events are exported as `change-request-opened`; the rest is
+tracked as AGILE-37.
+
+**Dependencies.** Not a limitation so much as a rule: `gh extension install`
+clones the repository and installs nothing, so this stays standard library only.
+Analysis that needs DuckDB lives in `scripts/agile_analytics.py`, which declares
+it through PEP 723 and runs under `uv`.
 
 ## Requirements
 

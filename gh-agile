@@ -202,6 +202,7 @@ query($login: String!, $number: Int!, $cursor: String) {
             __typename
             ... on Issue {
               id number title url state stateReason createdAt updatedAt closedAt
+              author { login }
               repository { nameWithOwner }
               labels(first: 20) { nodes { name } }
               assignees(first: 10) { nodes { login } }
@@ -659,6 +660,10 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             "epic_title": (content.get("parent") or {}).get("title") or "",
             "sub_issues_total": (content.get("subIssuesSummary") or {}).get("total") or 0,
             "sub_issues_done": (content.get("subIssuesSummary") or {}).get("completed") or 0,
+            # GitHub's `author` is who opened the issue and cannot be changed
+            # afterwards, so it is a stronger `reporter` than Jira's, which is
+            # editable. Named for the role rather than the API field.
+            "reported_by": (content.get("author") or {}).get("login") or "",
             "created_at": content["createdAt"],
             "updated_at": content["updatedAt"],
             "closed_at": content.get("closedAt") or "",
@@ -1794,6 +1799,68 @@ def replace_section(body: str, name: str, text: str) -> str:
 REQUIRED_FOR = {"done": ("Evidence",)}
 
 
+def master_rows(login: str, project: int, config: dict, stamp: str) -> dict[str, list[dict]]:
+    """Configuration as three full tables: project, boards, sprints.
+
+    **Always a full refresh, never incremental.** These are small, they change
+    rarely, and a watermark over them would be a way to miss the one change that
+    mattered -- a board's filter edited, a key added. Reload the whole thing and
+    the question of what changed becomes the loader's, where it belongs.
+    """
+    project_row = {
+        "exported_at": stamp,
+        "project_id": project,
+        "project_name": (config.get("project") or {}).get("name") or "",
+        "project_key": (config.get("project") or {}).get("key") or "",
+        # Semicolon-joined rather than a nested structure: this is a CSV, and a
+        # loader that has to parse JSON out of a cell is a loader that will get
+        # it wrong once.
+        "keys": ";".join(k.get("key", "") for k in profile_keys(config)),
+        "repos": ";".join(sorted({k.get("repo", "") for k in profile_keys(config)})),
+        "sprint_cadence_days": sprint_settings(config)["cadence_days"],
+        "sprint_start_day": sprint_settings(config)["start_day"],
+    }
+
+    board_rows = []
+    for view in views_of(login, project):
+        declared = {b["name"]: b["type"] for b in (config.get("boards") or [])}
+        board_rows.append({
+            "exported_at": stamp,
+            "project_id": project,
+            "board_id": view["number"],
+            "board_name": view["name"],
+            "board_type": declared.get(view["name"], "custom"),
+            "layout": view["layout"].replace("_LAYOUT", "").lower(),
+            "filter": view.get("filter") or "",
+        })
+
+    sprint_rows = []
+    try:
+        active, completed = iterations(login, project)
+    except SystemExit:
+        active, completed = [], []
+    import datetime as dt
+
+    today = dt.date.today()
+    for state, group in (("completed", completed), ("active", active)):
+        for iteration in group:
+            start = dt.date.fromisoformat(iteration["startDate"])
+            end = start + dt.timedelta(days=iteration["duration"] - 1)
+            sprint_rows.append({
+                "exported_at": stamp,
+                "project_id": project,
+                "sprint_name": iteration["title"],
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "duration_days": iteration["duration"],
+                # GitHub reports completed separately from active; current and
+                # future are told apart by the date, since it does not.
+                "state": ("completed" if state == "completed"
+                          else "current" if start <= today <= end else "future"),
+            })
+    return {"project": [project_row], "boards": board_rows, "sprints": sprint_rows}
+
+
 def cmd_export(args) -> int:
     """Full or incremental, to stdout or to a timestamped file.
 
@@ -1808,7 +1875,7 @@ def cmd_export(args) -> int:
     since = args.since or (state.get(key, {}).get("watermark") if args.state else None)
 
     started = _now()
-    events: list[dict] | None = [] if args.grain in ("events", "both") else None
+    events: list[dict] | None = [] if args.grain in ("events", "both", "all") else None
     data = rows(args.owner, args.project, with_history=not args.no_history,
                 since=since, events=events)
     for row in data:
@@ -1835,8 +1902,15 @@ def cmd_export(args) -> int:
             directory = directory / key
         directory.mkdir(parents=True, exist_ok=True)
         suffix = "csv" if args.csv else "json"
-        for grain, payload in (("issues", data), ("events", events)):
-            if payload is None or (grain == "issues" and args.grain == "events"):
+        tables = [("issues", data), ("events", events)]
+        if args.grain in ("master", "all"):
+            tables += list(master_rows(args.owner, args.project, args._config, started).items())
+        for grain, payload in tables:
+            if payload is None:
+                continue
+            if grain == "issues" and args.grain in ("events", "master"):
+                continue
+            if grain == "events" and args.grain == "master":
                 continue
             path = directory / f"github_{grain}_{file_stamp(started)}.{suffix}"
             with path.open("w", newline="") as handle:
@@ -2218,9 +2292,12 @@ why this is needed:
 
     export = sub.add_parser("export", help="items, field values and status history")
     export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
-    export.add_argument("--grain", default="issues", choices=["issues", "events", "both"],
-                        help="issues is one row per work item; events is one row per timeline "
-                             "event. Both come from the same queries (default: %(default)s)")
+    export.add_argument("--grain", default="issues",
+                        choices=["issues", "events", "both", "master", "all"],
+                        help="issues is one row per work item; events one row per timeline "
+                             "event, from the same queries; master is the configuration -- "
+                             "project, boards and sprints -- always a full refresh "
+                             "(default: %(default)s)")
     export.add_argument("--since", help="ISO8601 lower bound on updated_at; overrides the state file")
     export.add_argument(
         "--state",
@@ -2267,10 +2344,24 @@ def apply_defaults(args) -> None:
     if getattr(args, "owner", "@me") == "@me":
         args.owner = json.loads(gh(["api", "user"]))["login"]
 
+    declared = (config.get("project") or {}).get("number")
     if getattr(args, "project", None) is None and args.command != "self-test":
-        number = (config.get("project") or {}).get("number")
-        if number:
-            args.project = number
+        if declared:
+            args.project = declared
+    elif declared and args.command != "self-test" and args.project != declared:
+        # A project number that disagrees with the profile is almost always the
+        # right flag typed in the wrong clone: the profile here describes a
+        # different board, so the keys, boards and sprint settings about to be
+        # used all belong to that other project. Refusing is cheaper than
+        # writing this project's conventions onto that one.
+        sys.exit(
+            f"--project {args.project} does not match project.number {declared} in "
+            f"{find_config(getattr(args, 'config', None)) or 'the profile'}.\n"
+            f"  The profile here configures project #{declared}: its keys, boards and "
+            f"sprint cadence.\n"
+            f"  To work on #{args.project}, change to that project's main repository "
+            f"(or a supporting repo carrying its config_from pointer)."
+        )
 
     key = getattr(args, "key", None)
     repo = getattr(args, "repo", None)

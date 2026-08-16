@@ -900,6 +900,7 @@ a pull request body, and an invented summary is worse than a null.
 
 | Column | From |
 |---|---|
+| `reported_by` | `Issue.author` — who opened it. GitHub's cannot be changed after the fact, where Jira's reporter can, so it is the firmer of the two |
 | `worked_by` | The closing pull request's author; failing that, whoever first moved the issue into *In Review* or *Done* |
 | `closing_pr` | That pull request's number, or empty |
 
