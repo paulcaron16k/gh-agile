@@ -407,11 +407,46 @@ gh agile sync --dry-run                 # what is missing, changing nothing
 gh agile sync                           # every repo in the profile keys
 gh agile sync --repo owner/other-repo   # just one
 gh agile sync --query "label:type:story" --state all
+gh agile sync --adopt                   # and give what it adds the convention
 ```
 ```
   added paulcaron16k/other-repo#12  Compact on a schedule
   added 1, already present 10, across 2 repo(s)
 ```
+
+### `--adopt`: upgrading an issue created outside the tool
+
+Being on the board is not the same as following the convention. An issue opened
+in the web UI arrives with no `key:` label, no `type:` label, and a project item
+whose Status is empty — which puts it in no column of any board.
+
+```bash
+gh agile sync --adopt
+```
+```
+  added paulcaron16k/gh-agile#49  adopt test: opened outside the tool
+    + key:AGILE
+    + Status = Todo
+```
+
+Status is set only when it is empty: an item already in a column was put there
+by somebody, and `Todo` would move their work backwards.
+
+**It does not set `type:`, deliberately.** Nothing in an issue distinguishes an
+epic from a story from a bug, and a guessed label later reads as somebody's
+decision. `gh agile validate` reports the gap:
+
+```
+no type: label (1):
+  #49 adopt test: opened outside the tool
+```
+
+To do this on issue creation rather than before planning, copy
+`templates/issue-adopt.yml` into each repository on the board. It needs a
+`PROJECT_TOKEN` secret — writing to a project is outside the default
+`GITHUB_TOKEN`'s reach whatever permissions block you write, unlike labelling an
+issue, which is why `templates/auto-assign.yml` needs no token and this does. If
+you would rather hold no token, schedule `sync --adopt` as below.
 
 ### How often, and what goes wrong if you do not
 
@@ -553,9 +588,22 @@ Idempotent: it creates only the shortfall, so running it twice is a no-op. This
 is Jira's model — future sprints waiting in the backlog — and it means starting
 work never has to change the project's configuration.
 
-```cron
-0 7 * * 1  cd /srv/projects/Zamboni && gh-agile sprint ensure >> $LOG 2>&1
-```
+**Do not put this in cron** — unlike `sync`, which is scheduled below and
+should be. The difference is what each one does when nothing has happened:
+`sync` discovers work that already exists and finds nothing, while a weekly
+`sprint ensure` manufactures sprints straight through a quiet quarter — a row of
+empty iterations nobody planned, and a burndown that reports absence as
+activity. Sprint creation is driven by work instead:
+
+- `sprint ensure`, when a person or an agent runs it — typically at planning.
+- `move --status "In Progress"`, which creates the sprint covering today if none
+  is active and `autocreate` is on.
+
+Stop work for four months and there are no sprints for those months, because
+nothing was running to invent them. Resume, and the sprint covering that day is
+created with two ahead. Gaps are **skipped, not backfilled**: numbering jumps
+from `Sprint 2` to `Sprint 5`, which is the honest record that nobody worked in
+3 and 4. Jira behaves the same way.
 
 ### Choose the cadence before creating work
 
@@ -599,6 +647,7 @@ Configuration lives in the profile:
 | `ahead` | `2` | Future sprints `ensure` keeps |
 | `autocreate` | `true` | Whether `move` may create one as a fallback |
 | `name_template` | `"{key} Sprint {n}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
+| `record_label` | `true` | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes |
 
 The template is `str.format`, not Jinja: this tool has no dependencies and
 Jinja2 would be its only one. The default follows Jira's `<Board> Sprint <n>`,
@@ -656,20 +705,113 @@ iterations carry no id.
 `autocreate: false` to have it warn and leave the field empty instead.
 
 > **Every change to the sprint configuration clears existing sprint
-> assignments**, and this is GitHub's behaviour rather than a choice. The
-> configuration is replaced wholesale and `ProjectV2Iteration` — the only input
-> accepted — carries `startDate`, `duration` and `title` and **no id**, so each
-> update mints new iteration ids and orphans every item pointing at an old one.
-> Verified by appending one sprint while re-sending the others identically: the
-> assignment vanished. `gh agile` therefore reads every assignment, makes the
-> change, and re-applies them, reporting how many it restored. Changing the
-> configuration in the **web UI** has no such protection.
+> assignments** — all of them, not only the sprint you touched. This is GitHub's
+> behaviour rather than a choice: the configuration is replaced wholesale and
+> `ProjectV2Iteration`, the only input accepted, carries `startDate`, `duration`
+> and `title` and **no id**, so each update mints new iteration ids and orphans
+> every item pointing at an old one.
+>
+> Measured with four items staged across a completed, a current and a future
+> sprint: renaming **one unused future sprint** unassigned every one of them,
+> including a **closed issue in the completed sprint**. A pure append —
+> re-sending each existing entry byte-identical and adding one — does exactly
+> the same, and that append is the routine fortnightly act.
+>
+> `gh agile` reads every assignment, makes the change, and re-applies them,
+> reporting how many it restored. That repair is one API call per assigned item
+> and is **not transactional**: during testing the GraphQL budget ran out
+> partway through and the remaining assignment was lost. Treat every sprint as
+> immutable once created, and see *Which sprint was this worked in?* below.
+> Changing the configuration in the **web UI** has no protection at all.
 
 > `start_day` is this tool's alignment rule, not a GitHub setting. The API's
 > configuration input has no `startDay`, and GitHub does not derive one from a
 > start date — sending a Monday left the field reporting Sunday. It affects only
 > what the web UI suggests. `setup` therefore converges `cadence_days` and
 > leaves `startDay` alone.
+
+### Which sprint was this worked in?
+
+Not the `Sprint` field — it is live UI state and forgets, as above. The durable
+answer is a label on the issue:
+
+```
+sprint:2026-08-10
+```
+
+Dated rather than named: a sprint's title is cosmetic and can be changed, while
+its start date is its identity, and dates sort. `move` writes it when work
+starts and again when it finishes, so an item carried across a boundary carries
+one label per sprint it lived in:
+
+```bash
+gh agile move 53 --status "In Progress"     #  #53 + sprint:2026-08-10
+gh agile move 53 --status Done --close      #  #53 + sprint:2026-08-24
+```
+
+The export carries both, beside the live field:
+
+| Column | Meaning |
+|---|---|
+| `field_sprint` | What the project item holds **now**. Cleared by any iteration write |
+| `sprint_starts` | Every sprint the issue lived in, oldest first — `2026-08-10;2026-08-24` |
+| `sprint_closed_in` | The last of them: the sprint it finished in |
+
+Demonstrated by renaming an unused future sprint and exporting immediately:
+
+```
+field_sprint      = ''                          ← wiped
+sprint_starts     = '2026-08-10;2026-08-24'     ← intact
+sprint_closed_in  = '2026-08-24'
+```
+
+**Where they disagree, believe the labels.** Set `sprint.record_label: false` to
+turn the stamping off.
+
+The field still earns its place: `sprint:@current` is what makes a scrum board
+show the current sprint, and no label can do that without being edited every
+fortnight. Field for the board, labels for the record.
+
+### Where the web UI and this tool disagree
+
+Everything here was checked against the live API, not inferred. The README's
+**Sprint management** section carries the same list beside the object diagram.
+
+| What | Consequence |
+|---|---|
+| **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit — see the note above. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
+| **Built-in project workflows cannot be enabled through the API** | The schema has `deleteProjectV2Workflow` and no create or update. `setup` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
+| **A user-owned project has no auto-add-issues workflow** | The six built-ins are: auto-add sub-issues to project, auto-close issue, item added to project, item closed, pull request linked to issue, pull request merged. Nothing puts a newly opened repository issue on the board — hence `sync` |
+| **The series anchor is write-only** | `ProjectV2IterationFieldConfigurationInput` takes `startDate`, `duration`, `iterations`; the readable `ProjectV2IterationFieldConfiguration` exposes `startDay`, `duration`, `iterations`, `completedIterations` — and no `startDate`. You cannot read back the anchor you sent |
+| **A sprint created in the web UI can be any length, on any day** | It may overlap what this tool would place. `ensure` then reports that it cannot place one without overlapping, and creates nothing |
+| **Column and WIP limits are not settable** | `ProjectV2View` exposes no limit field; they stay a web-UI setting |
+
+### Best practice
+
+**Safe in the web UI** — these are per-item values, and touch no shared
+configuration:
+
+- Dragging a card between columns, and setting Status, Sprint, Points, Priority
+  or assignees on an item.
+- Editing a board's filter, layout and visible fields.
+- Writing issue bodies and comments.
+
+**Do in the tool, not the web UI:**
+
+- Creating sprints — `gh agile sprint ensure`, or let `move` create one.
+- Renaming or re-dating a sprint. There is no safe web-UI path: it clears
+  assignments board-wide. Prefer changing `name_template`, which affects only
+  sprints created afterwards.
+- Creating fields and boards — `setup` converges them; a hand-made one drifts.
+
+**Two manual steps the API cannot do for you.** Enable the built-in *Item added
+to project* workflow to set `Status` on anything added by any path, and the
+automations in `templates/` if you want the board to show who is on a card. Both
+are web-UI toggles.
+
+**After a web-UI session, run `gh agile validate`.** It is the cheapest way to
+find an item that lost its sprint, a story with no epic, or a closed issue whose
+status never reached Done.
 
 ## 5. Creating an epic and a story
 

@@ -541,6 +541,27 @@ def read_config(path: str | None = None) -> dict:
 #: as `is:issue label:key:ZMBNI`.
 KEY_LABEL = "key:"
 
+#: The sprint an issue was actually worked in, written onto the issue as a
+#: label. Not a duplicate of the `Sprint` field -- a *replacement for its
+#: memory*.
+#:
+#: Measured on a live project: **any** write to the iteration configuration
+#: re-mints every iteration id and clears every item's Sprint value. Not only a
+#: rename -- re-sending all existing entries byte-identical and appending one
+#: does it too, which is the routine fortnightly act. A closed issue in a
+#: completed sprint was unassigned by renaming an unrelated, unused, future
+#: sprint. `gh-agile` reads all assignments and re-applies them around any such
+#: change, but that repair is one API call per assigned item and it is not
+#: transactional: exhaust the GraphQL budget partway, as happened during
+#: testing, and the remainder are simply lost.
+#:
+#: The label is immutable, lives on the issue rather than the project item, and
+#: survives removal from the board, deletion of the project, and every
+#: iteration-configuration write. It is dated rather than named because a title
+#: is cosmetic and editable while the start date is the sprint's identity, and
+#: because dates sort.
+SPRINT_LABEL = "sprint:"
+
 
 def key_problem(key: str) -> str | None:
     """Jira's own rules for a project key, and one of ours.
@@ -694,6 +715,14 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
         }
         for name, value in fields.items():
             row[f"field_{name.lower().replace(' ', '_')}"] = value
+        # Every sprint the issue was stamped with, oldest first. `field_sprint`
+        # is whatever the project item holds *now* -- which any iteration
+        # configuration write can clear -- while these are on the issue and
+        # cannot be. Where they disagree, believe the labels.
+        sprints = sorted(lb[len(SPRINT_LABEL):] for lb in labels
+                         if lb.startswith(SPRINT_LABEL))
+        row["sprint_starts"] = ";".join(sprints)
+        row["sprint_closed_in"] = sprints[-1] if sprints else ""
         if with_history:
             hist = history(content["id"])
             raw_events = hist.pop("_events", [])
@@ -1155,9 +1184,36 @@ BODY_TEMPLATE = """## Intent
 
 
 def add_to_project(login: str, project: int, url: str) -> str:
-    out = json.loads(gh(["project", "item-add", str(project), "--owner", login,
-                         "--url", url, "--format", "json"]))
-    return out["id"]
+    """Add an issue to the project, tolerating it already being there.
+
+    The built-in *Auto-add sub-issues to project* workflow is enabled by default
+    and races this: a story created under an epic that is already on the board
+    is added by GitHub within the second, and the explicit add then fails with
+    `Content already exists in this project`. Creating a story would abort after
+    the issue existed but before its fields were set -- the exact half-made
+    state `story` exists to prevent.
+    """
+    number = int(url.rsplit("/", 1)[-1])
+    result = subprocess.run(
+        ["gh", "project", "item-add", str(project), "--owner", login,
+         "--url", url, "--format", "json"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        return json.loads(result.stdout)["id"]
+    if "already exists" not in result.stderr:
+        sys.exit(f"gh project item-add failed: {result.stderr.strip()}")
+    existing = next(
+        # refresh: the board was read before GitHub's workflow added this, so
+        # the cached list is precisely the one that does not contain it.
+        (i["id"] for i in board_items(login, project, refresh=True)
+         if (i.get("content") or {}).get("number") == number),
+        None,
+    )
+    if not existing:
+        sys.exit(f"{url} is reported as already on project {project}, but no item "
+                 f"for it can be found")
+    return existing
 
 
 def require_key_for_prefix(config: dict, key) -> None:
@@ -1322,15 +1378,24 @@ def restore_assignments(login: str, project: int, saved: dict[str, str]) -> int:
     if not saved:
         return 0
     _FIELDS.pop((login, project), None)  # iteration ids changed
-    restored = 0
+    restored, failed = 0, []
     for item_id, title in saved.items():
         try:
             set_field(login, project, item_id, "Sprint", title)
             restored += 1
-        except SystemExit:
-            # A sprint that no longer exists cannot be restored; say so rather
-            # than abandoning the remaining items.
-            print(f"  could not restore {title!r} for {item_id[:12]}…", file=sys.stderr)
+        except SystemExit as exc:
+            # Carry the reason. Without it this printed only "could not
+            # restore", and an unrestored assignment is silent data loss -- the
+            # item is out of every sprint report and nothing says why.
+            failed.append((item_id, title))
+            print(f"  could not restore {title!r} for {item_id[:12]}…: {exc}", file=sys.stderr)
+    if failed:
+        print(
+            f"  {len(failed)} sprint assignment(s) were lost to the configuration "
+            f"change and could not be re-applied.\n"
+            f"  Re-assign them by hand: gh agile set --issue <n> --field Sprint --value <title>",
+            file=sys.stderr,
+        )
     return restored
 
 
@@ -1575,6 +1640,7 @@ SPRINT_DEFAULTS = {
     "autocreate": True,
     "ahead": 2,
     "name_template": "{key} Sprint {n}",
+    "record_label": True,
 }
 
 #: GitHub numbers `startDay` 1=Sunday … 7=Saturday. Python's weekday() is
@@ -1709,6 +1775,69 @@ def make_board(login: str, project: int, name: str, kind: str, extra: str | None
             "filter": combined, "action": action}
 
 
+def record_sprint_label(args, repo: str, issue_number: int, item_id: str) -> str | None:
+    """Stamp the issue with the sprint it is in, as `sprint:YYYY-MM-DD`.
+
+    Called when work starts and again when it closes, so an issue carried across
+    a boundary ends up with one label per sprint it lived in -- which the
+    `Sprint` field cannot express at all, holding only the latest.
+    """
+    if not sprint_settings(args._config).get("record_label", True):
+        return None
+    assigned = sprint_assignments(args.owner, args.project).get(item_id)
+    if not assigned:
+        return None
+    active, completed = iterations(args.owner, args.project)
+    match = next((i for i in active + completed if i["title"] == assigned), None)
+    if not match:
+        return None
+    label = f"{SPRINT_LABEL}{match['startDate']}"
+    existing = json.loads(gh(["issue", "view", str(issue_number), "--repo", repo,
+                              "--json", "labels"]))["labels"]
+    if label in {lb["name"] for lb in existing}:
+        return None
+    ensure_labels(repo, [label])
+    gh(["issue", "edit", str(issue_number), "--repo", repo, "--add-label", label])
+    return label
+
+
+def adopt_issue(args, repo: str, issue: dict, item_id: str) -> None:
+    """Give an issue created outside this tool the parts a machine can supply.
+
+    An issue opened in the web UI, by a bot, or with `gh issue create` arrives
+    with none of the convention: no `key:` label, and a project item whose Status
+    is empty, which puts it in no column of any board.
+
+    Two of the three gaps are mechanical and filled here. The **type is not**:
+    nothing in an issue reliably distinguishes an epic from a story from a bug,
+    and guessing writes a wrong `type:` label that later reads as a deliberate
+    one. `gh agile validate` reports it as missing and a person decides --
+    POLICY.md's line between what a machine may infer and what it may not.
+    """
+    keys = keys_for_repo(args._config, repo)
+    if keys:
+        label = f"{KEY_LABEL}{keys[0]}"
+        if label not in {lbl["name"] for lbl in issue.get("labels", [])}:
+            ensure_labels(repo, [label])
+            gh(["issue", "edit", str(issue["number"]), "--repo", repo, "--add-label", label])
+            print(f"    + {label}")
+    # Status only when it is empty: an item already in a column has been placed
+    # by somebody, and Todo would move their work backwards. The item is read by
+    # id rather than by listing the project -- a full listing per adopted issue
+    # is what turns a sync of twenty into twenty board reads, and the GraphQL
+    # budget is the binding constraint on this tool.
+    data = graphql(
+        "query($id: ID!) { node(id: $id) { ... on ProjectV2Item { "
+        'fieldValueByName(name: "Status") { '
+        "... on ProjectV2ItemFieldSingleSelectValue { name } } } } }",
+        id=item_id,
+    )
+    value = ((data.get("data") or {}).get("node") or {}).get("fieldValueByName")
+    if not (value or {}).get("name"):
+        set_field(args.owner, args.project, item_id, "Status", "Todo")
+        print("    + Status = Todo")
+
+
 def cmd_sync(args) -> int:
     """Add issues that belong on the board and are not on it.
 
@@ -1750,9 +1879,11 @@ def cmd_sync(args) -> int:
             if args.dry_run:
                 print(f"  would add {repo}#{issue['number']}  {issue['title'][:52]}")
             else:
-                gh(["project", "item-add", str(args.project), "--owner", args.owner,
-                    "--url", issue["url"]])
+                item = json.loads(gh(["project", "item-add", str(args.project), "--owner",
+                                      args.owner, "--url", issue["url"], "--format", "json"]))
                 print(f"  added {repo}#{issue['number']}  {issue['title'][:52]}")
+                if args.adopt:
+                    adopt_issue(args, repo, issue, item["id"])
             added += 1
 
     verb = "would add" if args.dry_run else "added"
@@ -1991,11 +2122,38 @@ def cmd_move(args) -> int:
         assigned = sprint_assignments(args.owner, args.project)
         if not assigned.get(item["id"]):
             active, _completed = iterations(args.owner, args.project)
+            if not active and sprint_settings(args._config).get("autocreate"):
+                # On demand, because a sprint series must be driven by work and
+                # not by a clock. A cron that tops sprints up would manufacture
+                # them through a quiet quarter, leaving a row of empty sprints
+                # nobody planned; creating one when work actually starts leaves
+                # the idle months genuinely absent, which is what the burndown
+                # should show. `ensure_sprints` skips the gap rather than
+                # backfilling it, so the numbering jumps and says so.
+                print("  no active sprint; creating the one that covers today")
+                ensure_sprints(args.owner, args.project, args._config,
+                               sprint_settings(args._config)["ahead"])
+                active, _completed = iterations(args.owner, args.project)
             if active:
                 set_field(args.owner, args.project, item["id"], "Sprint", "@current")
                 print(f"  #{args.issue} Sprint = {active[0]['title']} (current)")
             else:
+                # `none`, or a series that cannot be placed. Not a refusal:
+                # declining to start work because nobody created a sprint would
+                # be the tool making a process decision.
                 print("  no active sprint; leaving Sprint unset", file=sys.stderr)
+        stamped = record_sprint_label(args, repo, args.issue, item["id"])
+        if stamped:
+            print(f"  #{args.issue} + {stamped}")
+
+    if same_status(args.status, CYCLE_END):
+        # Again at the end: an item carried across a boundary finishes in a
+        # different sprint than it started, and the closing one is what a
+        # velocity figure is built from. Both labels survive; the latest date is
+        # the sprint it closed in, and the earlier ones are the carryover.
+        stamped = record_sprint_label(args, repo, args.issue, item["id"])
+        if stamped:
+            print(f"  #{args.issue} + {stamped}")
 
     if args.close:
         gh(["issue", "close", str(args.issue), "--repo", repo,
@@ -2433,6 +2591,7 @@ def main() -> int:
             ("--query", "search", "optional", "extra GitHub search terms, e.g. 'label:type:story'"),
             ("--limit", "number", "optional", "maximum issues to examine per repository"),
             ("--dry-run", "flag", "optional", "list what would be added and change nothing"),
+            ("--adopt", "flag", "optional", "also give newly added issues the key: label and Status=Todo"),
         ]) + """
 
 why this is needed:
@@ -2448,6 +2607,9 @@ why this is needed:
     sync.add_argument("--query")
     sync.add_argument("--limit", type=int, default=200)
     sync.add_argument("--dry-run", action="store_true")
+    sync.add_argument("--adopt", action="store_true",
+                      help="set the key: label and Status=Todo on issues this run adds; "
+                           "the type: label is left to a person")
     sync.set_defaults(func=cmd_sync)
 
     board = sub.add_parser(

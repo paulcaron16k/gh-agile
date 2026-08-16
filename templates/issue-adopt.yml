@@ -1,0 +1,58 @@
+# Put issues opened outside `gh agile` onto the board, with the parts a machine
+# can supply.
+#
+# Copy to `.github/workflows/issue-adopt.yml` in each repository on the board.
+#
+# **Why a workflow and not a built-in project automation.** A user-owned project
+# offers six built-in workflows -- auto-add sub-issues, auto-close issue, item
+# added to project, item closed, pull request linked to issue, pull request
+# merged -- and *auto-add repository issues is not among them*. There is nothing
+# to enable that would put a newly opened issue on the board, so it has to be
+# pushed from the repository side.
+#
+# **It needs a PAT, unlike auto-assign.yml.** Writing to a project is outside
+# the default `GITHUB_TOKEN`'s reach whatever permissions block you write, so
+# this reads a `PROJECT_TOKEN` secret: a fine-grained token with the
+# organization-or-user permission **Projects: Read and write**, and repository
+# **Issues: Read and write** for the `key:` label. Store it as a repository or
+# organization secret. If you would rather not hold a token at all, skip this
+# workflow and run `gh agile sync --adopt` before each planning meeting; the
+# only difference is latency.
+#
+# **What it deliberately does not do: set `type:`.** Nothing in an issue tells
+# an epic from a story from a bug, and a guessed label later reads as somebody's
+# decision. `gh agile validate` reports the gap and a person closes it.
+name: Adopt issues opened outside gh-agile
+
+on:
+  issues:
+    types: [opened, transferred]
+  workflow_dispatch:      # for catching up after the token expired
+
+permissions:
+  contents: read          # the PAT below carries the project and issue rights
+
+jobs:
+  adopt:
+    runs-on: ubuntu-latest
+    steps:
+      # For `.github/agile.json`: the tool reads the profile from the working
+      # directory, and a supporting repository's `config_from` pointer is
+      # resolved through the API from here.
+      - uses: actions/checkout@v4
+
+      - name: Add the issue to the board and label it
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PROJECT_TOKEN is not set; see the header of this file"
+            exit 1
+          fi
+          gh extension install paulcaron16k/gh-agile --force
+          # --repo restricts the sweep to this repository; --adopt is what adds
+          # the key: label and Status. Running the whole sync rather than
+          # handling one issue number keeps a single code path, and picks up
+          # anything missed while the token was expired.
+          gh agile sync --repo "${{ github.repository }}" --adopt

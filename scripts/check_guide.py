@@ -42,7 +42,12 @@ SAFE = {
 #: time: `key --key SPARK` wrote a third key into the profile and
 #: `export --out-dir exports/` created a directory. A checker with side effects
 #: is worse than no checker -- it makes the thing it checks wrong.
-NEVER_RUN = ("--key ", "--out-dir", "--save", "--evidence", "--close", "--force")
+#:
+#: `--adopt` is listed even though `run_safe` appends `--dry-run` to every sync,
+#: which already suppresses it. Relying on that interaction means a label is
+#: written to a live repository the day the two are decoupled.
+NEVER_RUN = ("--key ", "--out-dir", "--save", "--evidence", "--close", "--force",
+             "--adopt")
 
 #: Placeholders. A guide has to name a repository somewhere, and owner/repo is
 #: not one; running it is a guaranteed failure that says nothing.
