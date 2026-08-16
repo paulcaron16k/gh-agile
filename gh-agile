@@ -1273,8 +1273,6 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
     # because it only ever asked whether a window overlapped, never whether the
     # requirement was already met.
     covering = next((span for span in spans if span[0] <= today <= span[1]), None)
-    future = [span for span in spans if span[0] > today]
-    wanted = (0 if covering else 1) + max(0, ahead - len(future))
 
     def append(start):
         nonlocal number
@@ -1295,10 +1293,25 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
         made.append(f"{title}  {start} .. {end}")
         return end
 
-    if not covering:
+    uncovered = covering is None
+    if uncovered:
         # Aligned to the configured start day, so a sprint created on a
         # Wednesday still begins on Monday and covers today.
-        append(aligned_start(today, settings["start_day"]))
+        placed = append(aligned_start(today, settings["start_day"]))
+        if placed is None and spans:
+            # The aligned window overlapped an existing sprint, which happens
+            # when the series starts *after* today: the first sprint was created
+            # by hand on a date of somebody's choosing, and today falls before
+            # it. Step back from that first sprint by exactly one cadence, which
+            # both covers today and abuts the series -- rather than leaving a
+            # hole and claiming there is a current sprint.
+            earliest = min(start for start, _end in spans)
+            candidate = earliest - dt.timedelta(days=duration)
+            if candidate <= today:
+                placed = append(candidate)
+        if placed is None:
+            print(f"  no sprint covers today ({today}), and none can be placed "
+                  f"without overlapping an existing one", file=sys.stderr)
 
     while len([span for span in spans if span[0] > today]) < ahead:
         last_end = max(end for _start, end in spans) if spans else today
@@ -1326,7 +1339,16 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
         for line in made:
             print(f"  created {line}")
         if not made:
-            print(f"  a current sprint and {ahead} ahead already exist")
+            # Say which of the two is true, rather than asserting the happy one.
+            # This claimed a current sprint existed while the series began the
+            # following day and every board filtered on sprint:@current was
+            # empty.
+            if covering:
+                print(f"  a current sprint and {ahead} ahead already exist")
+            else:
+                nxt = min((start for start, _e in spans if start > today), default=None)
+                when = f"; the next starts {nxt}" if nxt else ""
+                print(f"  nothing created, and no sprint covers today{when}")
     return made
 
 

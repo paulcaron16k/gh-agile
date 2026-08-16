@@ -581,6 +581,19 @@ weekday are what a team can plan around, and it is what Jira does.
 sprint covering today and numbering jumps — `Sprint 2` to `Sprint 5` — rather
 than inventing sprints nobody worked in.
 
+**One sprint back, if the series starts after today.** A first sprint created by
+hand on a chosen date leaves everything before it uncovered, and the aligned
+window for today would overlap it. `ensure` then steps back from the earliest
+sprint by exactly one cadence, which covers today *and* abuts the series. It
+never walks back further: filling months of history with sprints nobody worked
+in is the backfilling this avoids.
+
+If neither placement works it says so — `no sprint covers today (2026-08-16);
+the next starts 2026-08-17` — rather than reporting success. Sprint names are
+assigned by count, so a sprint placed before the series can be numbered after
+it. The dates are the truth; renaming would clear every assignment, since
+iterations carry no id.
+
 **If `ensure` has not run, `move` covers for it.** Moving a story to
 `In Progress` with no active sprint creates one and says so; set
 `autocreate: false` to have it warn and leave the field empty instead.
