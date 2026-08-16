@@ -41,6 +41,7 @@
     "autocreate": true,
     "cadence_days": 14,
     "name_template": "{key} Sprint {n}",
-    "start_day": "monday"
+    "start_day": "monday",
+    "template": "2-week"
   }
 }

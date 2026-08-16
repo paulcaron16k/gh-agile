@@ -1074,6 +1074,7 @@ def add_to_project(login: str, project: int, url: str) -> str:
 
 
 def cmd_epic(args) -> int:
+    require_sprint_config(args._config, "creating an epic")
     labels = ["type:epic"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, _node = create_issue(
@@ -1096,6 +1097,7 @@ def cmd_story(args) -> int:
     an issue created now and attached to its epic later is an orphan in every
     roll-up run in between, and nothing complains. POLICY.md §3.
     """
+    require_sprint_config(args._config, "creating a story")
     labels = ["type:story"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, node = create_issue(
@@ -1354,6 +1356,7 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
 
 def cmd_sprint(args) -> int:
     if args.sprint_command == "ensure":
+        require_sprint_config(args._config, "`sprint ensure`")
         settings = sprint_settings(args._config)
         ahead = args.ahead if args.ahead is not None else settings["ahead"]
         ensure_sprints(args.owner, args.project, args._config, ahead)
@@ -1472,6 +1475,50 @@ WEEKDAYS = {
     "sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4,
     "thursday": 5, "friday": 6, "saturday": 7,
 }
+
+
+#: Named cadences, offered at project creation so the choice is made once,
+#: deliberately, before anything depends on it.
+#:
+#: `none` is not a cop-out: a kanban team has no sprints, and forcing a cadence
+#: on them would put every item in an iteration nobody uses. Choosing it is a
+#: statement, and it is recorded like any other.
+SPRINT_TEMPLATES = {
+    "1-week": {"cadence_days": 7, "start_day": "monday", "ahead": 2},
+    "2-week": {"cadence_days": 14, "start_day": "monday", "ahead": 2},
+    "3-week": {"cadence_days": 21, "start_day": "monday", "ahead": 2},
+    "4-week": {"cadence_days": 28, "start_day": "monday", "ahead": 2},
+    "none": {"autocreate": False, "cadence_days": 14, "start_day": "monday", "ahead": 0},
+}
+
+
+def require_sprint_config(config: dict, doing: str) -> None:
+    """Refuse until a sprint cadence has been chosen deliberately.
+
+    Defaults used to apply silently, so the first sprint was created with
+    whatever the tool assumed and the cadence was discovered later -- by which
+    point sprints existed under it, and changing course meant either living with
+    the wrong rhythm or renaming sprints, which clears every assignment because
+    iterations carry no id.
+
+    The cost of getting this wrong is paid later and by someone else, so it is
+    asked up front.
+    """
+    if config.get("sprint"):
+        return
+    options = "\n".join(
+        f"    {name:8} {spec.get('cadence_days')} days"
+        + (", no sprints" if name == "none" else f", starting {spec['start_day']}")
+        for name, spec in SPRINT_TEMPLATES.items()
+    )
+    sys.exit(
+        f"no sprint cadence is configured, and {doing} depends on it.\n"
+        f"  Choose one before creating work, so every sprint follows the same "
+        f"rhythm:\n\n{options}\n\n"
+        f"    gh agile project sprint-template --template 2-week\n\n"
+        f"  Or write a `sprint` block into the profile by hand. `none` is a\n"
+        f"  legitimate answer for a kanban team, and is recorded as a decision."
+    )
 
 
 def sprint_settings(config: dict) -> dict:
@@ -1641,8 +1688,19 @@ def cmd_board(args) -> int:
     return 0
 
 
+def write_sprint_template(config: dict, template: str, path) -> dict:
+    settings = dict(SPRINT_TEMPLATES[template])
+    settings["template"] = template
+    settings.setdefault("name_template", SPRINT_DEFAULTS["name_template"])
+    settings.setdefault("autocreate", True)
+    config["sprint"] = settings
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+    return settings
+
+
 def cmd_project(args) -> int:
-    """Create the board and record it in the profile.
+    """Create the board and record it in the profile, or set its cadence.
 
     Creation belongs to this tool rather than `gh project create` because two
     things have to happen with it: `project.number` is written to the profile so
@@ -1651,6 +1709,15 @@ def cmd_project(args) -> int:
     board would make that default ambiguous.
     """
     config = args._config
+    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    if args.project_command == "sprint-template":
+        settings = write_sprint_template(config, args.template, target)
+        print(f"  sprint cadence: {args.template} "
+              f"({settings['cadence_days']} days from {settings['start_day']})"
+              + ("  -- no sprints; kanban" if args.template == "none" else ""))
+        print(f"  written to {target}")
+        return 0
+
     existing = (config.get("project") or {}).get("number")
     if existing and not args.force:
         sys.exit(
@@ -1659,6 +1726,12 @@ def cmd_project(args) -> int:
             "  To start a different project: remove project.number from the profile "
             "here, or work from the clone of that project's main repository."
         )
+
+    # Asked before the board exists, so the cadence is a decision rather than
+    # something discovered after sprints already follow it.
+    if args.project_command == "create" and not args.sprint_template:
+        if not (config.get("sprint") or {}).get("template"):
+            require_sprint_config(config, "creating a project")
 
     created = json.loads(gh(["project", "create", "--owner", args.owner,
                              "--title", args.title, "--format", "json"]))
@@ -1674,6 +1747,10 @@ def cmd_project(args) -> int:
             entries.append({"key": args.key, "name": args.title, "repo": args.repo})
         config["keys"] = entries
     target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    if args.sprint_template:
+        settings = write_sprint_template(config, args.sprint_template, target)
+        print(f"  sprint cadence: {args.sprint_template} "
+              f"({settings['cadence_days']} days from {settings['start_day']})")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
     print(f"  profile updated: {target}")
@@ -2267,6 +2344,12 @@ why this is needed:
     project_new.add_argument("--key")
     project_new.add_argument("--repo")
     project_new.add_argument("--force", action="store_true")
+    project_new.add_argument("--sprint-template", choices=sorted(SPRINT_TEMPLATES),
+                             help="cadence, chosen once at creation; 'none' for kanban")
+    tmpl = project_sub.add_parser(
+        "sprint-template", help="choose the sprint cadence for an existing project"
+    )
+    tmpl.add_argument("--template", required=True, choices=sorted(SPRINT_TEMPLATES))
     project.set_defaults(func=cmd_project)
 
     sprint = sub.add_parser("sprint", help="list or create sprint iterations")

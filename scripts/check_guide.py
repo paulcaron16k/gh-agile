@@ -99,7 +99,11 @@ def check(command: str) -> list[str]:
         if token.startswith("--"):
             flags.append(token.split("=")[0])
         elif not words or (words and not flags and not token.startswith("-")
-                           and len(words) < 2 and token.isalpha()):
+                           and len(words) < 2
+                           and token.replace("-", "").isalpha()):
+            # Hyphens allowed: `isalpha()` rejected `sprint-template`, so a
+            # two-word subcommand was checked against its parent's help and its
+            # flags reported as nonexistent. Found by documenting one.
             words.append(token)
     # Global flags may precede the subcommand: `--project 4 export`.
     words = [w for w in words if w not in ("@me",)]

@@ -162,9 +162,9 @@ Change directory to the main repo for this project. Files will be created which
 need to be checked in.
 
 ```bash
-# The board, with the project's key. Writes project.number into the profile,
-# which is what every later command defaults to.
-gh agile project create --title "Zamboni Iceberg table maintainer" --key ZMBNI
+# The board, its key, and the sprint cadence -- all three at creation.
+gh agile project create --title "Zamboni Iceberg table maintainer" \
+                        --key ZMBNI --sprint-template 2-week
 
 # Its fields and labels. Idempotent -- run it again after editing the spec.
 gh agile setup
@@ -554,6 +554,39 @@ work never has to change the project's configuration.
 
 ```cron
 0 7 * * 1  cd /srv/projects/Zamboni && gh-agile sprint ensure >> $LOG 2>&1
+```
+
+### Choose the cadence before creating work
+
+**A sprint cadence must be chosen deliberately, and `epic`, `story` and
+`sprint ensure` refuse until it is.** Not ceremony: defaults used to apply
+silently, so the first sprint was created with whatever the tool assumed and the
+cadence was discovered afterwards — by which point sprints existed under it.
+Changing course then means living with the wrong rhythm or renaming sprints,
+which clears every assignment, since iterations carry no id. The cost of getting
+this wrong is paid later, and by someone else.
+
+```bash
+gh agile project create --title "…" --key ZMBNI --sprint-template 2-week
+gh agile project sprint-template --template 2-week    # an existing project
+```
+
+| Template | Cadence |
+|---|---|
+| `1-week` | 7 days from Monday |
+| `2-week` | 14 days from Monday |
+| `3-week` | 21 days from Monday |
+| `4-week` | 28 days from Monday |
+| `none` | **No sprints.** The right answer for a kanban team, and recorded as a decision rather than an omission |
+
+Without one, the refusal lists the choices:
+
+```
+no sprint cadence is configured, and creating a story depends on it.
+  Choose one before creating work, so every sprint follows the same rhythm:
+    1-week   7 days, starting monday
+    2-week   14 days, starting monday
+    …
 ```
 
 Configuration lives in the profile:
