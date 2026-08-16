@@ -207,6 +207,104 @@ reporting the divergence.
 So an engineering board across every repo, and a team board for one or two keys,
 are two **boards over one project**, each with its own filter.
 
+### What a real setup looks like
+
+Two repositories, one project, four boards. Every board shows a slice of the
+same items with the same field values — nothing is copied, and nothing can
+disagree.
+
+```mermaid
+flowchart LR
+    subgraph repos["1 · Repositories — issues are created and numbered here"]
+        RZ["<b>Zamboni</b> · key ZMBNI<br/>ZMBNI-1817, ZMBNI-1818 …"]
+        RA["<b>gh-agile</b> · key AGILE<br/>AGILE-36, AGILE-37 …"]
+    end
+
+    subgraph project["2 · One project"]
+        P["holds <b>Status · Sprint</b><br/><b>Story Points · Priority · FR</b><br/>for every item on it"]
+    end
+
+    subgraph boards["3 · Boards — views of that project, each filtered"]
+        BE["<b>Engineering</b> · kanban<br/>-status:Done<br/><i>everything in flight, both repos</i>"]
+        BZ["<b>Team ZMBNI</b> · scrum<br/>sprint:@current<br/>label:key:ZMBNI"]
+        BA["<b>Team AGILE</b> · scrum<br/>sprint:@current<br/>label:key:AGILE"]
+        BB["<b>Backlog</b> · table<br/>no:sprint -status:Done<br/><i>not yet committed</i>"]
+    end
+
+    RZ -- "gh agile sync" --> P
+    RA -- "gh agile sync" --> P
+    P --> BE
+    P --> BZ
+    P --> BA
+    P --> BB
+
+    classDef repo fill:#e7f0ff,stroke:#3b6ea5,color:#12304f
+    classDef proj fill:#efe7ff,stroke:#6b4c9a,color:#2b1a4a
+    classDef kan  fill:#e6f7ec,stroke:#2f8f4e,color:#12401f
+    classDef scr  fill:#fff2e0,stroke:#c07a1a,color:#4a2e05
+    classDef bkl  fill:#f2f2f2,stroke:#777,color:#333
+    class RZ,RA repo
+    class P proj
+    class BE kan
+    class BZ,BA scr
+    class BB bkl
+    style repos fill:#fbfdff,stroke:#c7d8ea
+    style project fill:#fcfaff,stroke:#d6c9ea
+    style boards fill:#fcfcfc,stroke:#ddd
+```
+
+Reading it:
+
+- **Issues are born in a repository** and numbered there. `ZMBNI-1817` and
+  `AGILE-36` cannot collide, because each key belongs to one repository.
+- **`sync` puts them on the project.** Nothing arrives by matching a filter —
+  see [Why `sync` exists](#why-sync-exists-a-project-is-a-collection-not-a-filter).
+- **The project holds the planning state.** One `Status`, one `Sprint`, one
+  estimate per item, wherever it is shown.
+- **A team board is one filter away from the engineering board.** `Team ZMBNI`
+  is `label:key:ZMBNI` plus the current sprint; `Engineering` drops both
+  clauses. A story appearing on both is the *same* story, not a copy.
+
+**Add a third repository** by giving it a key and running `sync`: it flows into
+the same project, appears on `Engineering` immediately, and gets a team board of
+its own by adding one filtered view. Nothing else changes.
+
+### Sprints across the boards
+
+The scrum boards show **one sprint** — whichever is current. The kanban and
+backlog boards ignore sprints entirely, which is what makes them useful when a
+sprint boundary is not the question.
+
+```mermaid
+gantt
+    title Which board shows an item, and when
+    dateFormat YYYY-MM-DD
+    axisFormat %d %b
+    todayMarker stroke-width:3px,stroke:#c0392b
+
+    section Team scrum boards
+    Sprint 1 · past — completed, boards no longer show it   :done, s1, 2026-07-20, 14d
+    Sprint 2 · CURRENT — this is what sprint @current means  :crit, s2, 2026-08-03, 14d
+    Sprint 3 · future — kept ahead by sprint ensure          :      s3, 2026-08-17, 14d
+    Sprint 4 · future — kept ahead by sprint ensure          :      s4, 2026-08-31, 14d
+
+    section Backlog board
+    anything with no sprint, at any time                     :active, bk, 2026-07-20, 56d
+
+    section Engineering kanban
+    every item not Done, whatever its sprint                 :active, ek, 2026-07-20, 56d
+```
+
+- **Past sprints vanish from the scrum boards** the moment the next one starts,
+  because `sprint:@current` is evaluated on every load. The items are not gone;
+  they are on `Engineering` until Done, and in the export forever.
+- **Future sprints exist before anyone needs them.** `sprint ensure` keeps two
+  ahead, so committing a story to Sprint 3 is possible today.
+- **The backlog is defined by absence** — `no:sprint`. An item leaves it by
+  being given a sprint, which is what sprint planning *is* here.
+- **An item can be on three boards at once** and has one status on all of them.
+  That is the property a second project would destroy.
+
 ### Is a GitHub view a scrum board or a kanban board?
 
 **Neither, until you filter it.** GitHub has no such concept — it has a *view*

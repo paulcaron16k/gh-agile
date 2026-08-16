@@ -1,17 +1,22 @@
 {
   "boards": [
     {
-      "filter": "label:key:AGILE",
-      "name": "Team: AGILE only",
-      "type": "scrum"
-    },
-    {
       "name": "Engineering: all work",
       "type": "kanban"
     },
     {
       "name": "Backlog",
       "type": "backlog"
+    },
+    {
+      "filter": "label:key:ZMBNI",
+      "name": "Team: ZMBNI",
+      "type": "scrum"
+    },
+    {
+      "filter": "label:key:AGILE",
+      "name": "Team: AGILE",
+      "type": "scrum"
     }
   ],
   "keys": [
