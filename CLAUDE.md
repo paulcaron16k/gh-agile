@@ -28,6 +28,8 @@ make scratch       # LIVE: leaves a scratch project standing;  make teardown NUM
 make metrics DIR=exports/AGILE
 ```
 
+The three LIVE targets default to the sandbox and refuse anything else; see the testing policy below.
+
 **Every Python target refuses to run outside `.venv`**, and `tests/conftest.py` refuses again from the inside for
 anyone invoking pytest directly. Never fall back to the system interpreter: a suite that runs against whatever is
 installed globally is testing a different environment on every machine.
@@ -37,7 +39,8 @@ mid-project — the same code passed with one version and reported thirty findin
 
 ## Testing policy — read before touching a live repo
 
-**Use the sandbox: `paulcaron16k/agile-test`, checked out at `../agile-test`.** See its `plan.txt`.
+**Use the sandbox: `paulcaron16k/agile-test`, checked out at `../agile-test`.** See its `plan.txt`. Private,
+issues enabled, its own board (project `#19`), its own profile with key `TEST` and `issue_title_prefix: key+type`.
 
 This exists because live-repo testing did real damage: a `key:TEST` label applied to all 26 `gh-agile` issues, ~13
 throwaway issues created and deleted leaving permanent holes in the issue-number sequence, 11 scratch projects, and
@@ -47,8 +50,21 @@ for production. Neither is a test fixture.
 Order of escalation: **offline tests → agile-test → gh-agile → Zamboni.** Most work needs no live repo at all now.
 Only `self-test`, sprint destruction/repair and `sync --adopt` must hit real GitHub.
 
+**The Makefile enforces this rather than asking.** `OWNER` and `REPO` default to the sandbox, and `self-test` and
+`scratch` refuse any other repository unless `ALLOW_LIVE=1` names it on the same command line — two explicit acts,
+because the old default was the real repository and that default is how the damage above happened. `teardown` reads
+the project's title first and deletes only what the live targets create (`gh-agile scratch <time>`, `gh-agile
+self-test`); `make teardown NUM=4` refuses, and so does the sandbox's own `#19`. A title it cannot read also
+refuses — during a GitHub outage `gh project view` reported "unknown owner type" for a request that was fine, and
+a guard that looks broken is a guard someone overrides.
+
 `agile-test` cannot reproduce bugs that need a board with history — 25 items, four sprints, months of timeline.
 Seed it from an export rather than testing on the real board.
+
+**CI runs `lint` and `test` only** (`.github/workflows/ci.yml`), on the floor interpreter and the current one. It
+gets no token and calls no `gh`. `check-guide` is read-only but *not* offline — it executes the guide's read
+commands against whichever board the profile in the checkout names — so it stays a local target, and a green CI
+run says the pure logic is sound and nothing about the write side.
 
 ## The defect the design is built around
 
@@ -130,11 +146,32 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
 - Refuse rather than guess when the cost lands on someone else later: an illegal `issue_title_prefix` stops every
   command, an unchosen sprint cadence blocks `epic`/`story`/`ensure`, a key must match Jira's rules.
 
+## Where the rest of it is written down
+
+| File | What |
+|---|---|
+| `docs/tasks.md` | The work breakdown for what is left, cross-referenced to board ids. **The board is the source of truth for status; that file carries method** — the order, and the gotcha that costs an afternoon |
+| `docs/lessons.md` | Findings that cost something to learn, with the measurement. Read before repeating an experiment |
+| `POLICY.md` | The conventions `validate` enforces |
+| `GOLD_MODEL.md` | The silver→gold boundary, and what this repo does not write |
+| `USER_GUIDE.md` | The published guide; `make check-guide` keeps it honest |
+
 ## Live state
+
+Paths, because this work spans four checkouts:
+
+| Path | What |
+|---|---|
+| `~/checkout/prj_mgmt/gh-agile` | this repo (`paulcaron16k/gh-agile`), branch `main` |
+| `~/checkout/prj_mgmt/agile-test` | **the sandbox** (`paulcaron16k/agile-test`) |
+| `~/checkout/prj_mgmt/my-gh-agile` | a duplicate clone, no local changes. Probably a staging step; **ask before deleting** |
+| `~/checkout/iceberg/Zamboni` | Zamboni, whose `docs/tasks.md` still holds 194 `ZMBNI-` ids |
+| `~/checkout/db/` | the dbt-duckdb work, unrelated |
 
 | | |
 |---|---|
 | Project | `paulcaron16k/projects/4`, key `AGILE`, 25 issues, all carrying `key:AGILE` |
+| Sandbox | `paulcaron16k/agile-test` at `../agile-test`, project `#19`, key `TEST`, no issues. `TEST Sprint 1..3` from 2026-08-17, 2-week cadence. Boards: kanban, backlog, scrum `label:key:TEST`, roadmap. Issue numbers `#1`/`#2` are already spent by a `self-test` run |
 | Sprints | `AGILE Sprint 4` (2026-08-03..16), then `Sprint 1`, `Sprint 2`, `Sprint 3` — the naming seam is known and accepted; renaming clears assignments |
 | Zamboni | `paulcaron16k/Zamboni`, **0 issues**; work is in `docs/tasks.md` (194 `ZMBNI-` ids) at `~/checkout/iceberg/Zamboni` |
 | Export | `exports/AGILE/` (gitignored), watermark in `.gh_agile_export.json` |

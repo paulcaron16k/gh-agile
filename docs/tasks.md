@@ -1,0 +1,161 @@
+# gh-agile — work breakdown
+
+Project key **AGILE**, board [`paulcaron16k/projects/4`](https://github.com/users/paulcaron16k/projects/4).
+
+## What this file is, and what it is not
+
+**The board is the source of truth for identity and status.** `AGILE-24` *is* issue `#24` — the tool
+parses a reference by splitting on the last hyphen — so nothing here mints an `AGILE-n` id, and nothing
+here records status for work that has an issue. Look at the board for that.
+
+**This file carries method.** The decomposition, the order, the gotcha that will cost an afternoon if it
+is not known in advance. An issue title cannot hold "labels survive a transfer only if they already exist
+in the destination", and that sentence is the difference between a migration that works and one that
+silently strips every label. So: `WBS-n` ids for the breakdown, cross-referenced to board ids where the
+work is filed.
+
+The distinction matters here more than in most repositories, because `#11` is *"Migrate ZMBNI off
+tasks.md"* — this project's stated direction is away from markdown backlogs. A second backlog in `docs/`
+would be the thing the tool exists to replace. A plan is not a backlog.
+
+| Status | Meaning |
+|---|---|
+| `done` | Delivered and verified, with the verification named |
+| `inproject` | Started, not finished |
+| `todo` | Not started |
+| `blocked` | Cannot start; the entry says what on |
+| `decided` | Deliberately not doing, or accepted as-is. The entry says why |
+
+---
+
+## Filed on the board
+
+Everything below is an open issue. The WBS section named beside it holds the method; the issue holds the
+status.
+
+| id | title | WBS |
+|---|---|---|
+| `#9` | Read side: export and validate | — (epic, largely delivered) |
+| `#10` | Write side: setup, epic, story | — (epic, largely delivered) |
+| `#12` | Analysis pipeline to the Gold model | [WBS-4.2](#wbs-4--finish-the-unit-suffix-convention) |
+| `#24` | Synthesise custom-field history from snapshots | [WBS-5.1](#wbs-5--filed-but-unbroken-down) |
+| `#26` | Guided workflow and the user guide | — |
+| `#37` | Export pull requests, reviews and comments as events | [WBS-5.2](#wbs-5--filed-but-unbroken-down) |
+
+**Not filed:** WBS-1, WBS-3, and the WBS-4 / WBS-6 entries. Filing them is a live write to board `#4` and
+is the owner's call; the breakdown below is written so that each leaf is one issue if they want it to be.
+
+Everything below is an issue the Zamboni team will transition from gh-agile to their own issues list. 
+Leave these issues alone for now, until the Zamboni team issue transition is complete.
+
+| id | title | WBS |
+|---|---|---|
+| `#11` | Migrate ZMBNI off tasks.md | [WBS-2](#wbs-2--migrate-the-zamboni-work-off-tasksmd) |
+| `#20` | Migrate the 11 open ZMBNI stories | [WBS-2](#wbs-2--migrate-the-zamboni-work-off-tasksmd) |
+| `#21` | Freeze tasks.md as the archive | [WBS-2](#wbs-2--migrate-the-zamboni-work-off-tasksmd) |
+| `#22` | Port the tasks.md tests to `gh agile validate` | [WBS-2](#wbs-2--migrate-the-zamboni-work-off-tasksmd) |
+
+---
+
+## WBS-1 — Sandbox fidelity
+
+The sandbox exists (2026-08-17: `paulcaron16k/agile-test`, project `#19`, key `TEST`; `make self-test`
+green; the Makefile refuses non-sandbox live targets). What it cannot yet do is reproduce the bugs worth
+reproducing.
+
+| id | title | description | status |
+|---|---|---|---|
+| WBS-1 | Sandbox fidelity | A sandbox that can host the sprint experiments | `inproject` |
+| WBS-1.1 | Stand up the repo, board and guard | Private repo, project `#19`, key `TEST`, four boards, `TEST Sprint 1..3`, Makefile guard on all three live targets, offline CI | `done` 2026-08-17 |
+| WBS-1.2 | Seed the sandbox from an export | Load `exports/AGILE/` into `#19` so it has items, closed sprints and a timeline | `todo` |
+| WBS-1.3 | Decide what "seeded" has to mean | See below — this is the design question, and 1.2 cannot start without it | `todo` |
+
+**WBS-1.3 is the real work.** A clean board cannot reproduce anything that needs items staged across a
+completed, a current and a future sprint — which is precisely the shape that proved the iteration defect.
+But an export cannot be replayed faithfully either:
+
+- **Timeline events cannot be forged.** `github_events` rows come from GitHub's own timeline; creating an
+  issue today and setting Status four times gives four events dated today. Cycle times computed from a
+  seeded board are not the original cycle times. Decide whether the experiments care.
+- **Closed sprints cannot be created.** An iteration's `startDate` is what decides whether it is
+  completed, so a past sprint has to be created with a past start date and left to be historical.
+- **Issue numbers will not match.** `#1` and `#2` in `agile-test` are already spent by a `self-test` run,
+  so a seeded `AGILE-24` lands on a different number. Anything asserting on a number needs a mapping.
+
+Minimum viable seed, if the answer is "the experiments only need shape": *n* items spread over three
+iterations, one of them completed, with `sprint:` labels consistent with the field. That is enough to
+prove or disprove WBS-3, which is the reason to build it.
+
+---
+
+## WBS-3 — Does the web UI destroy sprint assignments too?
+
+**Not filed, and the highest-value unfiled item.** Every measurement of the iteration defect so far went
+through the public GraphQL mutation. The web UI may use an internal endpoint that behaves better.
+
+If it is non-destructive, the damage is a public-API defect rather than a data-model one, and the six
+workarounds in `CLAUDE.md` could shrink. If it is destructive, that is worth knowing too: it closes off
+"just use the web page" as advice, permanently.
+
+| id | title | description | status |
+|---|---|---|---|
+| WBS-3.1 | Capture pre-state | Iteration ids, every item's `Sprint` value, every `sprint:` label, into `tmp/pre-web-add-sprint.json` | `todo` |
+| WBS-3.2 | Hand over, and stop | The owner adds one sprint through the web page by hand. Nothing automated touches the project in between | `todo` |
+| WBS-3.3 | Diff and record | Re-read the same three things. Iteration ids re-minted? Assignments cleared? Labels intact (they must be — they are on the issue) | `todo` |
+| WBS-3.4 | Act on the answer | Non-destructive → re-scope the workarounds and say so in `CLAUDE.md`. Destructive → record the measurement beside the API one | `blocked` on 3.3 |
+
+**Run this on the sandbox, not on board `#4`.** It is a destructive-write experiment by construction.
+It also needs WBS-1.2 first: a board with nothing on it cannot show assignments being cleared.
+
+---
+
+## WBS-4 — Finish the unit-suffix convention
+
+The rule is *every duration is an integer count of seconds, and no column name carries a unit suffix*.
+Two loose ends remain, one inside this repo and one outside it.
+
+| id | title | description | status |
+|---|---|---|---|
+| WBS-4.1 | Decide `cadence_days` | The last `_days` name in the repo. Deliberate — it is hand-authored config, a person writes `14`, and the suffix stops at the file's edge — but the rule was stated as "no exceptions", so whether it stays is the owner's call | `blocked` on owner |
+| WBS-4.2 | Rename the Gold catalog's `*_hours` | `GOLD_MODEL.md` is already fixed. The authoritative `agile_data_model.md` and `agile_catalog.json` live **outside this repo** and must change too, or the silver→gold transform reintroduces the unit. Related: `#12` | `todo` |
+
+WBS-4.2 is the one that actually breaks something. A convention enforced on one side of a transform and
+not the other is not a convention.
+
+---
+
+## WBS-5 — Filed, but unbroken-down
+
+Both are real and neither is decomposed. Listed so that "not in the WBS" does not read as "not needed".
+
+| id | title | description | status |
+|---|---|---|---|
+| WBS-5.1 | Synthesise custom-field history | `#24`. GitHub emits a timeline event for `Status` and for nothing else, so points / sprint / priority history has to come from **diffing scheduled exports**. That makes the export cadence a data-model decision, not an ops one | `todo` |
+| WBS-5.2 | Export PRs, reviews and comments as events | `#37`. No diff hunks, no patches — events only | `todo` |
+
+---
+
+## WBS-6 — Known and accepted
+
+Not work. Recorded so nobody spends a morning rediscovering them, and so nobody "fixes" the third one.
+
+| id | title | description | status |
+|---|---|---|---|
+| WBS-6.1 | `sprint:` labels are per repository, not per project | An issue on two boards carries one set of dates, matching only one series; `reconcile` reports the other as unresolvable. One board per repository avoids it entirely | `decided` |
+| WBS-6.2 | No locking on profile writes | Every profile write is a read-modify-write, and two concurrent runs lose one of them. **The owner reviewed this and accepted the risk — do not "fix" it without asking.** A single-user tool with a checked-in profile does not need a lock file | `decided` |
+| WBS-6.3 | The tool is one file | And it will stay one file: `gh extension install` clones and installs nothing, so a package layout buys nothing and a second module is a second thing to keep on `sys.path`. The offline suite is what keeps it tractable | `decided` |
+
+---
+
+## Ideas not yet triaged
+
+Captured verbatim from the untracked `todo.txt` at the repository root. They are unshaped, and shaping
+them is itself work — none has an owner, a size or an acceptance test yet. **`todo.txt` can be deleted
+once these are confirmed captured**; it is left in place because it is not this file's to remove.
+
+- Investigate workflows and PR-comment triggers in
+  [CynicDog/agile-github-starter](https://github.com/CynicDog/agile-github-starter/tree/main).
+- A knowledge base under `wiki/` or `.claude/knowledge_base/`.
+- Adversarial code review, including token usage.
+- Token usage in normal use and in testing. Development ran out of budget several times, and
+  `require_graphql_budget` exists because of it — but nothing measures the *ordinary* cost of a command.

@@ -1,0 +1,55 @@
+# The offline suite, and only the offline suite.
+#
+# `make test` and `make lint` need no network, no GitHub account and no project,
+# which is what makes them safe to run on every push. Nothing here is granted a
+# token and nothing here calls `gh`.
+#
+# Deliberately absent:
+#
+#   self-test    creates issues, labels and a project on a live account. It runs
+#                against the sandbox (paulcaron16k/agile-test) from a developer's
+#                machine, never from CI: CI is the last place that should be
+#                writing to a real board, and a private sandbox needs a token
+#                with `repo` and `project` scope to reach.
+#   check-guide  read-only, but not offline -- it executes the guide's read
+#                commands against whichever board the profile in the checkout
+#                names, which is the live AGILE board. In CI that would be a
+#                token and a live read on every push to verify documentation.
+#
+# So a green run here means the pure logic is sound. It does not mean the write
+# side works; that is what `make self-test` against the sandbox is for.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the current release. The floor is what `ruff.toml`
+        # declares as target-version, and testing only the newest interpreter
+        # lets a syntax or stdlib feature past it that the floor cannot run.
+        python-version: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # `make venv` rather than a bare pip install: every Python target refuses
+      # to run outside .venv, from the Makefile and again from conftest.py, so
+      # CI has to build the same environment a developer does.
+      - run: make venv
+
+      - run: make lint
+
+      - run: make test
