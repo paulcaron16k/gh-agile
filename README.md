@@ -520,9 +520,16 @@ the loader.
 gh agile export --grain both --csv --out-dir exports/   # since the watermark
 gh agile export --since 2026-08-01T00:00:00Z            # explicit override
 gh agile export --no-state                              # always full
+gh agile export                                         # read it; watermark unmoved
 ```
 
-Files are named `agile_issues_<ISO8601 basic>.csv` — `agile_issues_20260814T184850Z.csv`
+**The watermark advances only on `--out-dir`.** It is a promise that everything
+up to it has been delivered somewhere durable, and stdout is not: a bare export
+piped into `less`, or into a script that then fails, must not tell the next
+scheduled run those rows are handled. Reads to stdout stay incremental and say
+what they left alone.
+
+Files are named `github_issues_<ISO8601 basic>.csv` — `github_issues_20260814T184850Z.csv`
 — which has no colons, so it is a legal filename everywhere, and still sorts
 lexicographically. A loader can import a directory in order without parsing the
 names. Each row also carries `exported_at`, so concatenated exports keep their

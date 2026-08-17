@@ -151,7 +151,7 @@ def periods(kind: str, start_date, count: int = 5) -> list[tuple[str, object, ob
 def metrics(directory: Path, kind: str, start_date, context: str) -> int:
     issues = str(directory / "github_issues_*.csv")
     if not list(directory.glob("github_issues_*.csv")):
-        sys.exit(f"no agile_issues_*.csv in {directory}")
+        sys.exit(f"no github_issues_*.csv in {directory}")
     # Deduplicated, not merely unioned. The glob matches daily *and* monthly
     # files, so a compacted directory counts every row twice -- 24 issues read
     # as 48 created. Overlapping incremental exports do the same thing on their

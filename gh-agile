@@ -2340,9 +2340,15 @@ def cmd_export(args) -> int:
     """
     import datetime as dt
 
-    key = f"{args.owner}/{args.project}"
+    # `state_key`, not `key`. The out-dir branch below used a bare `key` for the
+    # project-key directory name and shadowed this one, so the watermark was
+    # *read* from "owner/project" and *written* to "AGILE". A file export
+    # therefore never advanced the value it would next read, and only kept
+    # working because stdout runs happened to advance the read key -- which is
+    # precisely what this release stops them doing.
+    state_key = f"{args.owner}/{args.project}"
     state = read_state(args.state) if args.state else {}
-    since = args.since or (state.get(key, {}).get("watermark") if args.state else None)
+    since = args.since or (state.get(state_key, {}).get("watermark") if args.state else None)
 
     started = _now()
     events: list[dict] | None = [] if args.grain in ("events", "both", "all") else None
@@ -2367,9 +2373,9 @@ def cmd_export(args) -> int:
         # One directory per project key, so several projects can export into one
         # tree without colliding: exports/ZMBNI/agile_issues_....csv
         directory = pathlib.Path(args.out_dir)
-        key = (args._config.get("project") or {}).get("key")
-        if key and directory.name != key:
-            directory = directory / key
+        project_key = (args._config.get("project") or {}).get("key")
+        if project_key and directory.name != project_key:
+            directory = directory / project_key
         directory.mkdir(parents=True, exist_ok=True)
         suffix = "csv" if args.csv else "json"
         tables = [("issues", data), ("events", events)]
@@ -2389,15 +2395,31 @@ def cmd_export(args) -> int:
     else:
         _write(data if args.grain != "events" else events, sys.stdout, csv_format=args.csv)
 
-    if args.state:
-        # The watermark is pulled back by the overlap, so the next run re-reads
-        # the window in which the timeline may still have been catching up.
+    # The watermark advances only when the rows were written to timestamped
+    # files. A watermark is a promise that everything up to it has been
+    # delivered somewhere durable, and stdout is not durable: piping an export
+    # into `less`, or into a script that fails, used to advance it just as far
+    # as a completed run to disk. The next real export then began after rows
+    # nothing had kept.
+    #
+    # Found by reading the board with a bare `export` and getting `[]` back --
+    # harmlessly, because that project keyed separately, but the same command
+    # against the pipeline's own project would have moved its watermark.
+    if args.state and args.out_dir:
+        # Pulled back by the overlap, so the next run re-reads the window in
+        # which the timeline may still have been catching up.
         cut = dt.datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ") - dt.timedelta(
             seconds=args.overlap_seconds
         )
         watermark = cut.strftime("%Y-%m-%dT%H:%M:%SZ")
-        write_state(args.state, key, watermark, len(data))
+        write_state(args.state, state_key, watermark, len(data))
         print(f"  watermark -> {watermark} in {args.state}", file=sys.stderr)
+    elif args.state and since:
+        # Still incremental -- the window is the same one the pipeline would
+        # see -- but the watermark stays where it is, so this run costs the
+        # pipeline nothing.
+        print(f"  watermark unchanged ({since}): stdout is not a durable "
+              f"destination. Use --out-dir to advance it.", file=sys.stderr)
     return 0
 
 

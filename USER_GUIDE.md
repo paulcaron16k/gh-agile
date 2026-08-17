@@ -1075,8 +1075,8 @@ gh agile export --grain both --csv --out-dir exports/
 ```
   full export: 24 row(s)
   163 event row(s)
-  wrote exports/AGILE/agile_issues_20260816T031917Z.csv
-  wrote exports/AGILE/agile_events_20260816T031917Z.csv
+  wrote exports/AGILE/github_issues_20260816T031917Z.csv
+  wrote exports/AGILE/github_events_20260816T031917Z.csv
 ```
 
 **Events cost no extra API calls.** The expensive part of an export is the
@@ -1109,6 +1109,23 @@ LOG=/home/you/.local/state/gh-agile/export.log
 for one clock and scheduled by another is a confusion that surfaces months
 later. The watermark makes each run incremental; the first is a full export.
 
+**The watermark advances only on `--out-dir`.** It is a promise that everything
+up to it has been delivered somewhere durable, and stdout is not durable — a
+bare `gh agile export` piped into `less`, or into a script that then fails, must
+not tell the next scheduled run that those rows are already handled. So an
+export to stdout is still incremental, and still shows you the same window the
+pipeline would see, but leaves the watermark where it is and says so:
+
+```
+incremental since 2026-08-16T16:26:23Z: 16 row(s)
+watermark unchanged (2026-08-16T16:26:23Z): stdout is not a durable destination.
+Use --out-dir to advance it.
+```
+
+Read the board as often as you like; only a run that writes timestamped files
+moves the pipeline forward. `--no-state` still forces a full export and writes
+nothing either way.
+
 ### Compacting and measuring: an optional companion
 
 **The extension has no dependencies, and cannot have any.** `gh extension
@@ -1130,8 +1147,8 @@ key — `number` for issues, `event_hash` for events — so the overlap incremen
 export deliberately creates collapses:
 
 ```
-  agile_issues_monthly_202608.csv: 24 row(s) from 2 daily file(s)
-  agile_events_monthly_202608.csv: 158 row(s) from 2 daily file(s)
+  github_issues_monthly_202608.csv: 24 row(s) from 2 daily file(s)
+  github_events_monthly_202608.csv: 158 row(s) from 2 daily file(s)
 ```
 
 48 daily issue rows became 24. `--keep` leaves the dailies in place.
