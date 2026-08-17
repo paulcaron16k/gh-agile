@@ -356,12 +356,32 @@ def event_rows(issue: dict, events: list[dict], project: str,
         if not occurred:
             continue
         actor = (event.get("actor") or {}).get("login") or ""
+        detail = (
+            (event.get("label") or {}).get("name")
+            or event.get("milestoneTitle")
+            or event.get("stateReason")
+            or (event.get("assignee") or {}).get("login")
+            or event.get("currentTitle")
+            or ""
+        )
         row = {
             # Stable across exports so the target can dedupe on it: the same
             # event re-exported by an overlapping incremental run hashes the
             # same and overwrites itself rather than duplicating.
+            #
+            # The transition and the actor are in the hash because
+            # `issue|kind|timestamp` alone is **not unique**: GitHub timestamps
+            # to the second, and two status changes on one issue inside the same
+            # second are ordinary -- a move to In Progress and straight on to
+            # Done, or a bulk edit. Measured on a real export: 187 event rows
+            # collapsed to 181 distinct hashes, six pairs differing in actor and
+            # in prior_state/state. Since the compactor and the Gold target both
+            # keep one row per hash, those six were silent losses.
             "event_hash": hashlib.sha256(
-                f"{issue['id']}|{kind}|{occurred}".encode()
+                "|".join((
+                    issue["id"], kind, occurred, actor,
+                    event.get("previousStatus") or "", event.get("status") or "", detail,
+                )).encode()
             ).hexdigest(),
             "function_code": "github",
             "process_type": "issues",
@@ -380,14 +400,7 @@ def event_rows(issue: dict, events: list[dict], project: str,
                 event.get("status") and event.get("status") != event.get("previousStatus")
             ),
             "was_automated": event.get("wasAutomated", ""),
-            "detail": (
-                (event.get("label") or {}).get("name")
-                or event.get("milestoneTitle")
-                or event.get("stateReason")
-                or (event.get("assignee") or {}).get("login")
-                or event.get("currentTitle")
-                or ""
-            ),
+            "detail": detail,
         }
         out.append(row)
     return out
