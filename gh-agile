@@ -1002,6 +1002,7 @@ def cmd_setup(args) -> int:
                 f=field["id"],
             )
             restore_assignments(args.owner, args.project, saved)
+            heal_sprint_fields(args.owner, args.project)
             print(f"  Sprint cadence -> {settings['cadence_days']} days")
         else:
             print(f"  Sprint cadence in step ({settings['cadence_days']} days, "
@@ -1626,6 +1627,7 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
         restored = restore_assignments(login, project, saved)
         if restored:
             print(f"  re-applied {restored} sprint assignment(s) the update cleared")
+        heal_sprint_fields(login, project)
     if not quiet:
         for line in made:
             print(f"  created {line}")
@@ -1723,32 +1725,41 @@ def backfill_sprint_labels(args) -> int:
     return 0
 
 
-def reconcile_sprint_fields(args) -> int:
-    """Set each item's `Sprint` field from its `sprint:` labels.
+def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
+                      overwrite: bool = False, quiet: bool = False) -> int:
+    """Set each item's `Sprint` field from its `sprint:` labels; return how many.
 
     The repair for GitHub's iteration model. Any write to the iteration
     configuration -- including appending the next sprint, the routine
     fortnightly act -- re-mints every iteration id and clears every item's
-    Sprint value, retroactively, including closed issues in completed sprints.
-    `gh-agile` saves and re-applies around its own writes, but that is one call
-    per item with no transaction, it cannot cover a write made in the web UI,
-    and it cannot cover a run that died partway.
+    Sprint value, retroactively, closed issues in completed sprints included.
+    Save-and-restore around this tool's own writes cannot cover a write made in
+    the web UI, or a run that died partway.
 
-    So the labels are authoritative and this reconciles the field toward them.
-    Authoritative has to mean something reconciles *to* it; until this existed,
-    `validate` could only report the divergence and stop.
+    So the labels are authoritative and the field is reconciled toward them.
+    Authoritative has to mean something reconciles *to* it.
+
+    **An empty field is damage; a disagreeing field is a decision.** Only the
+    first is repaired unless `overwrite` is set. The damage this heals is
+    *clearing*, and a field someone deliberately pointed at a future sprint --
+    an open story re-planned, its labels recording where it was actually
+    worked -- is not the same thing. Overwriting that by default would make an
+    automatic repair fight the person using it; `validate` reports the
+    disagreement instead, and `--overwrite` acts on it when asked.
 
     The **latest** label wins. An item carried across a boundary carries one per
-    sprint it lived in, and the field holds where it is now, which is the last
-    of them.
+    sprint it lived in, and the field holds where it is now, the last of them.
     """
-    active, completed = iterations(args.owner, args.project)
+    active, completed = iterations(login, project)
     by_start = {i["startDate"]: i["title"] for i in active + completed}
     if not by_start:
-        sys.exit("no sprints exist on this project; nothing to reconcile to")
+        if not quiet:
+            print("  no sprints exist on this project; nothing to reconcile to",
+                  file=sys.stderr)
+        return 0
 
-    _title, items = fetch_items(args.owner, args.project)
-    changed = agreed = unknown = 0
+    _title, items = fetch_items(login, project)
+    changed = agreed = unknown = disagreed = 0
     for item in items:
         content = item.get("content") or {}
         if content.get("__typename") != "Issue":
@@ -1764,8 +1775,9 @@ def reconcile_sprint_fields(args) -> int:
             # A label naming a sprint the configuration no longer has. Never
             # invent one: the label is the record and the configuration is what
             # drifted, so say so and leave both alone.
-            print(f"  #{content['number']}: no sprint starts {latest}; left alone",
-                  file=sys.stderr)
+            if not quiet:
+                print(f"  #{content['number']}: no sprint starts {latest}; left alone",
+                      file=sys.stderr)
             unknown += 1
             continue
         current = field_values(item).get("Sprint")
@@ -1773,21 +1785,48 @@ def reconcile_sprint_fields(args) -> int:
             agreed += 1
             continue
         ident = f"#{content['number']} {content['title'][:44]}"
-        if args.dry_run:
+        if current and not overwrite:
+            disagreed += 1
+            if not quiet:
+                print(f"  {ident}: field {current!r} disagrees with label {latest}; "
+                      f"left alone (--overwrite to change it)", file=sys.stderr)
+            continue
+        if dry_run:
             print(f"  would set {ident}  {current or '(empty)'} -> {wanted}")
         else:
-            set_field(args.owner, args.project, item["id"], "Sprint", wanted)
+            set_field(login, project, item["id"], "Sprint", wanted)
             print(f"  set {ident}  {current or '(empty)'} -> {wanted}")
         changed += 1
 
-    verb = "would set" if args.dry_run else "set"
-    print(f"  {verb} {changed}, already correct {agreed}, unresolvable {unknown}")
-    return 0
+    if not quiet or changed:
+        verb = "would set" if dry_run else "set"
+        tail = f", disagreeing {disagreed}" if disagreed else ""
+        print(f"  {verb} {changed}, already correct {agreed}, "
+              f"unresolvable {unknown}{tail}")
+    return changed
+
+
+def heal_sprint_fields(login: str, project: int) -> None:
+    """Repair fields the iteration write just cleared, in the same run.
+
+    Runs after `restore_assignments`, which replays a snapshot taken moments
+    earlier and covers items the labels know nothing about -- one assigned by
+    hand and never moved through `move`. This covers the rest: anything the
+    restore could not put back, for whatever reason, including the run dying
+    partway. Empty fields only, so it can never argue with a deliberate
+    placement.
+
+    Silent when there is nothing to do, which is the normal case: a restore that
+    worked leaves no empty fields for this to find.
+    """
+    reconcile_sprints(login, project, overwrite=False, quiet=True)
 
 
 def cmd_sprint(args) -> int:
     if args.sprint_command == "reconcile":
-        return reconcile_sprint_fields(args)
+        reconcile_sprints(args.owner, args.project,
+                          dry_run=args.dry_run, overwrite=args.overwrite)
+        return 0
 
     if args.sprint_command == "backfill":
         return backfill_sprint_labels(args)
@@ -1884,6 +1923,7 @@ def cmd_sprint(args) -> int:
     restored = restore_assignments(args.owner, args.project, saved)
     if restored:
         print(f"  re-applied {restored} sprint assignment(s) the update cleared")
+    heal_sprint_fields(args.owner, args.project)
     print(f"  {title}: {start}, {duration} day(s)")
     return 0
 
@@ -3077,6 +3117,10 @@ why this exists:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sprint_fix.add_argument("--dry-run", action="store_true")
+    sprint_fix.add_argument("--overwrite", action="store_true",
+                            help="also change a field that disagrees with its label; "
+                                 "by default only an empty field is repaired, because a "
+                                 "disagreement is somebody's decision")
 
     sprint_fill = sprint_sub.add_parser(
         "backfill", help="stamp sprint: labels on issues that predate the stamping",

@@ -103,3 +103,52 @@ class TestAdoptStatus:
     def test_status_for_state(self, tool, state, expected):
         chosen = tool.CYCLE_END if state.upper() == "CLOSED" else "Todo"
         assert chosen == expected
+
+
+class TestDamageVersusDecision:
+    """An empty field is damage; a disagreeing field is a decision.
+
+    The automatic heal repairs only the first. It runs after every iteration
+    write, and overwriting a deliberate placement by default would make the
+    repair argue with the person using it -- an open story re-planned into a
+    future sprint has labels recording where it was *worked*, not where it is
+    *planned*.
+    """
+
+    def test_the_heal_never_overwrites(self, tool):
+        """`heal_sprint_fields` is the hooked entry point; its contract is
+        overwrite=False, and a test is the only thing keeping it that way."""
+        import inspect
+
+        source = inspect.getsource(tool.heal_sprint_fields)
+        assert "overwrite=False" in source
+        assert "quiet=True" in source, "the hook must be silent when idle"
+
+    def test_reconcile_defaults_to_not_overwriting(self, tool):
+        import inspect
+
+        signature = inspect.signature(tool.reconcile_sprints)
+        assert signature.parameters["overwrite"].default is False
+        assert signature.parameters["dry_run"].default is False
+        assert signature.parameters["quiet"].default is False
+
+    def test_every_destructive_path_heals(self, tool):
+        """The three writes that clear assignments -- cadence convergence,
+        `sprint ensure` and `sprint create` -- must each heal afterwards, or the
+        gap reopens in whichever one was missed."""
+        import inspect
+
+        for function in (tool.cmd_setup, tool.ensure_sprints, tool.cmd_sprint):
+            source = inspect.getsource(function)
+            if "restore_assignments" not in source:
+                continue
+            assert "heal_sprint_fields" in source, function.__name__
+
+    def test_heal_follows_restore_not_precedes_it(self, tool):
+        """Order matters: `restore_assignments` replays a snapshot and covers
+        items the labels know nothing about -- one assigned by hand and never
+        moved through `move`. The heal only covers what the labels know."""
+        import inspect
+
+        source = inspect.getsource(tool.ensure_sprints)
+        assert source.index("restore_assignments") < source.index("heal_sprint_fields")

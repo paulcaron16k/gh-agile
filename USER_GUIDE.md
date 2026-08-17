@@ -797,9 +797,41 @@ It sets each item's `Sprint` field from its `sprint:` labels, latest label
 winning — an item carried across a boundary holds where it is *now*, which is
 the last sprint it lived in.
 
-Run it after **any** sprint change made outside this tool, or on a schedule
-beside `sync`. Unlike `sprint ensure`, it invents nothing and is safe to
-automate: it only ever copies a recorded fact back into a field GitHub cleared.
+**It also runs automatically.** Every write that clears assignments — the
+cadence converging in `setup`, `sprint ensure`, `sprint create` — restores from
+a snapshot taken moments before and then heals from the labels, in that order
+and in the same run. The snapshot covers items the labels know nothing about,
+such as one assigned by hand and never moved through `move`; the heal covers
+what the snapshot could not put back, including a run that died partway. It is
+silent when there is nothing to repair, which is the normal case.
+
+So the manual command is for a change made **outside** the tool — a web-UI edit,
+another script — or as a scheduled sweep beside `sync`. It invents nothing and is
+safe to automate.
+
+### An empty field is damage; a disagreeing field is a decision
+
+The automatic heal only fills in fields that are **empty**. That distinction is
+the whole reason it is safe to run after every sprint write.
+
+An open story deliberately re-planned into a future sprint has labels recording
+where it was *worked*, not where it is *planned* — those two legitimately differ.
+Overwriting it automatically would make the repair argue with the person using
+it. So a disagreement is reported and left alone:
+
+```
+#59: field 'Sprint 2' disagrees with label 2026-08-17; left alone (--overwrite to change it)
+set 0, already correct 0, unresolvable 0, disagreeing 1
+```
+
+`gh agile validate` reports the same divergence. When the field is the wrong one:
+
+```bash
+gh agile sprint reconcile --overwrite
+```
+```
+set #59 heal hook probe  Sprint 2 -> Sprint 1
+```
 
 The whole cycle, measured on a scratch project:
 
@@ -821,6 +853,12 @@ gh agile sprint reconcile
 A label naming a sprint the configuration no longer holds is reported and left
 alone. The label is the record; if the two disagree it is the configuration that
 drifted, and inventing a sprint to match would be the tool guessing at history.
+
+> **Labels are per repository, not per project.** An issue on two boards carries
+> one set of `sprint:` labels, and those dates only match one board's series. On
+> the other, reconcile reports them as unresolvable and changes nothing — which
+> is correct, but means the second board's field cannot be healed from labels.
+> One board per repository keeps this simple.
 
 ### Backfilling issues that predate the stamping
 

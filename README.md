@@ -365,10 +365,19 @@ sprint_starts     = '2026-08-10;2026-08-24'     ← intact
 sprint_closed_in  = '2026-08-24'
 ```
 
-**`gh agile sprint reconcile` puts the field back**, setting it from the labels
-with the latest winning. Run it after any sprint change made outside this tool,
-or on a schedule. On the board this was written for, its first run repaired 14
-of 16 labelled items whose field had been silently cleared by earlier sprint
+**The field is repaired from the labels, automatically.** Every write that
+clears assignments — `setup` converging the cadence, `sprint ensure`,
+`sprint create` — restores from a snapshot and then heals from the labels, in
+that order, in the same run. The snapshot covers items the labels know nothing
+about; the heal covers what the snapshot could not put back, including a run that
+died partway. `gh agile sprint reconcile` does it on demand, for a change made
+outside the tool.
+
+Only **empty** fields are filled in. A field that disagrees with its labels is
+somebody's decision — an open story re-planned into a future sprint has labels
+recording where it was *worked* — so it is reported and left alone unless
+`--overwrite` is given. On the board this was written for, the first run repaired
+14 of 16 labelled items whose field had been silently cleared by earlier sprint
 creation.
 
 Where they disagree, believe the labels. The field holds one value and forgets;
