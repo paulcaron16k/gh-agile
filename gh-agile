@@ -446,14 +446,98 @@ def history(issue_id: str) -> dict[str, object]:
             "_events": events}
 
 
-def days_between(start: str | None, end: str | None) -> float | None:
+def today_utc():
+    """Today's date in UTC, never the machine's local date.
+
+    A sprint window is a pair of plain dates that GitHub stores and compares in
+    UTC, and `@current` is decided by GitHub the same way. Using the local date
+    put the two out of step by a day for anyone east or west of UTC at the hours
+    around midnight: `ensure` would decide a sprint covered today when GitHub
+    had already moved on, or place a new one a day early.
+    """
+    import datetime as dt
+
+    return dt.datetime.now(dt.timezone.utc).date()
+
+
+def seconds_between(start: str | None, end: str | None) -> int | None:
+    """Elapsed seconds, or None if either end is missing.
+
+    **Every duration this tool emits is in seconds, with no exceptions and no
+    unit suffix on the name.** Days lost the distinction that matters: work
+    taking twenty minutes and work taking six hours both rounded to 0.0 days,
+    and a median of 0.0 was reported as if it were a measurement. Seconds are
+    also the only unit that never needs a fractional part, so nothing is lost to
+    rounding and no consumer has to guess the scale from the value.
+
+    Presentation is the consumer's problem. A dashboard that wants hours divides
+    by 3600 once, where the audience is known.
+    """
     if not (start and end):
         return None
     import datetime as dt
 
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     delta = dt.datetime.strptime(end, fmt) - dt.datetime.strptime(start, fmt)
-    return round(delta.total_seconds() / 86400, 2)
+    return int(delta.total_seconds())
+
+
+#: Longest sprint this tool will create. GitHub accepts more; a sprint longer
+#: than a month stops being a sprint.
+MAX_SPRINT_DAYS = 30
+
+#: Points kept in reserve beyond the restore itself -- the mutation, the re-read
+#: and a little room for the caller to finish and report.
+BUDGET_MARGIN = 25
+
+
+def graphql_remaining() -> int | None:
+    """Remaining GraphQL points, or None if it cannot be determined.
+
+    Read over REST, which has a separate budget, so asking costs nothing from
+    the pool being measured.
+    """
+    result = subprocess.run(
+        ["gh", "api", "rate_limit", "-q", ".resources.graphql.remaining"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def require_graphql_budget(assignments: int, doing: str) -> None:
+    """Refuse a destructive iteration write the restore could not finish.
+
+    Any write to the iteration configuration clears **every** item's sprint,
+    and the repair is one API call per assigned item with no transaction around
+    it. Running out of budget halfway leaves assignments destroyed and
+    unrestorable until the limit resets -- measured, not theorised: it happened
+    during development and an assignment was lost.
+
+    Refusing before the destructive write costs nothing. Proceeding without the
+    budget to repair costs history that cannot be recovered, because the ids the
+    old values pointed at no longer exist.
+    """
+    if not assignments:
+        return
+    remaining = graphql_remaining()
+    if remaining is None:
+        return  # cannot tell; not a reason to block the user
+    needed = assignments + BUDGET_MARGIN
+    if remaining < needed:
+        sys.exit(
+            f"{doing} would clear {assignments} sprint assignment(s) and there is not "
+            f"enough GraphQL budget to put them back: {remaining} point(s) left, "
+            f"{needed} needed.\n"
+            f"  This is refused rather than half-done -- a restore that stops partway "
+            f"loses assignments permanently,\n  because the iteration ids they pointed "
+            f"at no longer exist.\n"
+            f"  Wait for the hourly reset (`gh api rate_limit`), then run it again."
+        )
 
 
 #: How far back to re-read on an incremental run, in seconds.
@@ -740,8 +824,8 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             hist = history(content["id"])
             raw_events = hist.pop("_events", [])
             row.update(hist)
-            row["cycle_time_days"] = days_between(hist["started_at"], hist["done_at"])
-            row["lead_time_days"] = days_between(hist["added_to_board_at"], hist["done_at"])
+            row["cycle_time"] = seconds_between(hist["started_at"], hist["done_at"])
+            row["lead_time"] = seconds_between(hist["added_to_board_at"], hist["done_at"])
             pulls = (content.get("closedByPullRequestsReferences") or {}).get("nodes") or []
             # Who actually did the work. The pull request that closes an issue
             # names its author as a fact; the assignee is a point-in-time value
@@ -857,7 +941,7 @@ def cmd_setup(args) -> int:
     spec, after someone deletes one by hand. `gh project field-create` happily
     creates a second field with the same name, so existence is checked first.
     """
-    spec = json.loads(open(args.spec).read()) if args.spec else DEFAULT_SPEC
+    spec = json.loads(pathlib.Path(args.spec).read_text()) if args.spec else DEFAULT_SPEC
     existing = fields_of(args.owner, args.project)
     pid = project_id(args.owner, args.project)
 
@@ -903,6 +987,7 @@ def cmd_setup(args) -> int:
         # what this tool actually does, which is align the sprints it creates.
         if current["duration"] != settings["cadence_days"]:
             saved = sprint_assignments(args.owner, args.project)
+            require_graphql_budget(len(saved), "changing the sprint cadence")
             iterations_now = current["completedIterations"] + current["iterations"]
             entries = ", ".join(
                 f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
@@ -1412,6 +1497,33 @@ def restore_assignments(login: str, project: int, saved: dict[str, str]) -> int:
     return restored
 
 
+def iteration_spans(existing: list[dict]) -> list[tuple]:
+    """[(start, end)] for every iteration, inclusive of the end day."""
+    import datetime as dt
+
+    return sorted(
+        (dt.date.fromisoformat(i["startDate"]),
+         dt.date.fromisoformat(i["startDate"]) + dt.timedelta(days=i["duration"] - 1))
+        for i in existing
+    )
+
+
+def overlapping(spans: list[tuple], start, end):
+    """The first existing span intersecting [start, end], or None.
+
+    Intersection, not containment. Testing containment read a partial overlap as
+    uncovered and put three overlapping sprints on a live board; overlapping
+    sprints make `@current` arbitrary, which is the one thing it exists to
+    resolve.
+
+    Shared with `sprint create` deliberately. This test used to live inside
+    `ensure_sprints` while `create --start` -- the path a person actually types
+    by hand -- had none at all, so the guard was missing from exactly the route
+    most likely to need it.
+    """
+    return next((sp for sp in spans if sp[0] <= end and start <= sp[1]), None)
+
+
 def ensure_sprints(login: str, project: int, config: dict, ahead: int,
                    *, quiet: bool = False) -> list[str]:
     """Guarantee a sprint covering today, plus `ahead` future ones.
@@ -1430,24 +1542,12 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
     field = sprint_field(login, project)
     existing = field["configuration"]["completedIterations"] + field["configuration"]["iterations"]
     duration = settings["cadence_days"]
-    today = dt.date.today()
+    today = today_utc()
 
-    spans = sorted(
-        (dt.date.fromisoformat(i["startDate"]),
-         dt.date.fromisoformat(i["startDate"]) + dt.timedelta(days=i["duration"] - 1))
-        for i in existing
-    )
+    spans = iteration_spans(existing)
 
     def overlaps(start, end):
-        """Any intersection at all, not containment.
-
-        The first version asked whether an existing sprint *contained* the
-        candidate window, so a partial overlap read as uncovered and three
-        overlapping sprints were created on a live board. Overlapping sprints
-        make "the current sprint" ambiguous, which is the thing @current exists
-        to resolve.
-        """
-        return any(s <= end and start <= e for s, e in spans)
+        return overlapping(spans, start, end) is not None
 
     key = (config.get("project") or {}).get("key") or ""
     made, entries = [], [
@@ -1509,6 +1609,7 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
 
     saved = sprint_assignments(login, project) if made else {}
     if made:
+        require_graphql_budget(len(saved), "creating a sprint")
         # Every existing iteration is re-sent. The configuration is replaced
         # wholesale -- the same trap that cleared Status from 16 items when
         # options were re-sent without their ids -- so anything omitted here is
@@ -1644,7 +1745,23 @@ def cmd_sprint(args) -> int:
             print(f"  {it['title']:12} {it['startDate']} .. {_iteration_end(it)}  (completed)")
         return 0
 
+    import datetime as dt
+
     field = sprint_field(args.owner, args.project)
+    # Validated before it reaches the mutation, where it is interpolated into
+    # the GraphQL document as a bare string. Unchecked, "17/08/2026" produced a
+    # syntax error from the API rather than a message, and a value containing a
+    # quote rewrote the mutation around it.
+    if args.start:
+        try:
+            dt.date.fromisoformat(args.start)
+        except ValueError:
+            sys.exit(f"--start {args.start!r} is not an ISO date; use YYYY-MM-DD")
+    if args.weeks is not None and not 1 <= args.weeks * 7 <= MAX_SPRINT_DAYS:
+        # The profile enforces 1..30 on `cadence_days` and this path bypassed
+        # it, so a sprint could be created that no profile would allow.
+        sys.exit(f"--weeks {args.weeks} is {args.weeks * 7} days; "
+                 f"a sprint is 1 to {MAX_SPRINT_DAYS} days")
     duration = args.weeks * 7 if args.weeks else field["configuration"]["duration"]
     start = args.start
     if not start:
@@ -1659,7 +1776,7 @@ def cmd_sprint(args) -> int:
             end = dt.date.fromisoformat(_iteration_end(last))
             start = (end + dt.timedelta(days=1)).isoformat()
         else:
-            start = dt.date.today().isoformat()
+            start = today_utc().isoformat()
     # The configuration is replaced wholesale, not appended to: `startDate` and
     # `duration` are required at the top level and every existing iteration has
     # to be sent back or it is dropped. Each iteration also needs an explicit
@@ -1672,6 +1789,24 @@ def cmd_sprint(args) -> int:
         f'title: {json.dumps(i["title"])}}}'
         for i in existing
     ]
+    # The same overlap rule `ensure` applies. Without it, `create --start` on a
+    # date already covered produced a second sprint over the same days, and
+    # `@current` then picked between them arbitrarily.
+    begins = dt.date.fromisoformat(start)
+    finishes = begins + dt.timedelta(days=duration - 1)
+    clash = overlapping(iteration_spans(existing), begins, finishes)
+    if clash:
+        sys.exit(
+            f"a sprint already covers {clash[0]} .. {clash[1]}, which "
+            f"{start} .. {finishes.isoformat()} would overlap.\n"
+            f"  Overlapping sprints make `@current` ambiguous -- every scrum "
+            f"board filters on it.\n"
+            f"  Pick a start after {clash[1]}, or let `gh agile sprint ensure` "
+            f"place it."
+        )
+
+    saved = sprint_assignments(args.owner, args.project)
+    require_graphql_budget(len(saved), "creating a sprint")
     entries.append(f'{{startDate: "{start}", duration: {duration}, title: {json.dumps(title)}}}')
     graphql(
         "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
@@ -1680,6 +1815,9 @@ def cmd_sprint(args) -> int:
         % (start, duration, ", ".join(entries)),
         f=field["id"],
     )
+    restored = restore_assignments(args.owner, args.project, saved)
+    if restored:
+        print(f"  re-applied {restored} sprint assignment(s) the update cleared")
     print(f"  {title}: {start}, {duration} day(s)")
     return 0
 
@@ -1930,8 +2068,13 @@ def adopt_issue(args, repo: str, issue: dict, item_id: str) -> None:
     )
     value = ((data.get("data") or {}).get("node") or {}).get("fieldValueByName")
     if not (value or {}).get("name"):
-        set_field(args.owner, args.project, item_id, "Status", "Todo")
-        print("    + Status = Todo")
+        # By the issue's own state, not always Todo. `sync --adopt --state all`
+        # put closed issues in Todo, and `validate` then reported "closed but
+        # status is not Done" -- the tool manufacturing the violation it
+        # detects.
+        status = CYCLE_END if issue.get("state", "").upper() == "CLOSED" else "Todo"
+        set_field(args.owner, args.project, item_id, "Status", status)
+        print(f"    + Status = {status}")
 
 
 def cmd_sync(args) -> int:
@@ -1964,7 +2107,7 @@ def cmd_sync(args) -> int:
     added = skipped = 0
     for repo in repos:
         cmd = ["issue", "list", "--repo", repo, "--state", args.state,
-               "--limit", str(args.limit), "--json", "number,title,url"]
+               "--limit", str(args.limit), "--json", "number,title,url,state,labels"]
         if args.query:
             cmd += ["--search", args.query]
         for issue in json.loads(gh(cmd)):
@@ -2081,9 +2224,9 @@ def cmd_project(args) -> int:
 
     # Asked before the board exists, so the cadence is a decision rather than
     # something discovered after sprints already follow it.
-    if args.project_command == "create" and not args.sprint_template:
-        if not (config.get("sprint") or {}).get("template"):
-            require_sprint_config(config, "creating a project")
+    if (args.project_command == "create" and not args.sprint_template
+            and not (config.get("sprint") or {}).get("template")):
+        require_sprint_config(config, "creating a project")
 
     created = json.loads(gh(["project", "create", "--owner", args.owner,
                              "--title", args.title, "--format", "json"]))
@@ -2300,7 +2443,10 @@ def master_rows(login: str, project: int, config: dict, stamp: str) -> dict[str,
         # it wrong once.
         "keys": ";".join(k.get("key", "") for k in profile_keys(config)),
         "repos": ";".join(sorted({k.get("repo", "") for k in profile_keys(config)})),
-        "sprint_cadence_days": sprint_settings(config)["cadence_days"],
+        # Seconds on the way out, like every other duration. `cadence_days` is
+        # the profile's hand-authored spelling -- a person writes 14, not
+        # 1209600 -- and the unit suffix stops at the file's edge.
+        "sprint_cadence": sprint_settings(config)["cadence_days"] * 86400,
         "sprint_start_day": sprint_settings(config)["start_day"],
     }
 
@@ -2324,7 +2470,7 @@ def master_rows(login: str, project: int, config: dict, stamp: str) -> dict[str,
         active, completed = [], []
     import datetime as dt
 
-    today = dt.date.today()
+    today = today_utc()
     for state, group in (("completed", completed), ("active", active)):
         for iteration in group:
             start = dt.date.fromisoformat(iteration["startDate"])
@@ -2335,7 +2481,10 @@ def master_rows(login: str, project: int, config: dict, stamp: str) -> dict[str,
                 "sprint_name": iteration["title"],
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
-                "duration_days": iteration["duration"],
+                # Seconds, like every other duration here. GitHub stores the
+                # iteration length in days; the day count stays available as
+                # start_date .. end_date.
+                "duration": iteration["duration"] * 86400,
                 # GitHub reports completed separately from active; current and
                 # future are told apart by the date, since it does not.
                 "state": ("completed" if state == "completed"
@@ -2456,6 +2605,12 @@ def cmd_validate(args) -> int:
     data = rows(args.owner, args.project, with_history=False)
     problems: dict[str, list[str]] = defaultdict(list)
 
+    active, completed = iterations(args.owner, args.project)
+    sprint_config = active + completed
+    #: title -> start date, for comparing the live field against the labels,
+    #: which are dated rather than named.
+    sprint_starts = {i["title"]: i["startDate"] for i in sprint_config}
+
     for row in data:
         ident = f"#{row['number']} {row['title'][:48]}"
         labels = set(row["labels"].split(";")) if row["labels"] else set()
@@ -2473,6 +2628,34 @@ def cmd_validate(args) -> int:
             problems[f"status {CYCLE_END} but still open"].append(ident)
         if not labels & {"type:epic", "type:story", "type:bug"}:
             problems["no type: label"].append(ident)
+
+        # Sprint invariants. The validator used to be blind to sprints, which
+        # is where every failure in this project's history actually happened:
+        # overlapping sprints, in-progress work in no sprint, and a Sprint field
+        # cleared by an ordinary iteration write while the labels stayed right.
+        stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels
+                        if lb.startswith(SPRINT_LABEL))
+        if same_status(status, CYCLE_START) and not row.get("field_sprint"):
+            problems[f"{CYCLE_START} but in no sprint"].append(ident)
+        if row["state"] == "CLOSED" and same_status(status, CYCLE_END) and not stamps:
+            problems["closed with no sprint: label -- run `sprint backfill`"].append(ident)
+        if stamps and row.get("field_sprint"):
+            live = sprint_starts.get(row["field_sprint"])
+            if live and live not in stamps:
+                # The field and the labels disagree. The field is the one that
+                # gets cleared and re-set; believe the labels and say so.
+                problems["Sprint field disagrees with the sprint: label(s)"].append(
+                    f"{ident}: field={row['field_sprint']!r} ({live}) labels={','.join(stamps)}"
+                )
+
+    overlaps_found = []
+    spans = iteration_spans(sprint_config)
+    for index, (start, end) in enumerate(spans):
+        for other_start, other_end in spans[index + 1:]:
+            if other_start <= end and start <= other_end:
+                overlaps_found.append(f"{start}..{end} overlaps {other_start}..{other_end}")
+    for line in overlaps_found:
+        problems["sprints overlap -- `@current` is ambiguous"].append(line)
 
     if not problems:
         print(f"{len(data)} item(s): no problems found")
@@ -2513,8 +2696,8 @@ def cmd_self_test(args) -> int:
                                    repo=args.repo, _config=args._config)
         cmd_setup(setup)
 
-        common = dict(owner=args.owner, project=project, repo=args.repo,
-                      intent="self-test", acceptance="self-test", _config=args._config)
+        common = {"owner": args.owner, "project": project, "repo": args.repo,
+                  "intent": "self-test", "acceptance": "self-test", "_config": args._config}
         # Each issue is recorded the moment it exists, not after both do. The
         # earlier version assigned the list once at the end, so a failure
         # between the two -- a rate limit, say -- left the epic behind with

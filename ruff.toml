@@ -1,0 +1,43 @@
+# Pinned so lint is the same on every machine and every ruff version.
+#
+# Without this file the rule set is whatever the installed ruff defaults to,
+# which changed under us: the same code passed with one version and reported
+# thirty findings with the next. A lint that depends on ambient state is the
+# same failure as a test suite that depends on globally installed packages.
+
+line-length = 99
+target-version = "py310"
+
+[lint]
+select = [
+    "E4", "E7", "E9", "W",   # pycodestyle, minus E501 -- see below
+    "F",           # pyflakes
+    "I",           # import order
+    "UP",          # pyupgrade
+    "B",           # bugbear
+    "C4",          # comprehensions
+    "SIM",         # simplify
+    "DTZ",         # naive datetimes -- this tool's sprints are UTC-boundaried
+    "PLW",         # pylint warnings
+]
+
+# E501 is deliberately absent from `select`, not ignored here: every long line
+# in this codebase is a GraphQL document or an argparse help string, and folding
+# those hurts the thing line length exists to protect. Code stays within
+# line-length by habit; literals are exempt by construction.
+
+ignore = [
+    # The GraphQL mutations build an iteration list with %-formatting because
+    # the document already contains braces that f-strings would fight over.
+    "UP031",
+    # `subprocess.run` here always inspects `returncode` itself, to turn a
+    # failure into a sentence rather than a traceback.
+    "PLW1510",
+    # Both ends of every duration are UTC strings ending in Z, parsed naive and
+    # subtracted -- adding a tzinfo changes nothing and obscures that.
+    "DTZ007",
+]
+
+[lint.per-file-ignores]
+# Tests reach into the module under test and shadow names deliberately.
+"tests/*" = ["S101", "PLR2004"]

@@ -145,9 +145,9 @@ to reset the watermark should not lose the keys.
 | `labels` | `labels.nodes[].name` | |
 | `sprint_id` | Project iteration field | |
 | `subtask_count` | `subIssuesSummary.total` | |
-| `lead_time_hours` | `AddedToProjectV2Event` → done | **Not** created→done: an issue open a year and boarded yesterday has one day of lead time by this definition. State it |
-| `cycle_time_hours` | first `In Progress` → `Done` | From the timeline |
-| `blocked_hours`, `review_hours`, `qa_hours` | Sum of intervals in each status | Derivable from the status events, since each carries its previous value |
+| `lead_time` | `AddedToProjectV2Event` → done | **Not** created→done: an issue open a year and boarded yesterday has one day of lead time by this definition. State it |
+| `cycle_time` | first `In Progress` → `Done` | From the timeline |
+| `blocked_time`, `review_time`, `qa_time` | Sum of intervals in each status | Derivable from the status events, since each carries its previous value |
 | `status_change_count`, `reopen_count`, `was_blocked` | Count of status events | |
 | `data` | Everything unmapped | Where the extra assignees and any custom field goes |
 

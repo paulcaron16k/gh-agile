@@ -97,10 +97,13 @@ PERIOD_METRICS = {
     "points_done": ("story points completed",
                     "coalesce(sum(field_story_points) FILTER (WHERE done_at IS NOT NULL), 0)"),
     "created": ("items created", "count(*)"),
-    "cycle_time_median": ("median days In Progress -> Done",
-                          "round(median(cycle_time_days), 2)"),
-    "lead_time_median": ("median days on board -> Done",
-                         "round(median(lead_time_days), 2)"),
+    # Seconds, like every duration this project emits. Days rounded twenty
+    # minutes and six hours both to 0.0, and reported the result as a
+    # measurement. Converting for display is the dashboard's job.
+    "cycle_time_median": ("median seconds In Progress -> Done",
+                          "CAST(round(median(cycle_time)) AS BIGINT)"),
+    "lead_time_median": ("median seconds on board -> Done",
+                         "CAST(round(median(lead_time)) AS BIGINT)"),
     "carryover": ("started but not finished",
                   "count(*) FILTER (WHERE started_at IS NOT NULL AND done_at IS NULL)"),
 }
@@ -116,7 +119,10 @@ def periods(kind: str, start_date, count: int = 5) -> list[tuple[str, object, ob
     """
     import datetime as dt
 
-    today = dt.date.today()
+    # UTC, not the machine's local date: the periods here are compared against
+    # UTC timestamps from the export, and a local `today` shifts a boundary by a
+    # day for anyone not on UTC.
+    today = dt.datetime.now(dt.timezone.utc).date()
     out = []
     if kind == "quarterly":
         q = (today.month - 1) // 3
@@ -160,7 +166,12 @@ def metrics(directory: Path, kind: str, start_date, context: str) -> int:
         CREATE OR REPLACE VIEW issues AS
         SELECT * EXCLUDE (rn) FROM (
             SELECT *, row_number() OVER (PARTITION BY number ORDER BY exported_at DESC) AS rn
-            FROM read_csv_auto('{issues}', union_by_name = true)
+            -- sample_size = -1: the sprint columns hold dates for issues that
+            -- have them and '' for those that do not. Inferring a type from the
+            -- default sample saw only dates, typed the column DATE, and then
+            -- failed on the first empty string. Reading every row first types
+            -- it VARCHAR, which is what it is.
+            FROM read_csv_auto('{issues}', union_by_name = true, sample_size = -1)
         ) WHERE rn = 1
     """)
 
@@ -177,13 +188,32 @@ def metrics(directory: Path, kind: str, start_date, context: str) -> int:
                 "WHERE issue_key IS NOT NULL ORDER BY k"
             ).fetchall()
         ]
+    elif context == "sprint":
+        # `sprint_closed_in`, never `field_sprint`. The field is live UI state
+        # that any iteration write clears board-wide -- measured: renaming one
+        # unused future sprint unassigned every item on the project, closed
+        # issues in completed sprints included. The label is on the issue and
+        # survives all of it, so it is the only sprint fact a metric may stand
+        # on. Nothing in this file reads field_sprint, deliberately.
+        # No `!= ''` here: the column reads as DATE, so comparing it to an
+        # empty string literal casts that literal to a date and fails. Empty
+        # cells already arrive as NULL, which IS NOT NULL covers.
+        keys += [
+            str(row[0]) for row in duckdb.sql(
+                "SELECT DISTINCT sprint_closed_in AS s FROM issues "
+                "WHERE sprint_closed_in IS NOT NULL ORDER BY s"
+            ).fetchall()
+        ]
 
     print(f"  {kind}, {context} context, {len(spans)} periods\n")
     rows = []
     for key in keys:
-        where_key = "" if key == "(all)" else (
-            f" AND split_part(issue_key, '-', 1) = '{key}'"
-        )
+        if key == "(all)":
+            where_key = ""
+        elif context == "sprint":
+            where_key = f" AND sprint_closed_in = '{key}'"
+        else:
+            where_key = f" AND split_part(issue_key, '-', 1) = '{key}'"
         for metric, (about, expression) in PERIOD_METRICS.items():
             label = metric if key == "(all)" else f"{key} - {metric}"
             values = []
@@ -224,9 +254,12 @@ def main() -> int:
                         help="weekly and daily are omitted: too few items per period "
                              "to mean anything (default: %(default)s)")
     report.add_argument("--start-date", help="ISO date; drop periods ending before it")
-    report.add_argument("--context", default="project", choices=["project", "key"],
+    report.add_argument("--context", default="project",
+                        choices=["project", "key", "sprint"],
                         help="project is every issue together; key groups by the issue's "
-                             "key label (default: %(default)s)")
+                             "key label; sprint groups by the sprint: label it closed in "
+                             "-- never by the Sprint field, which GitHub clears "
+                             "(default: %(default)s)")
     report.set_defaults(func=lambda a: metrics(
         a.dir, a.time_range,
         __import__("datetime").date.fromisoformat(a.start_date) if a.start_date else None,

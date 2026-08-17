@@ -7,9 +7,28 @@ OWNER ?= paulcaron16k
 REPO  ?= paulcaron16k/gh-agile
 PROJECT ?= 1
 
-.PHONY: self-test scratch teardown lint check-guide metrics help
+VENV  ?= .venv
+PY    := $(VENV)/bin/python
+
+.PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help
+
+# Every Python target runs through $(PY) and checks the venv exists first.
+# Nothing here may fall back to the system interpreter: a suite that silently
+# runs against whatever is installed globally is testing a different
+# environment on every machine it lands on. tests/conftest.py asserts the same
+# thing from the inside, for anyone invoking pytest directly.
+define require_venv
+@test -x $(PY) || { \
+  echo "no virtualenv at $(VENV) -- run 'make venv' first"; exit 2; }
+@$(PY) -c "import sys, pathlib; \
+  want = pathlib.Path('$(VENV)').resolve(); got = pathlib.Path(sys.prefix).resolve(); \
+  sys.exit(0) if want == got else (print(f'wrong interpreter: {got} != {want}'), sys.exit(2))"
+endef
 
 help:
+	@echo "make venv                create $(VENV) and install the test dependencies"
+	@echo "make test                unit tests -- no network, no GitHub account"
+	@echo "make coverage            unit tests with a coverage report"
 	@echo "make self-test           stand a scratch project up, exercise it, tear it down"
 	@echo "make scratch             leave a scratch project standing, for poking at by hand"
 	@echo "make teardown NUM=<n>    delete a scratch project left by 'make scratch'"
@@ -18,6 +37,24 @@ help:
 	@echo "make lint                syntax and style"
 	@echo
 	@echo "OWNER=$(OWNER)  REPO=$(REPO)"
+
+venv:
+	python3 -m venv $(VENV)
+	$(PY) -m pip install --quiet --upgrade pip
+	$(PY) -m pip install --quiet --requirement requirements-dev.txt
+	@echo "  $(VENV) ready: $$($(PY) -m pytest --version)"
+
+# The fast one. No network, no GitHub account, no live project -- so it runs on
+# every save and in CI. `make self-test` covers one happy path against real
+# GitHub; these cover the pure logic, which is where every defect found in
+# review actually lived.
+test:
+	$(require_venv)
+	$(PY) -m pytest tests/ -q
+
+coverage:
+	$(require_venv)
+	$(PY) -m pytest tests/ -q --cov=. --cov-report=term-missing
 
 # The one to run before committing a change to the export or the write side.
 # Creates everything it needs and deletes it again, including after a failure.
@@ -45,7 +82,8 @@ teardown:
 # /var/log that a user crontab cannot write -- and every one was found by
 # hand-running a command that had already been written down.
 check-guide:
-	python3 scripts/check_guide.py
+	$(require_venv)
+	$(PY) scripts/check_guide.py
 
 # Needs uv: the analytics script declares duckdb with PEP 723 inline metadata,
 # because `gh extension install` installs no dependencies and the extension
@@ -56,5 +94,6 @@ metrics:
 	uv run scripts/agile_analytics.py --dir $(DIR) metrics
 
 lint:
-	python3 -c "import ast,sys; ast.parse(open('gh-agile').read()); print('gh-agile parses')"
-	@command -v ruff >/dev/null && ruff check gh-agile || echo "(ruff not installed; skipped)"
+	$(require_venv)
+	$(PY) -c "import ast; ast.parse(open('gh-agile').read()); print('gh-agile parses')"
+	$(VENV)/bin/ruff check gh-agile tests/ scripts/
