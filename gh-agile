@@ -1489,9 +1489,10 @@ def restore_assignments(login: str, project: int, saved: dict[str, str]) -> int:
             print(f"  could not restore {title!r} for {item_id[:12]}…: {exc}", file=sys.stderr)
     if failed:
         print(
-            f"  {len(failed)} sprint assignment(s) were lost to the configuration "
-            f"change and could not be re-applied.\n"
-            f"  Re-assign them by hand: gh agile set --issue <n> --field Sprint --value <title>",
+            f"  {len(failed)} sprint assignment(s) could not be re-applied from the "
+            f"snapshot taken before the change.\n"
+            f"  The `sprint:` labels are unaffected -- recover the field from them:\n"
+            f"    gh agile sprint reconcile",
             file=sys.stderr,
         )
     return restored
@@ -1722,7 +1723,72 @@ def backfill_sprint_labels(args) -> int:
     return 0
 
 
+def reconcile_sprint_fields(args) -> int:
+    """Set each item's `Sprint` field from its `sprint:` labels.
+
+    The repair for GitHub's iteration model. Any write to the iteration
+    configuration -- including appending the next sprint, the routine
+    fortnightly act -- re-mints every iteration id and clears every item's
+    Sprint value, retroactively, including closed issues in completed sprints.
+    `gh-agile` saves and re-applies around its own writes, but that is one call
+    per item with no transaction, it cannot cover a write made in the web UI,
+    and it cannot cover a run that died partway.
+
+    So the labels are authoritative and this reconciles the field toward them.
+    Authoritative has to mean something reconciles *to* it; until this existed,
+    `validate` could only report the divergence and stop.
+
+    The **latest** label wins. An item carried across a boundary carries one per
+    sprint it lived in, and the field holds where it is now, which is the last
+    of them.
+    """
+    active, completed = iterations(args.owner, args.project)
+    by_start = {i["startDate"]: i["title"] for i in active + completed}
+    if not by_start:
+        sys.exit("no sprints exist on this project; nothing to reconcile to")
+
+    _title, items = fetch_items(args.owner, args.project)
+    changed = agreed = unknown = 0
+    for item in items:
+        content = item.get("content") or {}
+        if content.get("__typename") != "Issue":
+            continue
+        labels = [n["name"] for n in content["labels"]["nodes"]]
+        stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels
+                        if lb.startswith(SPRINT_LABEL))
+        if not stamps:
+            continue
+        latest = stamps[-1]
+        wanted = by_start.get(latest)
+        if not wanted:
+            # A label naming a sprint the configuration no longer has. Never
+            # invent one: the label is the record and the configuration is what
+            # drifted, so say so and leave both alone.
+            print(f"  #{content['number']}: no sprint starts {latest}; left alone",
+                  file=sys.stderr)
+            unknown += 1
+            continue
+        current = field_values(item).get("Sprint")
+        if current == wanted:
+            agreed += 1
+            continue
+        ident = f"#{content['number']} {content['title'][:44]}"
+        if args.dry_run:
+            print(f"  would set {ident}  {current or '(empty)'} -> {wanted}")
+        else:
+            set_field(args.owner, args.project, item["id"], "Sprint", wanted)
+            print(f"  set {ident}  {current or '(empty)'} -> {wanted}")
+        changed += 1
+
+    verb = "would set" if args.dry_run else "set"
+    print(f"  {verb} {changed}, already correct {agreed}, unresolvable {unknown}")
+    return 0
+
+
 def cmd_sprint(args) -> int:
+    if args.sprint_command == "reconcile":
+        return reconcile_sprint_fields(args)
+
     if args.sprint_command == "backfill":
         return backfill_sprint_labels(args)
 
@@ -2048,13 +2114,32 @@ def adopt_issue(args, repo: str, issue: dict, item_id: str) -> None:
     one. `gh agile validate` reports it as missing and a person decides --
     POLICY.md's line between what a machine may infer and what it may not.
     """
+    labels = {lbl["name"] for lbl in issue.get("labels", [])}
     keys = keys_for_repo(args._config, repo)
-    if keys:
-        label = f"{KEY_LABEL}{keys[0]}"
-        if label not in {lbl["name"] for lbl in issue.get("labels", [])}:
+    key = keys[0] if keys else None
+    if key:
+        label = f"{KEY_LABEL}{key}"
+        if label not in labels:
             ensure_labels(repo, [label])
             gh(["issue", "edit", str(issue["number"]), "--repo", repo, "--add-label", label])
             print(f"    + {label}")
+
+    # The title convention applies to issues however they arrived. Without this,
+    # `project.issue_title_prefix` held only for issues this tool created, so a
+    # board filled partly from the web UI had two naming schemes and the
+    # identifier people say out loud was missing from exactly the issues nobody
+    # had curated.
+    mode = title_prefix_mode(args._config)
+    if mode != "off" and key and not issue["title"].startswith(f"{key}-"):
+        # `key+type` needs a type, and adopt deliberately does not guess one. If
+        # the issue already carries a type: label, use it; otherwise fall back
+        # to the key-only form, which is the part that identifies the issue.
+        # Better a correct short prefix than an invented type.
+        kind = next((lb[len("type:"):] for lb in labels if lb.startswith("type:")), None)
+        effective = mode if (mode == "key" or kind) else "key"
+        new_title = prefixed_title(effective, key, issue["number"], kind or "", issue["title"])
+        gh(["issue", "edit", str(issue["number"]), "--repo", repo, "--title", new_title])
+        print(f"    + title: {new_title}")
     # Status only when it is empty: an item already in a column has been placed
     # by somebody, and Todo would move their work backwards. The item is read by
     # id rather than by listing the project -- a full listing per adopted issue
@@ -2975,6 +3060,24 @@ why this is needed:
     )
     sprint_ensure.add_argument("--ahead", type=int,
                                help="future sprints to keep; default from the profile")
+    sprint_fix = sprint_sub.add_parser(
+        "reconcile", help="set each item's Sprint field from its sprint: labels",
+        epilog=field_help([
+            ("--dry-run", "flag", "optional", "list what would change and change nothing"),
+        ]) + """
+
+why this exists:
+  Any write to the iteration configuration clears every item's Sprint value --
+  including appending the next sprint, and including closed issues in completed
+  sprints. The `sprint:` labels are on the issue and survive it, so they are the
+  record and the field is reconciled toward them.
+
+  Run it after any sprint change made outside this tool, or on a schedule. It is
+  idempotent: items already correct are counted and skipped.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sprint_fix.add_argument("--dry-run", action="store_true")
+
     sprint_fill = sprint_sub.add_parser(
         "backfill", help="stamp sprint: labels on issues that predate the stamping",
         epilog=field_help([

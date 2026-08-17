@@ -365,6 +365,12 @@ sprint_starts     = '2026-08-10;2026-08-24'     ← intact
 sprint_closed_in  = '2026-08-24'
 ```
 
+**`gh agile sprint reconcile` puts the field back**, setting it from the labels
+with the latest winning. Run it after any sprint change made outside this tool,
+or on a schedule. On the board this was written for, its first run repaired 14
+of 16 labelled items whose field had been silently cleared by earlier sprint
+creation.
+
 Where they disagree, believe the labels. The field holds one value and forgets;
 the labels are immutable, live on the issue rather than the project item, and
 survive removal from the board, deletion of the project, and every iteration
@@ -411,8 +417,9 @@ Profile settings, all under `sprint`:
 | 9 | Assignments survive a configuration change | Read before, re-applied after — see above. Anything that could not be re-applied is named on stderr |
 | 10 | Starting work assigns the current sprint | `move --status "In Progress"` sets `Sprint` if the item has none. Otherwise in-progress work sits outside every sprint and the sprint report quietly omits it |
 | 11 | The sprint an issue was worked in **survives** | A `sprint:YYYY-MM-DD` label on the issue. The `Sprint` field cannot be relied on for history: any iteration write clears it board-wide, including for closed issues in completed sprints |
-| 12 | Carryover is visible | An issue worked across a boundary carries a label per sprint. The field holds only the latest |
-| 13 | Issues created outside the tool are upgraded | `gh agile sync --adopt`, or `templates/issue-adopt.yml` — see below |
+| 12 | The field is repaired, not just reported | `gh agile sprint reconcile` sets each item's `Sprint` from its labels, latest winning. Safe to automate: it copies a recorded fact back into a field GitHub cleared, and invents nothing |
+| 13 | Carryover is visible | An issue worked across a boundary carries a label per sprint. The field holds only the latest |
+| 14 | Issues created outside the tool are upgraded | `gh agile sync --adopt`, or `templates/issue-adopt.yml` — see below |
 
 **Why not a cron.** A scheduled `sprint ensure` satisfies requirement 2 and
 breaks requirement 4: it manufactures sprints through a quiet quarter, leaving a

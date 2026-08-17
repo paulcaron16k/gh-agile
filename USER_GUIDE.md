@@ -430,7 +430,22 @@ gh agile sync --adopt
 ```
 
 Status is set only when it is empty: an item already in a column was put there
-by somebody, and `Todo` would move their work backwards.
+by somebody, and `Todo` would move their work backwards. It follows the issue's
+own state — a closed issue is adopted as `Done`, not `Todo`.
+
+**The title convention applies too.** With `project.issue_title_prefix` set,
+an adopted issue is renamed like any other, so a board filled partly from the
+web UI does not end up with two naming schemes:
+
+```
+added paulcaron16k/gh-agile#58  opened in the web UI, untouched by the tool
+  + key:TEST
+  + title: TEST-58 opened in the web UI, untouched by the tool
+```
+
+In `key+type` mode with no `type:` label to read, it applies the key-only form
+rather than inventing a type — the identifier is the part people say out loud,
+and a guessed type would later read as a decision.
 
 **It does not set `type:`, deliberately.** Nothing in an issue distinguishes an
 epic from a story from a bug, and a guessed label later reads as somebody's
@@ -767,6 +782,45 @@ sprint_closed_in  = '2026-08-24'
 
 **Where they disagree, believe the labels.** Set `sprint.record_label: false` to
 turn the stamping off.
+
+### Putting the field back: `sprint reconcile`
+
+Believing the labels only means something if something reconciles *toward*
+them. Until this existed, `validate` could report the divergence and stop.
+
+```bash
+gh agile sprint reconcile --dry-run    # what would change
+gh agile sprint reconcile              # apply; already-correct items are skipped
+```
+
+It sets each item's `Sprint` field from its `sprint:` labels, latest label
+winning — an item carried across a boundary holds where it is *now*, which is
+the last sprint it lived in.
+
+Run it after **any** sprint change made outside this tool, or on a schedule
+beside `sync`. Unlike `sprint ensure`, it invents nothing and is safe to
+automate: it only ever copies a recorded fact back into a field GitHub cleared.
+
+The whole cycle, measured on a scratch project:
+
+```
+gh agile move 58 --status "In Progress"
+  #58 Sprint = Sprint 1 (current)
+  #58 + sprint:2026-08-17
+
+(a sprint appended outside the tool — the routine fortnightly act)
+  field after: EMPTY -- destroyed
+
+gh agile validate
+  In Progress but in no sprint (1): #58
+
+gh agile sprint reconcile
+  set #58  (empty) -> Sprint 1
+```
+
+A label naming a sprint the configuration no longer holds is reported and left
+alone. The label is the record; if the two disagree it is the configuration that
+drifted, and inventing a sprint to match would be the tool guessing at history.
 
 ### Backfilling issues that predate the stamping
 
