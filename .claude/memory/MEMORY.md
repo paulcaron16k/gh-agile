@@ -1,0 +1,5 @@
+- [Iteration writes destroy all sprint assignments](github-iterations-destroy-assignments.md) — measured; the reason six workarounds exist
+- [Test in agile-test, never in gh-agile or Zamboni](sandbox-not-live-repos.md) — live testing did real damage
+- [All durations in seconds, no unit suffix](durations-in-seconds.md) — days reported 0.0 as a measurement
+- [Labels are the only additive write in the API](labels-are-additive.md) — why the sprint record lives on one
+- [Measure GitHub, do not reason about it](measure-github-behaviour.md) — several findings contradicted the type names
