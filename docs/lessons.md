@@ -50,6 +50,21 @@ a hundredfold — and everything they return can be asked for directly. `sync
 that the old and new item sets are byte-identical, because a cheaper read that
 returns a different board is not a cheaper read.
 
+**Moving cost off GraphQL made REST the limit that bites first — and where it
+went is not yet established.** At the end of the session that made the change
+above, `gh api rate_limit` reported **core 0/5000** and **graphql 4928/5000**.
+Three `make self-test` runs, a `check-guide` run and a lot of measurement had
+exhausted the REST budget while barely touching the GraphQL one, and the failure
+surfaced as `gh label create` returning 403 — labels are REST.
+
+Do not over-read this. Those runs plausibly account for a few hundred REST calls,
+not five thousand, so **something else spends REST and it has not been
+identified**. What is established: the two budgets are separate, GraphQL is no
+longer the one that runs out first, and `CLAUDE.md`/`GOLD_MODEL.md` both still say
+the GraphQL budget is the binding constraint on this tool. That claim is now in
+question rather than known-wrong. Measuring it is one instrumented run away and
+should happen before either document is rewritten.
+
 The trap to avoid on the way: the obvious-looking cure was to *cache*
 `fetch_items`. It must stay uncached — `move` writes a Sprint value and then
 `record_sprint_label` reads it back through `sprint_assignments`, so a cache
@@ -102,6 +117,30 @@ refused because `--project 20` disagreed with `project.number 4` in the profile,
 handing back a scratch project with no fields and no labels while reporting success. Broken since
 `project.number` first entered the profile. `self-test` never hit it because `apply_defaults` exempts that
 command by name, so the *tested* path and the *documented* path had diverged silently.
+
+**A flaky test is worst where it is the only test.** `make self-test` was the sole
+cover for `history()` — the function that turns a timeline into `started_at`,
+`done_at` and `added_to_board_at`, and therefore the source of every cycle time
+in the export. It asserts against a real GitHub timeline, which lags creation by
+a minute or more, so it fails for reasons unrelated to the code. Twice in one
+afternoon on 2026-08-21: once on `added_to_board_at`, once on the status
+transitions, both green on an immediate re-run of identical code.
+
+Two separate defects, and the second is the interesting one:
+
+1. The wait loop polled for two of the three facts the assertions require, so an
+   unpropagated `AddedToProjectV2Event` read as a regression. Wait for what you
+   assert on.
+2. **The parsing had no offline test at all.** So a genuine break and GitHub being
+   slow produced the same output, and the only way to tell them apart was to run
+   it again and see. `tests/test_history.py` now pins the parsing against fixture
+   timelines — including the case-insensitivity that the original null-cycle-time
+   bug turned on — and the live test keeps the one job only it can do: catching
+   GitHub changing what it emits.
+
+The general form: when a slow, non-deterministic test is the only thing covering
+a piece of logic, its flakiness is not a test-quality problem, it is a coverage
+problem wearing a disguise. Every failure becomes an investigation.
 
 **Swallowed errors cost hours.** `restore_assignments` caught `SystemExit` and printed "could not restore"
 without the reason. The reason was a rate limit, and finding that out took a full reproduction.

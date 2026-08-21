@@ -6,7 +6,13 @@
 # same failure as a test suite that depends on globally installed packages.
 
 line-length = 99
-target-version = "py310"
+
+# The floor the CI matrix tests and `make venv` builds. 3.9, 3.10 and 3.11 are
+# dropped: the first two are end of life and there is no reason to carry a
+# compatibility promise nothing exercises. Keep this in step with the Makefile's
+# PYTHON and the CI matrix -- three places, and a lint target that permits
+# syntax CI cannot run is worse than no lint.
+target-version = "py312"
 
 [lint]
 select = [

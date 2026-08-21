@@ -35,9 +35,10 @@ jobs:
       fail-fast: false
       matrix:
         # The floor and the current release. The floor is what `ruff.toml`
-        # declares as target-version, and testing only the newest interpreter
-        # lets a syntax or stdlib feature past it that the floor cannot run.
-        python-version: ['3.10', '3.13']
+        # declares as target-version and what the Makefile's PYTHON builds, and
+        # testing only the newest interpreter lets a syntax or stdlib feature
+        # past it that the floor cannot run.
+        python-version: ['3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
 

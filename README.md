@@ -740,8 +740,8 @@ a real org before committing a team to this.
 gh auth refresh -s project
 ```
 
-Python 3.9+. Standard library only — no dependencies, and no token is ever read,
-stored or passed by this tool. Authentication is `gh`'s job.
+Python 3.12 or newer. Standard library only — no dependencies, and no token is
+ever read, stored or passed by this tool. Authentication is `gh`'s job.
 
 ## Mapping to the Gold Agile data model
 

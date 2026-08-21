@@ -27,6 +27,13 @@ REPO  ?= $(SANDBOX_REPO)
 VENV  ?= .venv
 PY    := $(VENV)/bin/python
 
+# Named explicitly rather than taking whatever `python3` happens to be. On this
+# machine `python3` is 3.10, which is end of life -- so `make venv` would have
+# quietly built an environment below the floor the CI matrix tests, and the two
+# would drift without anything failing. Override for a one-off: make venv
+# PYTHON=python3.13
+PYTHON ?= python3.12
+
 .PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help
 
 # Every Python target runs through $(PY) and checks the venv exists first.
@@ -120,7 +127,11 @@ help:
 	@echo "against whichever board this clone's profile names."
 
 venv:
-	python3 -m venv $(VENV)
+	@command -v $(PYTHON) >/dev/null || { \
+	  echo "$(PYTHON) is not on PATH. Python 3.12 is the floor -- 3.9, 3.10 and 3.11"; \
+	  echo "  are all past or near end of life. Install it, or name another:"; \
+	  echo "      make venv PYTHON=python3.13"; exit 2; }
+	$(PYTHON) -m venv $(VENV)
 	$(PY) -m pip install --quiet --upgrade pip
 	$(PY) -m pip install --quiet --requirement requirements-dev.txt
 	@echo "  $(VENV) ready: $$($(PY) -m pytest --version)"

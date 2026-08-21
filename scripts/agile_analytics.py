@@ -122,7 +122,7 @@ def periods(kind: str, start_date, count: int = 5) -> list[tuple[str, object, ob
     # UTC, not the machine's local date: the periods here are compared against
     # UTC timestamps from the export, and a local `today` shifts a boundary by a
     # day for anyone not on UTC.
-    today = dt.datetime.now(dt.timezone.utc).date()
+    today = dt.datetime.now(dt.UTC).date()
     out = []
     if kind == "quarterly":
         q = (today.month - 1) // 3

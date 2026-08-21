@@ -117,6 +117,7 @@ mapping in GOLD_MODEL.md.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import json
 import pathlib
@@ -524,7 +525,7 @@ def today_utc():
     """
     import datetime as dt
 
-    return dt.datetime.now(dt.timezone.utc).date()
+    return dt.datetime.now(dt.UTC).date()
 
 
 def seconds_between(start: str | None, end: str | None) -> int | None:
@@ -621,7 +622,7 @@ DEFAULT_OVERLAP_SECONDS = 900
 def _now() -> str:
     import datetime as dt
 
-    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def file_stamp(iso: str) -> str:
@@ -1195,15 +1196,7 @@ def cmd_setup(args) -> int:
 
     if args.repo:
         for label in spec.get("labels", []):
-            result = subprocess.run(
-                ["gh", "label", "create", label["name"], "--repo", args.repo,
-                 "--color", label["color"]],
-                capture_output=True, text=True,
-            )
-            # `gh label create` exits non-zero when the label exists, which is
-            # convergence rather than failure -- so this is the one place a
-            # non-zero exit is read rather than raised.
-            state = "created" if result.returncode == 0 else "already exists"
+            state = create_label(args.repo, label["name"], label["color"])
             print(f"  label {label['name']!r} {state}")
     return 0
 
@@ -1252,13 +1245,76 @@ def reconcile_options(pid: str, field: dict, wanted: list[str]) -> list[str]:
     return missing
 
 
+#: Labels confirmed to exist this run, so a sync adopting many issues does not
+#: re-attempt the same `key:` label once per issue.
+_LABELS_PRESENT: set[tuple[str, str]] = set()
+
+#: What `gh label create` says when the label is already there. Measured, because
+#: the whole point is to distinguish it from every other non-zero exit:
+#:
+#:     label with name "type:epic" already exists; use `--force` to update its
+#:     colour and description
+#:
+#: Matching the message is unpleasant and it is the only signal available -- `gh`
+#: exits 1 for this and 1 for a 403, and there is no --if-not-exists.
+LABEL_EXISTS = "already exists"
+
+
+def create_label(repo: str, name: str, color: str = "ededed") -> str:
+    """Create one label, distinguishing "already there" from "not allowed".
+
+    The bug this replaces read every non-zero exit as convergence:
+
+        state = "created" if result.returncode == 0 else "already exists"
+
+    So `setup` reported a clean run having created nothing when the caller
+    lacked push access -- a permission failure printed as success, and then
+    `epic` failing later somewhere confusing, because `gh issue create --label`
+    rejects a label that was never made. `ensure_labels` was worse: it discarded
+    the result entirely and checked nothing.
+
+    Creating a label needs push (or triage) on the repository, which project
+    write does not include -- so this is the first thing an external contributor
+    or a read-only token hits.
+    """
+    key = (repo, name)
+    if key in _LABELS_PRESENT:
+        return "exists"
+    result = subprocess.run(
+        ["gh", "label", "create", name, "--repo", repo, "--color", color],
+        capture_output=True, text=True,
+    )
+    _LABELS_PRESENT.add(key)
+    if result.returncode == 0:
+        return "created"
+    if LABEL_EXISTS in result.stderr:
+        return "exists"
+    _LABELS_PRESENT.discard(key)   # it is not there, and we could not put it there
+    reason = result.stderr.strip()
+    # Two failures wear the same 403, and guessing between them is the mistake
+    # this function exists to stop making. The first version of this message
+    # asserted "you need push access" and then met a rate limit -- naming a cause
+    # that was not the cause, which is exactly what `gh` does under load and what
+    # docs/lessons.md warns about. So the reason is read before it is explained.
+    if "rate limit" in reason.casefold():
+        sys.exit(
+            f"could not create label {name!r} in {repo}: the REST rate limit is exhausted.\n"
+            f"  {reason}\n"
+            f"  Labels are a REST call and REST has its own budget, separate from the\n"
+            f"  GraphQL one. Both, and when they reset:  gh api rate_limit"
+        )
+    sys.exit(
+        f"could not create label {name!r} in {repo}: {reason}\n"
+        f"  Creating a label needs push access to {repo}. Project write does not\n"
+        f"  include it, so this fails for a fork contributor and for a read-only token.\n"
+        f"  Check with: gh repo view {repo} --json viewerPermission"
+    )
+
+
 def ensure_labels(repo: str, labels: list[str]) -> None:
     """Create any label that does not exist. `gh issue create` fails on an unknown one."""
     for label in labels:
-        subprocess.run(
-            ["gh", "label", "create", label, "--repo", repo, "--color", "ededed"],
-            capture_output=True, text=True,
-        )
+        create_label(repo, label)
 
 
 #: What `project.issue_title_prefix` may be set to, and what each produces for
@@ -1462,6 +1518,26 @@ BODY_TEMPLATE = """## Intent
 """
 
 
+@contextlib.contextmanager
+def board_write_reported(number: int, url: str, project: int):
+    """Fail with the issue named, when putting a freshly created issue on the board fails.
+
+    Creating the issue and boarding it are two grants: anyone who can open an
+    issue on a public repository may still be refused the project write. When
+    that happens the issue exists and the tool must say so, because nothing else
+    will -- and the recovery is a different command.
+    """
+    try:
+        yield
+    except SystemExit as exc:
+        sys.exit(
+            f"issue #{number} was created at {url}\n"
+            f"  but could not be put on project #{project}: {exc}\n"
+            f"  The issue is real and is not on the board. Either ask someone with\n"
+            f"  project write to run `gh agile sync --adopt`, or close #{number}."
+        )
+
+
 def add_to_project(login: str, project: int, url: str) -> str:
     """Add an issue to the project, tolerating it already being there.
 
@@ -1523,10 +1599,16 @@ def cmd_epic(args) -> int:
         args._config, args.repo, number, getattr(args, "key", None), "epic", args.title
     )
     url = f"https://github.com/{args.repo}/issues/{number}"
-    item = add_to_project(args.owner, args.project, url)
-    set_field(args.owner, args.project, item, "Status", "Todo")
+    # Reported before the board is touched, and not after. These two lines used
+    # to come last, so a refused project write -- the ordinary outcome for anyone
+    # with repo access but not project access -- exited without ever naming the
+    # issue that now existed. Issue numbers are never reused, so that was a
+    # permanent orphan nobody knew to close.
     print(f"  epic #{number}: {title}")
     print(f"  {url}")
+    with board_write_reported(number, url, args.project):
+        item = add_to_project(args.owner, args.project, url)
+        set_field(args.owner, args.project, item, "Status", "Todo")
     return 0
 
 
@@ -1550,6 +1632,11 @@ def cmd_story(args) -> int:
         args._config, args.repo, number, getattr(args, "key", None), "story", args.title
     )
     url = f"https://github.com/{args.repo}/issues/{number}"
+    # Announced as soon as it exists, for the same reason as `epic`: everything
+    # after this point can be refused independently of the issue creation that
+    # already succeeded, and a story has two such steps rather than one.
+    print(f"  story #{number} under epic #{args.epic}: {title}")
+    print(f"  {url}")
 
     parent = json.loads(gh(["issue", "view", str(args.epic), "--repo", args.repo, "--json", "id"]))
     graphql(
@@ -1558,14 +1645,13 @@ def cmd_story(args) -> int:
         parent=parent["id"], child=node,
     )
 
-    item = add_to_project(args.owner, args.project, url)
-    set_field(args.owner, args.project, item, "Status", canonical_status(args.status))
-    if args.points is not None:
-        set_field(args.owner, args.project, item, "Story Points", args.points)
-    if args.priority:
-        set_field(args.owner, args.project, item, "Priority", args.priority)
-    print(f"  story #{number} under epic #{args.epic}: {title}")
-    print(f"  {url}")
+    with board_write_reported(number, url, args.project):
+        item = add_to_project(args.owner, args.project, url)
+        set_field(args.owner, args.project, item, "Status", canonical_status(args.status))
+        if args.points is not None:
+            set_field(args.owner, args.project, item, "Story Points", args.points)
+        if args.priority:
+            set_field(args.owner, args.project, item, "Priority", args.priority)
     return 0
 
 
@@ -2363,8 +2449,10 @@ def adopt_issue(args, repo: str, issue: dict, item_id: str) -> None:
     # Status only when it is empty: an item already in a column has been placed
     # by somebody, and Todo would move their work backwards. The item is read by
     # id rather than by listing the project -- a full listing per adopted issue
-    # is what turns a sync of twenty into twenty board reads, and the GraphQL
-    # budget is the binding constraint on this tool.
+    # is what turns a sync of twenty into twenty board reads. (That was written
+    # when the GraphQL budget was the constraint that bit first. Since the board
+    # readers were made ~100x cheaper it is REST that runs out, and reading one
+    # item by id is still the right shape either way -- see docs/lessons.md.)
     data = graphql(
         "query($id: ID!) { node(id: $id) { ... on ProjectV2Item { "
         'fieldValueByName(name: "Status") { '
@@ -3224,12 +3312,20 @@ def cmd_self_test(args) -> int:
             set_field(args.owner, project, item["id"], "Status", status)
             print(f"  story -> {status}")
 
+        # Wait for everything that is then asserted on, which used to be two of
+        # the three timeline facts: the loop polled for started_at and done_at
+        # while the checks below also require added_to_board_at. Measured
+        # 2026-08-21 -- one run reported "[FAIL] the story reached the board" and
+        # an immediate re-run of the same code passed, because
+        # AddedToProjectV2Event had not propagated yet. A flaky assertion in the
+        # one test that touches real GitHub is worse than no assertion: it gets
+        # read as a regression and costs an afternoon proving it is not.
         deadline = time.time() + args.timeout
         started = None
         while time.time() < deadline:
             rows_now = rows(args.owner, project, with_history=True)
             story = next(r for r in rows_now if r["number"] == story_number)
-            if story["started_at"] and story["done_at"]:
+            if story["started_at"] and story["done_at"] and story["added_to_board_at"]:
                 started = story
                 break
             time.sleep(10)
@@ -3244,7 +3340,11 @@ def cmd_self_test(args) -> int:
         for name, ok in checks.items():
             print(f"  [{'ok' if ok else 'FAIL'}] {name}")
         if not checks["the timeline yielded a cycle time"]:
-            print(f"       (no status history within {args.timeout}s; the timeline lags ~75s)")
+            print(f"       (no status history within {args.timeout}s. Timeline lag is "
+                  f"variable and has\n        exceeded 420s; this is more often GitHub "
+                  f"being slow than a real failure.\n        Re-run, or raise --timeout, "
+                  f"before believing it. The parsing itself is\n        covered offline by "
+                  f"tests/test_history.py.)")
         return 0 if all(checks.values()) else 1
     finally:
         for number in issues:
@@ -3363,8 +3463,15 @@ def main() -> int:
     )
     self_test.add_argument("--repo", required=True, help="repository to create throwaway issues in")
     self_test.add_argument("--stamp", help="label for the scratch project's title")
-    self_test.add_argument("--timeout", type=int, default=420,
-                           help="seconds to wait for the timeline (measured lag ~75s, variable)")
+    # Raised from 420. The old default was set against a measured lag of ~75s,
+    # and on 2026-08-21 three runs in one afternoon exceeded 420s -- once on
+    # AddedToProjectV2Event, once on the status transitions -- while the same code
+    # passed at 900s. The lag is variable and occasionally minutes, so the default
+    # is now generous: a slow pass costs wall-clock, and a spurious failure costs
+    # someone proving it was spurious.
+    self_test.add_argument("--timeout", type=int, default=900,
+                           help="seconds to wait for the timeline (lag is variable, "
+                                "seen from ~75s to over 420s)")
     self_test.add_argument("--gap", type=int, default=20,
                            help="seconds between the two status transitions")
     self_test.set_defaults(func=cmd_self_test)
