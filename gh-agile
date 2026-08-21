@@ -139,8 +139,36 @@ STATUSES = ("Todo", "In Progress", "Blocked", "In Review", "Done")
 CYCLE_START, CYCLE_END = "In Progress", "Done"
 
 
+def status_key(value: str | None) -> str:
+    """A status reduced to what identifies it: case and separators do not.
+
+    `In Progress` needs quoting in a shell and `In-Progress` does not, so the
+    hyphen and underscore forms are accepted as aliases. Comparison happens on
+    this key; what gets *written* to the field is always the canonical spelling
+    from `STATUSES`, because that is the option name GitHub holds.
+    """
+    return (value or "").strip().casefold().replace("-", " ").replace("_", " ")
+
+
+def canonical_status(value: str) -> str:
+    """The `STATUSES` spelling for a user-supplied status, or a refusal.
+
+    Refusing rather than passing an unknown value through: `set_field` would
+    reject it against the field's options anyway, and doing it here names the
+    five legal values instead of reporting whatever the board happens to hold.
+    """
+    for status in STATUSES:
+        if status_key(status) == status_key(value):
+            return status
+    listed = ", ".join(STATUSES)
+    sys.exit(
+        f"{value!r} is not a status. One of: {listed}\n"
+        "  A hyphen works in place of a space, so In-Progress and In-Review need no quotes."
+    )
+
+
 def same_status(a: str | None, b: str | None) -> bool:
-    return (a or "").strip().casefold() == (b or "").strip().casefold()
+    return status_key(a) == status_key(b)
 
 
 def gh(args: list[str], **kwargs) -> str:
@@ -176,14 +204,30 @@ def graphql(query: str, **variables) -> dict:
 # The owner may be a user or an organization and the schema exposes projectV2 on
 # both, but neither root reaches the other's projects -- so try user first and
 # fall back rather than making the caller know which their account is.
-ITEMS_QUERY = """
+#: The board, paginated, with a caller-chosen selection per item. `%(root)s` is
+#: filled with `user` or `organization` and `%(nodes)s` with one of the selections
+#: below.
+#:
+#: Two selections rather than two mechanisms. There used to be a second way to
+#: read the board -- `gh project item-list` through `board_items` -- and it was
+#: assumed to be the cheap one because it returns less. Measured, it cost 106
+#: GraphQL points against this query's 8, and `gh project field-list` cost 102
+#: against 1 for the equivalent hand-written query. See `docs/lessons.md`.
+ITEMS_QUERY_SHELL = """
 query($login: String!, $number: Int!, $cursor: String) {
-  %s(login: $login) {
+  %(root)s(login: $login) {
     projectV2(number: $number) {
       title
       items(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        nodes {
+        nodes { %(nodes)s }
+      }
+    }
+  }
+}"""
+
+#: Everything an export row needs.
+FULL_ITEM_SELECTION = """
           id
           createdAt
           updatedAt
@@ -216,11 +260,19 @@ query($login: String!, $number: Int!, $cursor: String) {
             ... on PullRequest { id number title url state }
             ... on DraftIssue { id title }
           }
-        }
-      }
-    }
-  }
-}"""
+"""
+
+#: Just enough to find one item, or to know what is already on the board: the
+#: item id and which issue it points at. Nothing here needs field values, labels
+#: or a status, which is what makes it the cheap read.
+LEAN_ITEM_SELECTION = """
+          id
+          content {
+            __typename
+            ... on Issue { number repository { nameWithOwner } }
+            ... on PullRequest { number repository { nameWithOwner } }
+          }
+"""
 
 # Status history. Deliberately a separate query per issue: the timeline is not
 # reachable from ProjectV2Item, which is the fact this whole tool exists for.
@@ -271,14 +323,19 @@ EVENT_CATEGORY = {
 }
 
 
-def fetch_items(login: str, number: int) -> tuple[str, list[dict]]:
-    """Every item on the board, following pagination."""
+def paged_project_items(login: str, number: int, selection: str) -> tuple[str, list[dict]]:
+    """Every item on the board, following pagination, selecting `selection` per item.
+
+    The owner may be a user or an organization and neither root reaches the
+    other's projects, so both are tried rather than making the caller know which
+    their account is.
+    """
     for root in ("user", "organization"):
         cursor, nodes, title = None, [], None
         try:
             while True:
                 data = graphql(
-                    ITEMS_QUERY % root,
+                    ITEMS_QUERY_SHELL % {"root": root, "nodes": selection},
                     login=login,
                     number=number,
                     **({"cursor": cursor} if cursor else {}),
@@ -296,6 +353,16 @@ def fetch_items(login: str, number: int) -> tuple[str, list[dict]]:
         except (KeyError, TypeError, SystemExit):
             continue  # not this root; try the other
     sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
+
+
+def fetch_items(login: str, number: int) -> tuple[str, list[dict]]:
+    """Every item on the board with every field value. Uncached, deliberately.
+
+    `sprint_assignments` reads this immediately after `move` has written a Sprint
+    value and must observe that write, so a cache here would silently stop the
+    `sprint:` label being stamped -- and the label is the durable record.
+    """
+    return paged_project_items(login, number, FULL_ITEM_SELECTION)
 
 
 def field_values(item: dict) -> dict[str, object]:
@@ -897,10 +964,71 @@ def board_items(login: str, number: int, *, refresh: bool = False) -> list[dict]
     """
     key = (login, number)
     if refresh or key not in _ITEMS:
-        _ITEMS[key] = json.loads(gh([
-            "project", "item-list", str(number), "--owner", login, "--format", "json", "-L", "200",
-        ]))["items"]
+        _title, nodes = paged_project_items(login, number, LEAN_ITEM_SELECTION)
+        # Kept in the shape `gh project item-list` returned, because that is what
+        # the callers read and the shape is not the interesting part. What
+        # changed is the cost: `item-list -L 200` was 106 GraphQL points against
+        # this query's 1, and the charge did not depend on the board having 25
+        # items rather than 200. `field-list -L 50` was 102 against 1, and flat
+        # regardless of -L.
+        _ITEMS[key] = [
+            {
+                "id": node["id"],
+                "content": None if not node.get("content") else {
+                    "number": node["content"].get("number"),
+                    "repository": (node["content"].get("repository") or {}).get("nameWithOwner"),
+                    "type": node["content"].get("__typename"),
+                },
+            }
+            for node in nodes
+        ]
     return _ITEMS[key]
+
+
+def same_repo(content_repo: str | None, repo: str) -> bool:
+    """Whether an item's `content.repository` names `repo`.
+
+    `gh project item-list` currently reports `owner/name` here, and older
+    versions reported a bare name, so the owner is compared when both sides
+    carry one and the trailing segment otherwise. Without the fallback this
+    silently matches nothing on whichever `gh` disagrees, and matching nothing
+    reads exactly like "not on the board".
+    """
+    if not content_repo:
+        return False
+    left, right = str(content_repo).casefold(), repo.casefold()
+    if "/" in left and "/" in right:
+        return left == right
+    return left.rsplit("/", 1)[-1] == right.rsplit("/", 1)[-1]
+
+
+def board_item_for(login: str, project: int, repo: str, issue: int) -> dict | None:
+    """The project item for one issue, matched on repository **and** number.
+
+    Matching on the number alone is wrong the moment a project spans
+    repositories, which is a documented feature -- and each repository numbers
+    its issues independently from 1, so two of them sharing a number is
+    ordinary rather than unlucky.
+
+    Both callers got this wrong in different ways. `set` resolved the repository
+    and then discarded it; `move` kept it for the `gh issue` calls and still
+    matched the item on the number, so a single `move B-12 --status Done
+    --close` could set Status and stamp a `sprint:` label on an unrelated issue
+    #12 in repository A while correctly closing #12 in repository B -- two
+    repositories left inconsistent, exit code 0, output reporting success.
+
+    A pull request sharing the number is skipped: `content.type` distinguishes
+    them, and only issues are backlog items.
+    """
+    for item in board_items(login, project):
+        content = item.get("content") or {}
+        if content.get("number") != issue:
+            continue
+        if content.get("type", "Issue") != "Issue":
+            continue
+        if same_repo(content.get("repository"), repo):
+            return item
+    return None
 
 
 def project_id(login: str, number: int) -> str:
@@ -919,6 +1047,61 @@ def project_id(login: str, number: int) -> str:
     sys.exit(f"no project {number} for {login!r}")
 
 
+#: `dataType` is deliberately not selected: the callers compare against
+#: `ProjectV2IterationField` and `ProjectV2Field`, which are `__typename` values,
+#: and `gh project field-list` happened to report `__typename` under the key
+#: `type`. Selecting both would invite the two being confused.
+PROJECT_FIELDS_QUERY = """
+      fields(first: 50) {
+        nodes {
+          __typename
+          ... on ProjectV2FieldCommon { id name }
+          ... on ProjectV2SingleSelectField { options { id name } }
+        }
+      }
+"""
+
+
+def project_fields(login: str, number: int) -> list[dict]:
+    """The project's fields, in the shape `gh project field-list` returned.
+
+    That command cost 102 GraphQL points and this query costs 1 -- and
+    `field-list`'s cost did not move with `-L`, so there was no cheaper way to
+    call it. Same shape, same callers, two orders of magnitude apart.
+
+    `SystemExit` is caught per root because `gh` exits non-zero when GraphQL
+    returns an `errors` block, which is what asking `user(login:)` about an
+    organization does. `fetch_items` has always caught it here; `project_id` and
+    `sprint_field` do not, which is why an organization-owned project is not yet
+    known to work -- see docs/review-2026-08.md.
+    """
+    for root in ("user", "organization"):
+        try:
+            data = graphql(
+                "query($login: String!, $number: Int!) { %s(login: $login) "
+                "{ projectV2(number: $number) { %s } } }" % (root, PROJECT_FIELDS_QUERY),
+                login=login, number=number,
+            )
+        except SystemExit:
+            continue
+        node = ((data.get("data") or {}).get(root) or {}).get("projectV2")
+        if node:
+            return [
+                {
+                    "id": field["id"],
+                    "name": field["name"],
+                    "type": field["__typename"],
+                    **({"options": field["options"]} if field.get("options") else {}),
+                }
+                for field in node["fields"]["nodes"]
+                # A field with no id is one this query selected nothing for --
+                # every concrete type implements ProjectV2FieldCommon today, so
+                # this is a guard against a new one appearing, not a live case.
+                if field.get("id")
+            ]
+    sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
+
+
 def fields_of(login: str, number: int, *, refresh: bool = False) -> dict[str, dict]:
     """The project's fields, fetched once per run.
 
@@ -927,10 +1110,7 @@ def fields_of(login: str, number: int, *, refresh: bool = False) -> dict[str, di
     """
     key = (login, number)
     if refresh or key not in _FIELDS:
-        raw = json.loads(gh([
-            "project", "field-list", str(number), "--owner", login, "--format", "json", "-L", "50",
-        ]))
-        _FIELDS[key] = {f["name"]: f for f in raw["fields"]}
+        _FIELDS[key] = {f["name"]: f for f in project_fields(login, number)}
     return _FIELDS[key]
 
 
@@ -1379,7 +1559,7 @@ def cmd_story(args) -> int:
     )
 
     item = add_to_project(args.owner, args.project, url)
-    set_field(args.owner, args.project, item, "Status", args.status)
+    set_field(args.owner, args.project, item, "Status", canonical_status(args.status))
     if args.points is not None:
         set_field(args.owner, args.project, item, "Story Points", args.points)
     if args.priority:
@@ -2222,8 +2402,14 @@ def cmd_sync(args) -> int:
         for i in board_items(args.owner, args.project)
         if i.get("content")
     }
-    # `gh project item-list` reports the repository as a bare name, so compare
-    # on the number and the trailing name rather than owner/name.
+    # Compared on the trailing name rather than `owner/name` because `gh`
+    # versions disagree: 2.86 reports `owner/name` in `content.repository`,
+    # older ones reported a bare name. That leaves this loose -- two
+    # repositories with the same name under different owners look identical
+    # here -- which is tolerable for "is it already on the board" (the wrong
+    # answer only skips an add) and is *not* tolerable for choosing an item to
+    # write to, so `same_repo` compares the owner too whenever both sides have
+    # one.
     numbers_on_board = {
         (str(repo).rsplit("/", 1)[-1] if repo else None, number)
         for repo, number in on_board
@@ -2429,14 +2615,18 @@ def cmd_set(args) -> int:
     hit between two field writes -- could only be fixed by hand, which is what
     this tool exists to avoid.
     """
-    _repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
-    items = board_items(args.owner, args.project)
-    item = next((i for i in items if (i.get("content") or {}).get("number") == args.issue), None)
+    repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
+    item = board_item_for(args.owner, args.project, repo, args.issue)
     if not item:
-        sys.exit(f"issue #{args.issue} is not on project {args.project}")
+        sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
     value = args.value
     if args.number is not None:
         value = args.number
+    # Same aliasing as `move`, for the one field where it matters: `set --field
+    # Status --value In-Review` should not behave differently from `move
+    # --status In-Review`.
+    if args.field.casefold() == "status":
+        value = canonical_status(str(value))
     set_field(args.owner, args.project, item["id"], args.field, value)
     print(f"  #{args.issue} {args.field} = {value}")
     return 0
@@ -2454,15 +2644,19 @@ def cmd_move(args) -> int:
     # --key, or the working directory.
     repo, issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
     args.issue = issue
+    # Canonicalised once, here, so everything downstream -- the evidence lookup,
+    # the field write, the cycle-start and cycle-end comparisons and what gets
+    # printed -- sees the spelling GitHub holds rather than the one that was
+    # typed. `In-Review` and `in review` are the same transition.
+    args.status = canonical_status(args.status)
     required = tuple(REQUIRED_FOR.get(args.status.casefold(), ()))
     sections = read_template(args, required=required) if required else {}
     if required:
         require_sections(sections, required)
 
-    items = board_items(args.owner, args.project)
-    item = next((i for i in items if (i.get("content") or {}).get("number") == args.issue), None)
+    item = board_item_for(args.owner, args.project, repo, args.issue)
     if not item:
-        sys.exit(f"issue #{args.issue} is not on project {args.project}")
+        sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
 
     if sections:
         body = json.loads(gh(["issue", "view", str(args.issue), "--repo", repo,
@@ -2725,9 +2919,171 @@ def _write(data: list[dict], handle, *, csv_format: bool) -> None:
     writer.writerows(data)
 
 
+#: One issue, from the issue's side: its labels, and its item on each project it
+#: is on, with that item's Sprint value. Everything `fix` needs, in one query.
+#:
+#: Measured on board #4, in GraphQL points, because the arithmetic is not what
+#: the code shape suggests:
+#:
+#:     this query                                    1
+#:     iterations()                                  2
+#:     board_items()   -- `project item-list -L 200` 106
+#:     fields_of()     -- `project field-list -L 50` 106
+#:     fetch_items()   -- paginated GraphQL, first:100  8
+#:
+#: **The cost is the `-L` you ask for, not the rows you get back.** `-L 200`
+#: against a 25-item board costs 102 points; `-L 25` costs 26 and `-L 5` costs 6.
+#: So the `gh project ... list` commands are an order of magnitude dearer than
+#: the "heavy" paginated GraphQL they were assumed to be cheaper than, and a
+#: repair routed through `board_items` costs ~105 points to write one field.
+#:
+#: Going at it from the issue rather than the board also removes the ambiguity
+#: `board_item_for` has to defend against: an issue names its own repository, so
+#: there is no number to collide.
+ISSUE_ITEM_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number
+      labels(first: 50) { nodes { name } }
+      projectItems(first: 20) {
+        nodes {
+          id
+          project { number }
+          fieldValueByName(name: "Sprint") {
+            ... on ProjectV2ItemFieldIterationValue { title }
+          }
+        }
+      }
+    }
+  }
+}"""
+
+
+def issue_project_item(repo: str, issue: int, project: int) -> tuple[str, list[str], str | None]:
+    """`(item id, the issue's labels, its current Sprint title)` for one project.
+
+    The project is matched on its number: an issue can be on several, and taking
+    the first would be the same defect `board_item_for` exists to prevent.
+    """
+    owner, _, name = repo.partition("/")
+    try:
+        data = graphql(ISSUE_ITEM_QUERY, owner=owner, name=name, number=issue)
+    except SystemExit as exc:
+        # GraphQL answers a missing issue with an error, not a null, so `gh`
+        # exits before the check below is reached. The reason is kept rather
+        # than replaced -- a swallowed reason cost hours once, and "could not
+        # resolve" also covers a repository the caller cannot read, which is a
+        # different problem with the same words.
+        sys.exit(f"could not read issue {repo}#{issue}: {exc}")
+    found = ((data.get("data") or {}).get("repository") or {}).get("issue")
+    if not found:
+        sys.exit(f"no issue {repo}#{issue}")
+    labels = [n["name"] for n in (found.get("labels") or {}).get("nodes", [])]
+    for node in (found.get("projectItems") or {}).get("nodes", []):
+        if (node.get("project") or {}).get("number") == project:
+            return node["id"], labels, ((node.get("fieldValueByName") or {}) or {}).get("title")
+    sys.exit(f"issue {repo}#{issue} is not on project {project}")
+
+
+def cmd_fix(args) -> int:
+    """Repair one issue's `Sprint` field from its `sprint:` labels.
+
+    The per-issue form of `sprint reconcile`, which is board-wide and has no
+    `--id`. Same rule, same direction: **the labels are the record and the field
+    is reconciled toward them**, and an empty field is damage while a
+    disagreeing field is somebody's decision -- so only an empty one is written
+    unless `--overwrite` is given.
+
+    Cheap on purpose, and cheap for a measured reason rather than an assumed one:
+    one `ISSUE_ITEM_QUERY` plus `iterations()` is 3 GraphQL points, against ~105
+    for the first draft of this command, which went through `board_items`. See
+    the table on `ISSUE_ITEM_QUERY`.
+    """
+    repo, issue = parse_issue_ref(args.id, args._config, getattr(args, "repo", None))
+    item_id, labels, current = issue_project_item(repo, issue, args.project)
+
+    active, completed = iterations(args.owner, args.project)
+    by_start = {i["startDate"]: i["title"] for i in active + completed}
+    if not by_start:
+        sys.exit("no sprints exist on this project; nothing to reconcile to")
+
+    stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels if lb.startswith(SPRINT_LABEL))
+    if not stamps:
+        print(f"  {repo}#{issue} carries no {SPRINT_LABEL} label; nothing to reconcile from")
+        print("  `sprint backfill` recovers one from the Status timeline")
+        return 0
+
+    # The latest label wins: an item carried across a boundary carries one per
+    # sprint it lived in, and the field holds where it is now.
+    latest = stamps[-1]
+    wanted = by_start.get(latest)
+    if not wanted:
+        sys.exit(
+            f"no sprint on this project starts {latest}, which {repo}#{issue} is labelled "
+            f"with.\n  The label is the record and the configuration is what drifted, so "
+            f"neither is changed here."
+        )
+
+    if current == wanted:
+        print(f"  {repo}#{issue} Sprint = {wanted!r} already; nothing to do")
+        return 0
+    if current and not args.overwrite:
+        print(f"  {repo}#{issue} Sprint = {current!r} but labelled {latest} ({wanted!r})")
+        print("  a disagreeing field is a decision, not damage; --overwrite acts on it")
+        return 0
+    if args.dry_run:
+        print(f"  would set {repo}#{issue} Sprint = {wanted!r} (from {SPRINT_LABEL}{latest})")
+        return 0
+
+    set_field(args.owner, args.project, item_id, "Sprint", wanted)
+    print(f"  {repo}#{issue} Sprint = {wanted!r} (from {SPRINT_LABEL}{latest})")
+    return 0
+
+
+def select_by_ref(data: list[dict], ref: str, config: dict) -> list[dict]:
+    """The rows for one issue reference, refusing when a bare number is ambiguous.
+
+    A `KEY-NUMBER` reference names the repository and is resolved outright. A
+    bare number does not, and on a project spanning repositories it can match
+    more than one row -- so both are listed and the caller is asked to say which
+    rather than being handed whichever came back first. That guess is the defect
+    `board_item_for` exists to prevent, and it would be no better here.
+    """
+    text = str(ref).strip()
+    if text.isdigit():
+        matches = [r for r in data if r["number"] == int(text)]
+        if len(matches) > 1:
+            listed = "\n".join(f"    {r['repository']}#{r['number']}  {r['title'][:52]}"
+                               for r in matches)
+            sys.exit(
+                f"#{text} is on this project from more than one repository:\n{listed}\n"
+                "  Name one with a KEY-NUMBER reference, e.g. AGILE-"
+                f"{text}, so there is no guess."
+            )
+    else:
+        repo, number = parse_issue_ref(text, config, None)
+        matches = [r for r in data
+                   if r["number"] == number and same_repo(r.get("repository"), repo)]
+    if not matches:
+        sys.exit(f"{ref} is not on this project")
+    return matches
+
+
 def cmd_validate(args) -> int:
-    """The conventions a machine can check. POLICY.md §3."""
+    """The conventions a machine can check. POLICY.md §3.
+
+    `--id` narrows the report to one issue. It does **not** make the run
+    cheaper: the projects API has no way to fetch one item by issue number --
+    only by project item id, which is what has to be looked up in the first
+    place -- so the board is read either way and the filter is applied after.
+    Anyone narrowing this to save budget should reach for `fix --id` instead,
+    which never reads the board at all.
+    """
     data = rows(args.owner, args.project, with_history=False)
+    only = getattr(args, "id", None)
+    if only is not None:
+        data = select_by_ref(data, only, args._config)
     problems: dict[str, list[str]] = defaultdict(list)
 
     active, completed = iterations(args.owner, args.project)
@@ -2773,14 +3129,18 @@ def cmd_validate(args) -> int:
                     f"{ident}: field={row['field_sprint']!r} ({live}) labels={','.join(stamps)}"
                 )
 
-    overlaps_found = []
-    spans = iteration_spans(sprint_config)
-    for index, (start, end) in enumerate(spans):
-        for other_start, other_end in spans[index + 1:]:
-            if other_start <= end and start <= other_end:
-                overlaps_found.append(f"{start}..{end} overlaps {other_start}..{other_end}")
-    for line in overlaps_found:
-        problems["sprints overlap -- `@current` is ambiguous"].append(line)
+    # Sprint overlap is a property of the iteration series, not of any issue, so
+    # it is skipped under `--id`: reporting "sprints overlap" from a command the
+    # user aimed at one issue reads as a finding about that issue.
+    if only is None:
+        overlaps_found = []
+        spans = iteration_spans(sprint_config)
+        for index, (start, end) in enumerate(spans):
+            for other_start, other_end in spans[index + 1:]:
+                if other_start <= end and start <= other_end:
+                    overlaps_found.append(f"{start}..{end} overlaps {other_start}..{other_end}")
+        for line in overlaps_found:
+            problems["sprints overlap -- `@current` is ambiguous"].append(line)
 
     if not problems:
         print(f"{len(data)} item(s): no problems found")
@@ -3209,7 +3569,21 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
     export.set_defaults(func=cmd_export)
 
     validate = sub.add_parser("validate", help="check the conventions in POLICY.md")
+    validate.add_argument("--id", help="only this issue: a number, or a KEY-NUMBER reference. "
+                                      "Narrows the report, not the board read -- see `fix --id`")
     validate.set_defaults(func=cmd_validate)
+
+    fix = sub.add_parser("fix", help="repair one issue's Sprint field from its sprint: labels")
+    fix.add_argument("--id", required=True,
+                     help="issue number, or a KEY-NUMBER reference")
+    fix.add_argument("--overwrite", action="store_true",
+                     help="also change a field that disagrees with its label; by default only "
+                          "an empty field is repaired, because a disagreement is somebody's "
+                          "decision")
+    fix.add_argument("--dry-run", action="store_true",
+                     help="say what would change and change nothing")
+    fix.add_argument("--repo", help="only needed if the item's repository cannot be read back")
+    fix.set_defaults(func=cmd_fix)
 
     args = parser.parse_args()
     apply_defaults(args)
@@ -3259,7 +3633,7 @@ def apply_defaults(args) -> None:
     # it declares a --repo flag. `set --issue 26` had none to attach to, so the
     # attribute never existed and a bare issue number could not be resolved even
     # from inside the repository it belongs to.
-    NEEDS_REPO = {"epic", "story", "set", "move", "sync", "key", "project"}
+    NEEDS_REPO = {"epic", "story", "set", "move", "sync", "key", "project", "fix"}
     if repo is None and args.command in NEEDS_REPO:
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)

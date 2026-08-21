@@ -22,6 +22,53 @@ retry twenty seconds later worked first time. Measured 2026-08-17 during a Parti
 returned *"unknown owner type"* — an error about the owner, for a request whose owner was correct all
 along, and one that invites "fixing" the wrong thing. Retry before believing the error.
 
+**GraphQL is charged for what you ask for, not what you get — and `gh project`'s
+list commands are the expensive way to read a board.** Measured on a 25-item
+board (2026-08-19), in GraphQL points:
+
+| call | points |
+|---|---|
+| one `ISSUE_ITEM_QUERY` (issue-side: labels + item id + one field value) | 1 |
+| `iterations()` — raw GraphQL | 2 |
+| `fetch_items()` — paginated raw GraphQL, `first: 100`, every field value | 4–8 |
+| `board_items()` — **was** `gh project item-list -L 200` | **106** |
+| `board_items()` — now a lean GraphQL selection | **1** |
+| `fields_of()` — **was** `gh project field-list -L 50` | **102** |
+| `fields_of()` — now `fields(first: 50)` hand-written | **1** |
+
+Two separate effects, and only the first is intuitive:
+
+- **`item-list` is charged for the `-L` you ask for, not the rows you get.** `-L 200`
+  against a 23-item board cost 102; `-L 25` cost 26; `-L 5` cost 6.
+- **`field-list` is just flat expensive.** `-L 50` and `-L 20` both cost 102. There
+  was no cheaper way to call it, only a cheaper thing to call.
+
+So the fix was not tuning `-L`. It was that **`gh project`'s list subcommands
+issue far more expensive queries than the same request written by hand** — about
+a hundredfold — and everything they return can be asked for directly. `sync
+--dry-run` went from ~107 points to 3 on that change alone. Verified afterwards
+that the old and new item sets are byte-identical, because a cheaper read that
+returns a different board is not a cheaper read.
+
+The trap to avoid on the way: the obvious-looking cure was to *cache*
+`fetch_items`. It must stay uncached — `move` writes a Sprint value and then
+`record_sprint_label` reads it back through `sprint_assignments`, so a cache
+there silently stops the `sprint:` label being stamped, and the label is the
+durable record. Saving 8 points by risking the record would have been a bad
+trade even if it had worked.
+
+This inverts the assumption the per-invocation caches were built on. `_ITEMS` and
+`_FIELDS` were added because "setting one field re-fetched the whole field list",
+which was right — but the comment describes `fetch_items` as the heavy query and
+`board_items` as the cheap cached one, and it is the other way round by an order
+of magnitude. A repair routed through `board_items` cost 105 points to write one
+field; going at it from the issue instead cost 3, because an issue can hand back
+its own labels, its project item id and that item's field value in one query.
+
+The general lesson is the specific one this file keeps repeating: the cost model
+was inferred from the code's shape, and the code's shape was wrong about it. Two
+`gh api rate_limit` reads either side of a command is the whole experiment.
+
 **Search indexes lag behind writes.** `gh issue list --search "in:title ..."` returned nothing for an
 issue created moments earlier. **Target by issue number, never by a title search, when the next step
 writes.** The recovery from that miss — `sync --adopt --state all` — swept every live issue onto a scratch

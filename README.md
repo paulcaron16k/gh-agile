@@ -604,6 +604,134 @@ clones the repository and installs nothing, so this stays standard library only.
 Analysis that needs DuckDB lives in `scripts/agile_analytics.py`, which declares
 it through PEP 723 and runs under `uv`.
 
+## Team Usage
+
+**Repository permission and project permission are two separate grants, and this
+is the one thing to take away.** Write access to the repository does not give
+write access to the board. Someone with push rights can open issues and create
+labels and still be refused when the tool tries to add that issue to the
+project — which is the middle of `epic` and `story`, not the end. Their token
+also needs the `project` scope, which `repo` does not imply.
+
+Three tiers follow from that, and they are what to grant against:
+
+| Tier | Commands | Needs |
+|---|---|---|
+| Read | `export`, `validate`, `sprint list`, `board list`, `fix --dry-run` | project **read** |
+| Day to day | `epic`, `story`, `set`, `move`, `sync`, `fix`, `sprint backfill`, `sprint reconcile` | project **write** + repo **push** (for labels and issue bodies) |
+| Admin | `setup` (creates *fields*), `project create`, `sprint create`, `sprint ensure` | project **admin** — these change the project's schema |
+
+`key` with no arguments is a local file read and works for anyone with a clone.
+
+### Personal account
+
+One maintainer, a public repository, a public project. Contributors file issues;
+the maintainer boards them.
+
+**1. Repository public, issues enabled.**
+Settings → General → Danger Zone → *Change repository visibility*, and
+Settings → General → Features → *Issues*. Or:
+
+```bash
+gh repo edit OWNER/REPO --visibility public --accept-visibility-change-consequences
+gh repo edit OWNER/REPO --enable-issues
+gh repo view OWNER/REPO --json visibility,hasIssuesEnabled     # verify
+```
+
+**2. Project public.**
+Project → ⋯ (top right) → Settings → *Visibility* → Public. Or:
+
+```bash
+gh project edit 4 --owner OWNER --visibility PUBLIC
+gh api graphql -f query='{user(login:"OWNER"){projectV2(number:4){public}}}'   # verify
+```
+
+A public project is world-**readable**. There is no way to make it
+world-writable, which is why the tiers above matter even here.
+
+**3. `project` scope on the token.**
+
+```bash
+gh auth refresh -s project      # read:project is enough for the Read tier
+gh auth status                  # verify: 'project' appears in Token scopes
+```
+
+**4. The two web-UI workflows.**
+Project → ⋯ → *Workflows*. Enable **Item added to project** → set Status, so
+anything reaching the board by any route gets a Status instead of a blank.
+
+These cannot be enabled through the API — the GraphQL schema has
+`deleteProjectV2Workflow` and nothing that creates or updates one — so this step
+is manual, once, per project. And **auto-add repository issues is not among a
+user-owned project's built-in workflows at all**, which is exactly why `sync`
+exists: a project is a collection, not a filter, and an issue is not on the board
+until something puts it there.
+
+**5. Collaborators, if any.**
+Project → Settings → *Manage access* → invite, with Read / Write / Admin.
+
+The limitation to know before you build on this: **a user-owned project cannot be
+shared with a team.** Access is granted to individuals, one at a time, forever.
+If more than a couple of people need write access, that is the signal to move to
+an organization.
+
+**What a contributor gets in this setup.** They can open issues and comment. They
+cannot add anything to the board, set a field, or create a label. Point them at
+plain `gh issue create`; the maintainer picks the issue up with
+`gh agile sync --adopt`, which sets the key and Status but deliberately never
+guesses the `type:` label — a machine cannot tell an epic from a story from a
+bug, so `validate` reports the gap and a person decides.
+
+**Before making the board public**, read `docs/review-2026-08.md` S9. A public
+repository exposes issue titles, bodies and comments. A public *project*
+additionally exposes story points, priority, sprint assignment, and — via the
+export anyone can then reproduce — the full status history and the cycle times
+derived from it. That last one is an estimate-accuracy record about named people,
+and it is the part nobody expects to be publishing.
+
+### Organization
+
+Worth the move for three reasons, one of which pays the tool back directly:
+
+1. **Team sharing.** Org projects grant access to teams; user projects cannot.
+2. **A real role model.** Admin / Write / Read, plus an org-wide base role.
+3. **Issue Types and Issue Fields are organization-only** — `createIssueField`
+   resolves only an Organization node. They are the reason `type:` and `key:`
+   currently ride on labels, so an org could retire two of the three label
+   conventions in favour of native fields.
+
+What it does **not** fix: sprints are a *project* iteration field, not an issue
+field. The iteration defect and all six workarounds survive the move unchanged.
+
+**1. An organization-owned project.**
+Organization → Projects → *New project*. Created under the org, not a member.
+
+**2. The org-wide base role for projects.**
+Organization Settings → Planning (Projects) → *Base permissions*: No access /
+Read / Write / Admin. This is the default every member gets, so set it to the
+least useful tier that works — Read — and grant Write per team.
+
+**3. Team access to the project.**
+Project → Settings → *Manage access* → add the team, with its role.
+
+**4. Repository push for the same people.**
+Labels need push (or triage) on the repository, and the Day-to-day tier writes
+labels. Project write alone will fail at label creation — and today it fails
+*quietly*, reporting "already exists" (see `docs/review-2026-08.md` S1).
+
+**5. Token scopes, and SSO if the org enforces SAML.**
+Each member runs `gh auth refresh -s project`. Under SAML the token must also be
+authorized for the organization, or every call fails with a resource error that
+does not mention SSO.
+
+**Status of organization support: unverified.** `gh-agile` has only ever been run
+against user-owned projects. While rewriting `fields_of` this month, one concrete
+reason to doubt it turned up: `fetch_items` catches the error that asking the
+wrong GraphQL root produces and falls back from `user` to `organization`, but
+`project_id` and `sprint_field` do not, so they may exit before reaching the
+fallback. That is `docs/review-2026-08.md` S8 — measure it in the sandbox against
+a real org before committing a team to this.
+
 ## Requirements
 
 `gh`, authenticated with `project` scope:

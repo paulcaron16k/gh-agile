@@ -809,6 +809,43 @@ So the manual command is for a change made **outside** the tool — a web-UI edi
 another script — or as a scheduled sweep beside `sync`. It invents nothing and is
 safe to automate.
 
+### One issue at a time: `fix --id`
+
+`sprint reconcile` is board-wide, which is right for a sweep and wrong when you
+already know which issue is wrong. `fix` is the same repair aimed at one issue:
+
+```bash
+gh agile fix --id 24 --dry-run    # what would change
+gh agile fix --id 24              # apply
+gh agile fix --id AGILE-24        # a keyed reference works too
+gh agile fix --id 24 --overwrite  # also change a field that disagrees with its label
+```
+
+Same rule as `reconcile`, deliberately: the labels are the record, the latest
+label wins, and **only an empty field is repaired** unless `--overwrite` is
+given, because a disagreeing field is somebody's decision.
+
+It is also much cheaper, which is the other reason it exists. Measured on a
+25-item board, in GraphQL points:
+
+| | points |
+|---|---|
+| `fix --id 24` | 3 |
+| `sprint reconcile` | 5 |
+| the first draft of `fix`, routed through `gh project item-list` | 105 |
+
+The surprise there is worth knowing if you are writing anything against this
+API: **`gh project item-list -L 200` and `gh project field-list -L 50` cost about
+100 points each, and the charge is for the `-L` you ask for rather than the rows
+that come back.** `-L 200` against a 25-item board costs 102; `-L 25` costs 26;
+`-L 5` costs 6. Paginated raw GraphQL over the same board costs 8. So the
+`gh project` list commands are the expensive way to read a board, not the cheap
+one.
+
+`fix` avoids them entirely by starting from the issue rather than the board — one
+query returns the issue's labels, its project item id and that item's current
+`Sprint` value together.
+
 ### An empty field is damage; a disagreeing field is a decision
 
 The automatic heal only fills in fields that are **empty**. That distinction is
@@ -933,6 +970,31 @@ are web-UI toggles.
 **After a web-UI session, run `gh agile validate`.** It is the cheapest way to
 find an item that lost its sprint, a story with no epic, or a closed issue whose
 status never reached Done.
+
+`--id` narrows the report to one issue, for when you already have a suspect:
+
+```bash
+gh agile validate --id 24
+gh agile validate --id AGILE-24
+```
+
+Two things to know about it. It **narrows the report, not the work** — the
+projects API cannot fetch one item by issue number, only by project item id,
+which is the thing that has to be looked up first, so the board is read either
+way. If you want the cheap per-issue path, that is `fix --id`. And it skips the
+sprint-overlap check, because overlap is a property of the iteration series
+rather than of any issue, and reporting it from a command aimed at one issue
+would read as a finding about that issue.
+
+On a project spanning repositories a bare number can match more than one issue.
+`validate --id` lists both and stops rather than picking one:
+
+```
+#12 is on this project from more than one repository:
+    owner/repo-a#12  A's twelfth
+    owner/repo-b#12  B's twelfth
+  Name one with a KEY-NUMBER reference, e.g. AGILE-12, so there is no guess.
+```
 
 ## 5. Creating an epic and a story
 
