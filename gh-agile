@@ -660,6 +660,49 @@ def find_config(explicit: str | None = None) -> pathlib.Path | None:
     return None
 
 
+def config_from_problem(found, pointer: str) -> str:
+    """Why a `config_from` pointer could not be followed -- told apart properly.
+
+    One message used to cover both cases: "points at X, which has no profile".
+    **GitHub answers an unauthorised read with 404 rather than 403, deliberately,
+    so that a private repository's existence is not leaked.** So a contributor
+    with no access to the main repository was told with confidence that the
+    profile was not there when it was, and sent off to write a second one -- and
+    a profile that disagrees with the main one is worse than no profile.
+
+    Reading the HTTP status does not separate the two: measured, a repository
+    that does not exist and one this account cannot see return byte-identical
+    `404 Not Found`. GitHub has already made them the same on purpose.
+
+    What *can* be separated is whether the repository itself is readable, and
+    that is the difference worth acting on -- a readable repository with no
+    profile is a configuration mistake, an unreadable one is an access problem.
+    So the repository is probed once, on the failure path only, where an extra
+    call costs nothing.
+    """
+    probe = subprocess.run(
+        ["gh", "api", f"repos/{pointer}", "--jq", ".full_name"],
+        capture_output=True, text=True,
+    )
+    if probe.returncode == 0:
+        return (
+            f"{found} points at {pointer}, which is readable and carries no profile at "
+            f"any of\n  {list(CONFIG_PATHS)}.\n"
+            f"  Add one there, or point this file somewhere else."
+        )
+    return (
+        f"{found} points at {pointer}, which cannot be read:\n"
+        f"    {probe.stderr.strip()}\n"
+        f"  That is either a repository that does not exist or one this account cannot "
+        f"see.\n"
+        f"  GitHub answers both with 404 so a private repository's existence is not "
+        f"leaked, so\n  neither it nor this tool can tell you which.\n"
+        f"  If it should exist: check the spelling, then `gh auth status` for the "
+        f"account, then\n  ask for read access. Do not write a second profile here -- one "
+        f"that disagrees with\n  the main one is worse than none."
+    )
+
+
 def read_config(path: str | None = None) -> dict:
     """The project profile, following a `config_from` pointer if present.
 
@@ -696,7 +739,7 @@ def read_config(path: str | None = None) -> dict:
             # A pointer to a pointer is a loop waiting to happen; one hop only.
             remote.pop("config_from", None)
             return remote
-    sys.exit(f"{found} points at {pointer}, which has no profile at any of {list(CONFIG_PATHS)}")
+    sys.exit(config_from_problem(found, pointer))
 
 
 #: Label prefix carrying an issue's key. Issue Fields would be the right home
@@ -2470,6 +2513,22 @@ def adopt_issue(args, repo: str, issue: dict, item_id: str) -> None:
         print(f"    + Status = {status}")
 
 
+#: How many issues `--adopt` will write to before it asks.
+#:
+#: `--adopt` is the one sync path that writes to the **issues** and not only to
+#: the board: it applies a `key:` label to each and, with a title prefix
+#: configured, renames it. It has already swept a whole live repository once --
+#: `sync --adopt --state all` put every issue there onto a scratch project and
+#: labelled all of them, which is recorded in docs/lessons.md. Labels are
+#: additive and a rename is not.
+#:
+#: Ten, so that adopting a handful never asks and a repository-wide sweep always
+#: does. The tool already refuses before less consequential acts --
+#: `require_graphql_budget` before an iteration write, the Makefile's title check
+#: before a teardown -- and this was the loudest thing with no gate at all.
+ADOPT_CONFIRM_ABOVE = 10
+
+
 def cmd_sync(args) -> int:
     """Add issues that belong on the board and are not on it.
 
@@ -2503,7 +2562,10 @@ def cmd_sync(args) -> int:
         for repo, number in on_board
     }
 
-    added = skipped = 0
+    # Every candidate is collected before anything is written, so the count is
+    # known while it can still be refused.
+    candidates: list[tuple[str, dict]] = []
+    skipped = 0
     for repo in repos:
         cmd = ["issue", "list", "--repo", repo, "--state", args.state,
                "--limit", str(args.limit), "--json", "number,title,url,state,labels"]
@@ -2514,18 +2576,38 @@ def cmd_sync(args) -> int:
             if key in numbers_on_board:
                 skipped += 1
                 continue
-            if args.dry_run:
-                print(f"  would add {repo}#{issue['number']}  {issue['title'][:52]}")
-            else:
-                item = json.loads(gh(["project", "item-add", str(args.project), "--owner",
-                                      args.owner, "--url", issue["url"], "--format", "json"]))
-                print(f"  added {repo}#{issue['number']}  {issue['title'][:52]}")
-                if args.adopt:
-                    adopt_issue(args, repo, issue, item["id"])
-            added += 1
+            candidates.append((repo, issue))
 
-    verb = "would add" if args.dry_run else "added"
-    print(f"  {verb} {added}, already present {skipped}, across {len(repos)} repo(s)")
+    if args.dry_run:
+        for repo, issue in candidates:
+            print(f"  would add {repo}#{issue['number']}  {issue['title'][:52]}")
+        print(f"  would add {len(candidates)}, already present {skipped}, "
+              f"across {len(repos)} repo(s)")
+        return 0
+
+    if args.adopt and len(candidates) > ADOPT_CONFIRM_ABOVE and not args.yes:
+        sample = "\n".join(f"    {repo}#{issue['number']}  {issue['title'][:52]}"
+                           for repo, issue in candidates[:5])
+        more = f"\n    ... and {len(candidates) - 5} more" if len(candidates) > 5 else ""
+        sys.exit(
+            f"--adopt would write to {len(candidates)} issues, past the "
+            f"{ADOPT_CONFIRM_ABOVE} this asks about:\n{sample}{more}\n"
+            f"  Each gets a `{KEY_LABEL}` label, and is renamed if a title prefix is "
+            f"configured.\n"
+            f"  See the whole list:   gh agile sync --adopt --dry-run\n"
+            f"  Then, if it is right: add --yes"
+        )
+
+    added = 0
+    for repo, issue in candidates:
+        item = json.loads(gh(["project", "item-add", str(args.project), "--owner",
+                              args.owner, "--url", issue["url"], "--format", "json"]))
+        print(f"  added {repo}#{issue['number']}  {issue['title'][:52]}")
+        if args.adopt:
+            adopt_issue(args, repo, issue, item["id"])
+        added += 1
+
+    print(f"  added {added}, already present {skipped}, across {len(repos)} repo(s)")
     return 0
 
 
@@ -3524,6 +3606,9 @@ why this is needed:
     sync.add_argument("--adopt", action="store_true",
                       help="set the key: label and Status=Todo on issues this run adds; "
                            "the type: label is left to a person")
+    sync.add_argument("--yes", action="store_true",
+                      help=f"confirm an --adopt that would write to more than "
+                           f"{ADOPT_CONFIRM_ABOVE} issues")
     sync.set_defaults(func=cmd_sync)
 
     board = sub.add_parser(

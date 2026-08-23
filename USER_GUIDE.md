@@ -457,6 +457,28 @@ Status is set only when it is empty: an item already in a column was put there
 by somebody, and `Todo` would move their work backwards. It follows the issue's
 own state — a closed issue is adopted as `Done`, not `Todo`.
 
+**Above ten issues it counts them and asks.** `--adopt` is the one sync path
+that writes to the *issues* and not just to the board, so a wide one is worth
+looking at before it runs:
+
+```
+--adopt would write to 26 issues, past the 10 this asks about:
+    paulcaron16k/gh-agile#9   Read side: export and validate
+    ...
+    ... and 21 more
+  Each gets a `key:` label, and is renamed if a title prefix is configured.
+  See the whole list:   gh agile sync --adopt --dry-run
+  Then, if it is right: add --yes
+```
+
+The count is taken before anything is written, and it counts *candidates* rather
+than the listing — issues already on the board are not included, so a routine
+run over a synced board never asks. This exists because an unguarded
+`sync --adopt --state all` once labelled every issue in a live repository.
+
+Plain `sync` is deliberately not gated however many it adds: putting an item on a
+board writes nothing to the issue.
+
 **The title convention applies too.** With `project.issue_title_prefix` set,
 an adopted issue is renamed like any other, so a board filled partly from the
 web UI does not end up with two naming schemes:
@@ -486,6 +508,27 @@ To do this on issue creation rather than before planning, copy
 `GITHUB_TOKEN`'s reach whatever permissions block you write, unlike labelling an
 issue, which is why `templates/auto-assign.yml` needs no token and this does. If
 you would rather hold no token, schedule `sync --adopt` as below.
+
+**Never trigger a `gh-agile` workflow from `pull_request` or
+`pull_request_target`.** The shipped template triggers on `issues:` on purpose.
+Two separate reasons, and both matter:
+
+- **`pull_request_target` runs with your secrets and the base repository's
+  permissions.** Anything a fork can influence — and a pull request is entirely
+  fork-controlled — must not reach a job holding `PROJECT_TOKEN`. This is the
+  standard Actions privilege-escalation route, not a `gh-agile` quirk.
+- **`export` discloses the whole board.** It emits every field value, every
+  assignee and the full status history, so an export running in a
+  pull-request-triggered job writes a private board's contents into a build log
+  that any contributor who can open a pull request is able to read. Story points
+  and cycle times are an estimate-accuracy record about named people; see
+  `docs/review-2026-08.md` S9 for what a public board gives away even without
+  this.
+
+Scheduled (`on: schedule`) and issue-triggered (`on: issues`) workflows are the
+safe shapes. If you want a check *on* a pull request, have it read nothing from
+the project: `validate` and `export` both need project read, and neither belongs
+in a fork-reachable job.
 
 ### How often, and what goes wrong if you do not
 

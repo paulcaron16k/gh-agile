@@ -58,7 +58,7 @@ GLOBAL_FLAGS = {"--owner": True, "--project": True, "--config": True, "--help": 
 #: which already suppresses it. Relying on that interaction means a label is
 #: written to a live repository the day the two are decoupled.
 NEVER_RUN = ("--key ", "--out-dir", "--save", "--evidence", "--close", "--force",
-             "--adopt")
+             "--adopt", "--yes")
 
 #: Placeholders. A guide has to name a repository somewhere, and owner/repo is
 #: not one; running it is a guaranteed failure that says nothing.
