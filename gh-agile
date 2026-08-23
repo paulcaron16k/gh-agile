@@ -2604,6 +2604,19 @@ def cmd_project(args) -> int:
         print(f"  written to {target}; applies to issues created from now on")
         return 0
 
+    if args.project_command == "owner":
+        # For a profile written before the owner was recorded. `project create`
+        # sets it from now on, and a profile naming a number with no owner works
+        # only for the one account that happens to hold that number.
+        project = config.setdefault("project", {})
+        was = project.get("owner")
+        project["owner"] = args.owner
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        print(f"  project.owner: {args.owner}" + (f"  (was {was})" if was else ""))
+        print(f"  written to {target}; --owner now defaults to it")
+        return 0
+
     if args.project_command == "sprint-template":
         settings = write_sprint_template(config, args.template, target)
         print(f"  sprint cadence: {args.template} "
@@ -2633,7 +2646,10 @@ def cmd_project(args) -> int:
     print(f"  project #{number} created: {created['url']}")
 
     config.setdefault("project", {})
-    config["project"].update({"number": number, "name": args.title})
+    # The owner is recorded alongside the number, because the number alone is
+    # only meaningful to the account that holds it. Known for free here: this is
+    # the account the project was just created under.
+    config["project"].update({"number": number, "name": args.title, "owner": args.owner})
     if args.key:
         config["project"]["key"] = args.key
         entries = profile_keys(config)
@@ -3421,7 +3437,12 @@ MOVE_FIELDS = [
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="gh agile", description=__doc__.splitlines()[0])
-    parser.add_argument("--owner", default="@me", help='project owner; "@me" for yourself')
+    # No default, so "not given" is distinguishable from an explicit `@me`. Left
+    # unset it comes from `project.owner` in the profile and falls back to the
+    # caller; `@me` always means the caller, even when the profile names someone
+    # else.
+    parser.add_argument("--owner", help="project owner; defaults to project.owner in the "
+                                       'profile, then to you. "@me" forces you')
     parser.add_argument("--project", type=int,
                         help="project number; defaults to project.number in the profile")
     parser.add_argument("--config", help=f"profile path; searched: {', '.join(CONFIG_PATHS)}")
@@ -3557,6 +3578,14 @@ why this is needed:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     prefix.add_argument("--mode", required=True, choices=list(TITLE_PREFIX_MODES))
+    project_sub.add_parser(
+        "owner", help="record whose account holds this project, for an older profile",
+        epilog="Takes the resolved --owner: `gh agile --owner LOGIN project owner`, or\n"
+               "no flag at all to record yourself. `project create` sets this itself.\n\n"
+               "A profile naming project.number with no project.owner only works for\n"
+               "the one account that happens to hold that number.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     project.set_defaults(func=cmd_project)
 
     sprint = sub.add_parser("sprint", help="list or create sprint iterations")
@@ -3697,6 +3726,55 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
     return args.func(args)
 
 
+def caller_login() -> str:
+    """The authenticated user's login, from `gh`."""
+    return json.loads(gh(["api", "user"]))["login"]
+
+
+def resolve_owner(args, config: dict) -> None:
+    """Decide whose project this is: the flag, then the profile, then the caller.
+
+    The caller used to be the only answer. `--owner` defaulted to `@me`, and the
+    profile recorded a project *number* and never whose project it was -- so
+    `project.number: 4` meant "project 4 belonging to whoever typed this". For
+    the owner that is invisibly correct, and it is why the gap survived this long.
+
+    For anyone else it is wrong in two ways. Usually it resolves to nothing and
+    the read-only commands -- `export`, `validate`, `sprint list`, `board list` --
+    simply do not work, though the underlying GitHub read would have succeeded
+    with project read access. Occasionally it resolves to an unrelated project 4
+    of their own, and then `sync --adopt`, whose default `--limit` is 200, labels
+    issues onto it. A number is not an identity without the account it belongs to.
+
+    `--owner` still wins, because naming it is explicit. But an explicit owner
+    that *disagrees* with the profile is refused for the same reason a
+    disagreeing `--project` is: the profile in this directory describes one
+    board, and its keys, boards and sprint cadence belong to that board and not
+    to whatever `--owner` points at. `self-test` is exempt, as it is for
+    `--project`, because it builds its own scratch project.
+    """
+    declared = (config.get("project") or {}).get("owner")
+    given = getattr(args, "owner", None)
+
+    if given is None:
+        args.owner = declared or caller_login()
+        return
+    if given.strip().casefold() in ("@me", "me"):
+        args.owner = caller_login()
+        return
+
+    args.owner = given
+    if declared and given.casefold() != declared.casefold() and args.command != "self-test":
+        sys.exit(
+            f"--owner {given} does not match project.owner {declared!r} in "
+            f"{find_config(getattr(args, 'config', None)) or 'the profile'}.\n"
+            f"  The profile here configures {declared}'s project: its keys, boards and "
+            f"sprint cadence\n  belong to that board, not to {given}'s.\n"
+            f"  To work on {given}'s project, use that project's own profile -- or pass "
+            f"--config."
+        )
+
+
 def apply_defaults(args) -> None:
     """Fill --project, --repo and --key from the profile and the working directory.
 
@@ -3712,8 +3790,7 @@ def apply_defaults(args) -> None:
     args._config = config
     title_prefix_mode(config)   # reject an illegal value now, not at create time
 
-    if getattr(args, "owner", "@me") == "@me":
-        args.owner = json.loads(gh(["api", "user"]))["login"]
+    resolve_owner(args, config)
 
     declared = (config.get("project") or {}).get("number")
     if getattr(args, "project", None) is None and args.command != "self-test":

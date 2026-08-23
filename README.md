@@ -617,11 +617,17 @@ Three tiers follow from that, and they are what to grant against:
 
 | Tier | Commands | Needs |
 |---|---|---|
-| Read | `export`, `validate`, `sprint list`, `board list`, `fix --dry-run` | project **read** |
+| Read | `export`, `validate`, `sprint list`, `board list`, `fix --dry-run` | project **read**, and `project.owner` in the profile |
 | Day to day | `epic`, `story`, `set`, `move`, `sync`, `fix`, `sprint backfill`, `sprint reconcile` | project **write** + repo **push** (for labels and issue bodies) |
 | Admin | `setup` (creates *fields*), `project create`, `sprint create`, `sprint ensure` | project **admin** — these change the project's schema |
 
 `key` with no arguments is a local file read and works for anyone with a clone.
+
+**The Read tier needs `project.owner` recorded in the profile**, or it silently
+does not work for anyone but the board's owner: `--owner` falls back to whoever
+ran the command, so a teammate looking for project 4 gets *their* project 4.
+`gh agile project create` records it; for an older profile, run
+`gh agile project owner` once and commit it.
 
 ### Personal account
 

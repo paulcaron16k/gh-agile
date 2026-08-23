@@ -104,8 +104,15 @@ that automatically would make the repair argue with the user. `sprint reconcile 
 **Profile** — `.github/agile.json`, visible and checked in (a dotfile would hide the convention from anyone
 cloning). `keys` is an **ordered list**; the first entry for a repository is the default when `--key` is omitted.
 `read_config` follows a `config_from: "owner/main-repo"` pointer, resolved through the API so it works for private
-repos and cannot rot into a dead link. `apply_defaults` fills `--project`, `--repo` and `--key`, and **refuses**
-when `--project` disagrees with `project.number` — that mismatch is almost always the right flag in the wrong clone.
+repos and cannot rot into a dead link. `apply_defaults` fills `--project`, `--repo`, `--key` and `--owner`, and
+**refuses** when `--project` or `--owner` disagrees with the profile — that mismatch is almost always the right
+flag in the wrong clone.
+
+**`project.owner` is part of the project's identity, not a convenience.** A number alone means "project N
+belonging to whoever ran this", which is invisibly correct for the owner and wrong for everyone else: the
+read-only commands fail for a teammate who has project read, or resolve to an unrelated project of theirs.
+`resolve_owner` takes the flag, then `project.owner`, then the caller; `--owner @me` always forces the caller,
+which is why the flag has no argparse default — `default="@me"` could not distinguish "not given" from "me".
 
 **Labels carry what GitHub cannot.** `type:epic|story|bug`, `key:ZMBNI`, `sprint:YYYY-MM-DD`. Issue Types and
 Issue Fields are organization-only (`createIssueField` resolves only an Organization node), so labels are the

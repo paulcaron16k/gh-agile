@@ -34,7 +34,8 @@
   "project": {
     "key": "AGILE",
     "name": "gh-agile: Agile management on GitHub",
-    "number": 4
+    "number": 4,
+    "owner": "paulcaron16k"
   },
   "sprint": {
     "ahead": 2,

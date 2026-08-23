@@ -33,6 +33,7 @@ workflows that read it.
 | `keys[].repo` | string | yes | `owner/name` the key applies to. Several keys may name the same repo — see Mono-repo support |
 | `keys[].name` | string | no | What that key is for, shown by `gh agile key` |
 | `project.number` | integer | no | The board's **number**, not its node id — what `--project` takes. Written by `gh agile project create`, and what every command defaults to |
+| `project.owner` | string | no | **The account that holds the project**, and what `--owner` defaults to. Written by `gh agile project create`; `gh agile project owner` adds it to an older profile. Without it a number means "project N belonging to whoever ran this", which is only ever right for one person — see below |
 | `project.name` | string | no | Human-readable project name |
 | `project.key` | string | no | The main repository's key; a convenience copy of the matching `keys` entry |
 | `project.issue_title_prefix` | `off` \| `key` \| `key+type` | no | Whether new issue titles carry `KEY-ID` and the type — see Issue titles. Default `off`; an unrecognised value stops every command |
@@ -48,11 +49,34 @@ workflows that read it.
   ],
   "project": {
     "number": 5,
+    "owner": "paulcaron16k",
     "name": "Zamboni Iceberg table maintainer",
     "key": "ZMBNI"
   }
 }
 ```
+
+**A project number is not an identity without its owner.** `project.number: 5`
+on its own means "project 5 belonging to whoever typed this", because `--owner`
+used to default to the caller. For the person who created the board that is
+invisibly correct. For anybody else it resolves to nothing — so `export`,
+`validate`, `sprint list` and `board list` fail even for someone who has project
+read access — or, worse, it resolves to an unrelated project 5 of *their* own,
+and then `sync --adopt` labels issues onto it.
+
+So record the owner. `project create` does it from now on; for a profile written
+before that:
+
+```bash
+gh agile project owner                  # records you
+gh agile --owner some-org project owner  # records an organization
+```
+
+Precedence is: `--owner` if given, then `project.owner`, then you. `--owner @me`
+always means you, even when the profile names someone else. An explicit
+`--owner` that *disagrees* with `project.owner` is refused, for the same reason a
+disagreeing `--project` is: the keys, boards and sprint cadence in this profile
+belong to the board it describes and not to whatever `--owner` points at.
 
 **The key belongs to the repository, not the project.** GitHub's issue numbers
 are a per-repository sequence and a project may span repositories, so a

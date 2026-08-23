@@ -38,6 +38,17 @@ SAFE = {
     ("validate",), ("sync",), ("export",),
 }
 
+#: Flags on the root parser rather than on a subcommand, so they are legal
+#: *before* the subcommand and appear in no subcommand's help. The value is
+#: whether the flag takes one, because `gh agile --owner some-org project owner`
+#: otherwise reads `some-org` as the subcommand.
+#:
+#: This replaced a blacklist of one value -- `@me` was filtered out by name --
+#: which worked until the guide documented an owner that was not `@me`. Skipping
+#: the token after a known value-taking flag is the same fix without the
+#: guesswork.
+GLOBAL_FLAGS = {"--owner": True, "--project": True, "--config": True, "--help": False}
+
 #: Never executed, whatever SAFE says. Learned by running this script the first
 #: time: `key --key SPARK` wrote a third key into the profile and
 #: `export --out-dir exports/` created a directory. A checker with side effects
@@ -100,9 +111,16 @@ def check(command: str) -> list[str]:
     if command.startswith("gh-agile"):
         tokens = command.split()[1:]
     words, flags = [], []
+    skip = False
     for token in tokens:
+        if skip:
+            # The value of a global flag, not a subcommand.
+            skip = False
+            continue
         if token.startswith("--"):
-            flags.append(token.split("=")[0])
+            flag = token.split("=")[0]
+            flags.append(flag)
+            skip = GLOBAL_FLAGS.get(flag, False) and "=" not in token
         elif not words or (words and not flags and not token.startswith("-")
                            and len(words) < 2
                            and token.replace("-", "").isalpha()):
@@ -110,8 +128,6 @@ def check(command: str) -> list[str]:
             # two-word subcommand was checked against its parent's help and its
             # flags reported as nonexistent. Found by documenting one.
             words.append(token)
-    # Global flags may precede the subcommand: `--project 4 export`.
-    words = [w for w in words if w not in ("@me",)]
     if not words:
         return []
     text = help_for(words[:1])
@@ -120,7 +136,8 @@ def check(command: str) -> list[str]:
     # A two-word subcommand, e.g. `board list`.
     if len(words) > 1 and words[1] in text:
         text = help_for(words[:2])
-    return [f"{words[0]}: no such flag {flag}" for flag in flags if flag not in text]
+    return [f"{words[0]}: no such flag {flag}" for flag in flags
+            if flag not in text and flag not in GLOBAL_FLAGS]
 
 
 def run_safe(command: str) -> tuple[bool, str]:
