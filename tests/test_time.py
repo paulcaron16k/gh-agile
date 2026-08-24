@@ -19,7 +19,7 @@ class TestTodayIsUtc:
         monkeypatch.setenv("TZ", "Pacific/Kiritimati")
         time.tzset()
         try:
-            assert tool.today_utc() == dt.datetime.now(dt.UTC).date()
+            assert tool.today_utc() == dt.datetime.now(dt.timezone.utc).date()
         finally:
             monkeypatch.delenv("TZ", raising=False)
             time.tzset()
@@ -31,7 +31,7 @@ class TestTodayIsUtc:
         monkeypatch.setenv("TZ", "Pacific/Kiritimati")
         time.tzset()
         try:
-            utc_now = dt.datetime.now(dt.UTC)
+            utc_now = dt.datetime.now(dt.timezone.utc)
             local_ahead = utc_now.hour >= 10
             if local_ahead:
                 # The one deliberate local-date call in the project: the

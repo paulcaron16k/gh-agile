@@ -27,11 +27,14 @@ REPO  ?= $(SANDBOX_REPO)
 VENV  ?= .venv
 PY    := $(VENV)/bin/python
 
-# Named explicitly rather than taking whatever `python3` happens to be. On this
-# machine `python3` is 3.10, which is end of life -- so `make venv` would have
-# quietly built an environment below the floor the CI matrix tests, and the two
-# would drift without anything failing. Override for a one-off: make venv
-# PYTHON=python3.13
+# The interpreter `make venv` builds with: the development default, deliberately
+# newer than the floor. Named explicitly rather than taking whatever `python3`
+# happens to be, so the environment is the same on every machine.
+#
+# It is *not* the supported floor -- that is `RUNTIME_FLOOR` in gh-agile, 3.10,
+# and CI builds this venv at 3.10 as well. Testing only the newest is how a 3.11+
+# idiom reached a file whose shebang finds python3.10. Override for a one-off:
+#     make venv PYTHON=python3.10
 PYTHON ?= python3.12
 
 .PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help
@@ -128,8 +131,9 @@ help:
 
 venv:
 	@command -v $(PYTHON) >/dev/null || { \
-	  echo "$(PYTHON) is not on PATH. Python 3.12 is the floor -- 3.9, 3.10 and 3.11"; \
-	  echo "  are all past or near end of life. Install it, or name another:"; \
+	  echo "$(PYTHON) is not on PATH. It is the development default, not the floor:"; \
+	  echo "  the extension runs on 3.10+ (see RUNTIME_FLOOR), and CI tests 3.10 too."; \
+	  echo "  Install it, or name another:"; \
 	  echo "      make venv PYTHON=python3.13"; exit 2; }
 	$(PYTHON) -m venv $(VENV)
 	$(PY) -m pip install --quiet --upgrade pip

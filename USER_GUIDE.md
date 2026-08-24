@@ -330,6 +330,113 @@ gantt
 - **An item can be on three boards at once** and has one status on all of them.
   That is the property a second project would destroy.
 
+### Reading a board from the terminal: `board show`
+
+`board list` is the index — every view, its type, layout and filter.
+`board show` renders one:
+
+```bash
+gh agile board show "Engineering: all work"
+gh agile board show agile                 # an unambiguous substring is enough
+gh agile board show Backlog --filter "label:type:epic"
+gh agile board show Backlog --format jsonl
+gh agile board show Backlog --out-dir exports/
+```
+```
+Engineering: all work
+kanban · paulcaron16k/projects/4 · 8 of 23 items
+filter: -status:Done
+
+Todo (8)
+  AGILE-9   epic     —  —                 Read side: export and validate
+  AGILE-10  epic     —  —                 Write side: setup, epic, story
+  AGILE-24  story    8  AGILE Sprint 4    Synthesise custom-field history from snapshots
+  AGILE-37  story    8  —                 Export pull requests, reviews and comments as…
+
+empty: In Progress · Blocked · In Review
+```
+
+**The filter comes from the view, not from you.** That is the point: the board
+was defined once, in the profile and on GitHub, and this renders *that*
+definition rather than something retyped beside it. `--filter` **adds** terms,
+ANDed onto the board's own — it never replaces them.
+
+Sections follow the view's layout: a board layout groups by Status, a table
+layout is one flat list, a roadmap groups by sprint. Vertical sections rather
+than side-by-side columns because five statuses across 80 characters leaves
+about fifteen for each title.
+
+**Empty and excluded are different, and the output says which.** A status the
+filter allows but nothing occupies is listed on the `empty:` line, because "In
+Review is empty" is a thing a board exists to tell you. A status the filter
+*removes* — `Done` on a kanban board — is not mentioned at all, since calling it
+empty would report that nothing was finished.
+
+#### It is reconstructed, not mirrored
+
+`ProjectV2View` has **no `items` field**. A view hands out its `filter` as an
+opaque string, its layout and its grouping, and there is no API for "what does
+this view show". So the filter is evaluated here, against the same items the
+export reads.
+
+That has one consequence worth knowing: **a filter term this tool cannot read is
+refused, never ignored.**
+
+```
+the filter term 'assignee' is not one this tool can evaluate.
+  It is refused rather than ignored: a dropped term renders a board that looks
+  right and shows the wrong items.
+  Understood:
+    is       is:open, is:closed, is:issue
+    label    a label on the issue, e.g. label:type:epic
+    no       a field that is empty: no:sprint, no:status, no:label
+    sprint   the Sprint field: sprint:@current, or a sprint title
+    status   an item's Status field, e.g. status:Done or -status:Done
+```
+
+Dropping `label:key:ZMBNI` would render one team's board full of another team's
+work, and it would look entirely correct. Everything the four board types
+generate is in that list; a filter edited in the web UI beyond it stops the
+command rather than misleading it.
+
+#### `--format jsonl`
+
+One metadata line, then one line per item, in section order. The header carries
+what the text view is built from — layout, section order, the filter actually
+applied — so the display can be re-created from the file without going back to
+GitHub:
+
+```jsonl
+{"kind":"board","name":"Backlog","board_type":"backlog","layout":"TABLE_LAYOUT",
+ "filter":"no:sprint -status:Done","sections":[""],"item_count":7,
+ "board_item_count":23,"generated_at":"2026-08-24T15:37:53Z", ...}
+{"kind":"item","section":"","key":"AGILE-9","type":"epic","status":"Todo",
+ "sprint":null,"story_points":null,"title":"Read side: export and validate", ...}
+```
+
+**Story points keep the type GitHub gave them — a float.** `Story Points` is a
+`NUMBER` field, so a whole estimate arrives as `8.0` and that is what the JSONL
+carries. Only the *display* strips the `.0`, because a board column reading "8.0"
+claims a decimal place an estimate does not have.
+
+The split is deliberate. Normalising `8.0` to `8` in the data would put `8` and
+`0.5` in the same JSONL column, and a loader inferring the column type from the
+first rows would call it an integer and truncate the first half-point it met.
+
+Fractional points work throughout — `--points 0.5`, `--points 1.5` — and nothing
+here has an opinion about your scale. Most teams use a coarse one (1, 2, 3, 5, 8,
+13) on the reasoning that precision at small sizes is false confidence, but
+half-points for trivial work are a real convention and the field accepts them.
+
+With `--out-dir` the file is named `board_<type>_<name>_<stamp>.<ext>`, in the
+same ISO 8601 basic form the export uses, so a directory of them sorts
+chronologically:
+
+```
+board_kanban_engineering-all-work_20260824T153801Z.jsonl
+board_backlog_backlog_20260824T153819Z.txt
+```
+
 ### Is a GitHub view a scrum board or a kanban board?
 
 **Neither, until you filter it.** GitHub has no such concept — it has a *view*

@@ -118,6 +118,39 @@ handing back a scratch project with no fields and no labels while reporting succ
 `project.number` first entered the profile. `self-test` never hit it because `apply_defaults` exempts that
 command by name, so the *tested* path and the *documented* path had diverged silently.
 
+**The tests and the tool can run on different interpreters, and only one of them
+is the user's.** Raising ruff's `target-version` to `py312` let UP017 rewrite
+`dt.timezone.utc` to `dt.UTC`, which arrived in 3.11. Every check stayed green —
+`make lint`, 227 tests — because pytest runs inside `.venv` (3.12). The tool
+itself has `#!/usr/bin/env python3`, which on this machine is 3.10, so the first
+real invocation died:
+
+    AttributeError: module 'datetime' has no attribute 'UTC'
+
+`gh extension install` clones a file and provisions no interpreter, so a `gh`
+extension runs on whatever the user happens to have. The dev floor and the
+runtime floor are different numbers and the second one is not ours to choose.
+Two `# noqa: UP017` keep the compatible spelling, and `require_interpreter()`
+turns a genuinely too-old interpreter into a sentence rather than an exception
+from the middle of a command.
+
+The general shape: a green suite proves the code works *under the interpreter the
+suite used*. Whenever the shipped entry point picks its own runtime — a shebang,
+a container base image, a Lambda runtime — that is a second environment nothing
+has tested.
+
+**The fix is not a comment, it is a job that runs the floor.** `ruff`'s
+`target-version` now sits at the floor rather than at the development default, so
+pyupgrade cannot suggest syntax the floor will not run, and CI builds the venv at
+3.10 as well as 3.12 and 3.13. Within seconds of first running the suite at 3.10,
+it found the *same* autofix still sitting in `tests/test_time.py` — two more
+`dt.UTC` calls that lint and 286 green tests had both waved through, because both
+ran on 3.12. One bug had been fixed and its twin was still there.
+
+So: three settings have to agree — the runtime guard, the lint target, and the
+matrix — and the matrix is the only one of the three that can actually catch a
+disagreement. A floor no job tests is a promise nothing keeps.
+
 **A flaky test is worst where it is the only test.** `make self-test` was the sole
 cover for `history()` — the function that turns a timeline into `started_at`,
 `done_at` and `added_to_board_at`, and therefore the source of every cycle time

@@ -34,11 +34,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor and the current release. The floor is what `ruff.toml`
-        # declares as target-version and what the Makefile's PYTHON builds, and
-        # testing only the newest interpreter lets a syntax or stdlib feature
-        # past it that the floor cannot run.
-        python-version: ['3.12', '3.13']
+        # Every version the README claims, with no gaps. README says "3.10 or
+        # newer", so 3.10, 3.11, 3.12 and 3.13 all run: **a version nothing tests
+        # is a promise nothing keeps**, and that applies to the middle of the
+        # range as much as to the floor. This list skipped 3.11 for exactly one
+        # reason -- floor-and-newest felt like enough -- which is the same
+        # reasoning that let `dt.UTC` (3.11+) reach a file whose shebang finds
+        # python3.10, with lint and the whole suite green because both ran on
+        # 3.12.
+        #
+        # 3.10 is `RUNTIME_FLOOR` and `ruff.toml`'s target-version. 3.12 is what
+        # `make venv` builds. Adding a version here means adding it to the README
+        # too, and dropping one means dropping it from both.
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
 

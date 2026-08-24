@@ -525,7 +525,17 @@ def today_utc():
     """
     import datetime as dt
 
-    return dt.datetime.now(dt.UTC).date()
+    # `dt.timezone.utc`, not `dt.UTC`: the alias arrived in 3.11 and this file
+    # runs under whatever `python3` the shebang finds on the user's machine, not
+    # under the 3.12 the tests use. Raising ruff's target-version to py312 made
+    # UP017 rewrite this, and the tool then crashed with AttributeError on a
+    # machine whose python3 is 3.10 -- while `make test` stayed green, because
+    # pytest runs in the venv. See docs/lessons.md.
+    #
+    # The `noqa` is redundant while target-version sits at the floor, and is kept
+    # anyway: it is the one thing that stops the autofix reintroducing this the
+    # next time somebody raises that setting.
+    return dt.datetime.now(dt.timezone.utc).date()  # noqa: UP017
 
 
 def seconds_between(start: str | None, end: str | None) -> int | None:
@@ -622,7 +632,8 @@ DEFAULT_OVERLAP_SECONDS = 900
 def _now() -> str:
     import datetime as dt
 
-    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # `dt.timezone.utc` for the reason given on `today_utc`: 3.11+ only.
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: UP017
 
 
 def file_stamp(iso: str) -> str:
@@ -2395,17 +2406,124 @@ def aligned_start(today, start_day: str):
 
 
 def views_of(login: str, number: int) -> list[dict]:
-    for root in ("user", "organization"):
-        data = graphql(
-            "query($login: String!, $number: Int!) { %s(login: $login) { projectV2("
-            "number: $number) { views(first: 20) { nodes { id number name layout filter } } } } }"
-            % root,
-            login=login, number=number,
-        )
-        owner = (data.get("data") or {}).get(root)
-        if owner and owner.get("projectV2"):
-            return owner["projectV2"]["views"]["nodes"]
-    sys.exit(f"no project {number} for {login!r}")
+    """Every view on the project, with its layout and filter.
+
+    Was the fourth place running the two-root walk without catching the
+    `SystemExit` it produces -- found the day after the other three, by needing
+    it for `board show`. Verified before the change: `views_of("github", 1)`
+    reported "Could not resolve to a User with the login of 'github'".
+    """
+    node = project_node(
+        login, number,
+        "views(first: 20) { nodes { id number name layout filter } }",
+    )
+    if node is None:
+        sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
+    return node["views"]["nodes"]
+
+
+#: The filter vocabulary `board show` can evaluate, and the only one it will.
+#:
+#: **`ProjectV2View` has no `items` field.** Introspected 2026-08-24: a view
+#: exposes `filter` as an opaque string, plus `layout`, `verticalGroupByFields`
+#: and `sortByFields`, and there is no way to ask GitHub what a view displays. So
+#: a text board is *reconstructed* from the same inputs the web UI uses, not
+#: mirrored from it -- which means the filter has to be evaluated here.
+#:
+#: Everything `BOARD_TYPES` generates is in this list. A term outside it is
+#: **refused, never ignored**: silently dropping `label:key:ZMBNI` would render a
+#: board showing another team's work under this team's name, and it would look
+#: entirely plausible. Refusing costs the user one message; guessing costs them
+#: a decision made on the wrong board.
+FILTER_TERMS = {
+    "status": "an item's Status field, e.g. status:Done or -status:Done",
+    "sprint": "the Sprint field: sprint:@current, or a sprint title",
+    "label": "a label on the issue, e.g. label:type:epic",
+    "no": "a field that is empty: no:sprint, no:status, no:label",
+    "is": "is:open, is:closed, is:issue",
+}
+
+
+def parse_filter(text: str) -> list[tuple[bool, str, str]]:
+    """`-status:Done no:sprint` -> [(True, "status", "Done"), (False, "no", "sprint")].
+
+    Quoted values are kept whole, because a status is `"In Progress"` in a view
+    filter. Split on the *first* colon only: `label:key:AGILE` is one term whose
+    value itself contains a colon.
+    """
+    import shlex
+
+    out = []
+    for token in shlex.split(text or ""):
+        negated = token.startswith("-")
+        body = token[1:] if negated else token
+        key, sep, value = body.partition(":")
+        if not sep or not value:
+            sys.exit(
+                f"cannot read the filter term {token!r}.\n"
+                f"  Every term is key:value, optionally negated with a leading '-'.\n"
+                f"  Understood: " + ", ".join(sorted(FILTER_TERMS))
+            )
+        key = key.casefold()
+        if key not in FILTER_TERMS:
+            listed = "\n".join(f"    {k:<8} {why}" for k, why in sorted(FILTER_TERMS.items()))
+            sys.exit(
+                f"the filter term {key!r} is not one this tool can evaluate.\n"
+                f"  It is refused rather than ignored: a dropped term renders a board that "
+                f"looks\n  right and shows the wrong items.\n"
+                f"  Understood:\n{listed}\n"
+                f"  The board's own filter is whatever the web UI holds; see it with "
+                f"`gh agile board list`."
+            )
+        out.append((negated, key, value))
+    return out
+
+
+def item_matches(item: dict, terms: list[tuple[bool, str, str]],
+                 *, current_sprint: str | None) -> bool:
+    """Whether one board item satisfies every term. Negation inverts one term.
+
+    `current_sprint` is passed in rather than looked up, so it is read once per
+    run and every item is judged against the same answer -- and so this is
+    testable without a project.
+    """
+    content = item.get("content") or {}
+    fields = field_values(item)
+    labels = {n["name"].casefold() for n in (content.get("labels") or {}).get("nodes", [])}
+    status = fields.get("Status")
+    sprint = fields.get("Sprint")
+
+    for negated, key, value in terms:
+        wanted = value.casefold()
+        if key == "status":
+            hit = same_status(status, value)
+        elif key == "sprint":
+            # `@current` is the first *active* iteration, decided by GitHub
+            # returning completed ones separately -- the same rule
+            # `resolve_iteration` follows, so a scrum board and `set --value
+            # @current` cannot disagree about which sprint is current.
+            if wanted in ("@current", "current"):
+                hit = bool(sprint) and bool(current_sprint) and sprint == current_sprint
+            else:
+                hit = bool(sprint) and sprint.casefold() == wanted
+        elif key == "label":
+            hit = wanted in labels
+        elif key == "is":
+            state = (content.get("state") or "").casefold()
+            kind = content.get("__typename", "")
+            hit = {"open": state == "open", "closed": state == "closed",
+                   "issue": kind == "Issue", "pr": kind == "PullRequest",
+                   "pullrequest": kind == "PullRequest"}.get(wanted, False)
+        elif key == "no":
+            hit = {"sprint": not sprint, "status": not status, "label": not labels,
+                   }.get(wanted)
+            if hit is None:
+                sys.exit(f"no:{value} is not understood; try no:sprint, no:status or no:label")
+        else:                                   # unreachable: parse_filter refused it
+            sys.exit(f"unhandled filter term {key!r}")
+        if hit == negated:
+            return False
+    return True
 
 
 def make_board(login: str, project: int, name: str, kind: str, extra: str | None) -> dict:
@@ -2628,26 +2746,276 @@ def cmd_sync(args) -> int:
     return 0
 
 
+#: How each layout is grouped into sections in the text view. The layout comes
+#: from the view itself, not from the profile's board type, because the layout is
+#: what the web UI actually renders and a view can be changed there.
+LAYOUT_SECTIONS = {
+    "BOARD_LAYOUT": "status",     # columns in the web UI, sections here
+    "TABLE_LAYOUT": None,         # one flat table, as the web UI shows it
+    "ROADMAP_LAYOUT": "sprint",   # the nearest text analogue of a timeline
+}
+
+
+def board_row(item: dict, keys: dict[str, str]) -> dict:
+    """One item, flattened to what both output formats need."""
+    content = item.get("content") or {}
+    fields = field_values(item)
+    labels = [n["name"] for n in (content.get("labels") or {}).get("nodes", [])]
+    repo = (content.get("repository") or {}).get("nameWithOwner")
+    labelled = next((lb[len(KEY_LABEL):] for lb in labels if lb.startswith(KEY_LABEL)), None)
+    # Story Points stays exactly as GitHub typed it -- a float, because the field
+    # is NUMBER and fractional estimates are a legitimate team choice (0.5 for
+    # trivial work). Whole numbers are *displayed* without the `.0` by
+    # `render_points`, and that is a display concern: normalising here put `8` and
+    # `0.5` in the same JSONL column, so a loader inferring the type from early
+    # rows would call it an integer and then truncate the first half-point.
+    return {
+        "key": f"{labelled}-{content['number']}" if labelled
+               else issue_key(repo, content["number"], keys),
+        "number": content["number"],
+        "repository": repo,
+        "title": content.get("title") or "",
+        "url": content.get("url") or "",
+        "type": next((lb.split(":", 1)[1] for lb in labels
+                      if lb.startswith("type:")), None),
+        "status": fields.get("Status"),
+        "story_points": fields.get("Story Points"),
+        "sprint": fields.get("Sprint"),
+        "labels": labels,
+        "assignees": [n["login"] for n in (content.get("assignees") or {}).get("nodes", [])],
+        "epic_number": (content.get("parent") or {}).get("number"),
+        "state": content.get("state"),
+    }
+
+
+def status_excluded(name: str, terms: list[tuple[bool, str, str]]) -> bool:
+    """Whether the filter makes this status impossible, rather than merely absent.
+
+    `-status:Done` on a kanban board does not leave Done *empty*, it leaves Done
+    *out*, and reporting "empty: Done" would say the sprint finished nothing when
+    the board was never asked. Empty and excluded are different facts and the
+    display must not merge them.
+    """
+    for negated, key, value in terms:
+        if key == "status":
+            if negated and same_status(name, value):
+                return True
+            if not negated and not same_status(name, value):
+                return True
+        elif key == "no" and value.casefold() == "status":
+            return True
+    return False
+
+
+def board_sections(rows: list[dict], grouping: str | None, sprint_order: list[str],
+                   terms: list[tuple[bool, str, str]]) -> list[tuple[str, list[dict]]]:
+    """`[(section name, rows)]` in the order the section should be printed.
+
+    Sections the filter allows are returned even when empty, because "In Review is
+    empty" is information a board exists to convey; the display collapses those
+    onto one line. Sections the filter *excludes* are dropped -- see
+    `status_excluded`.
+    """
+    if grouping is None:
+        return [("", sorted(rows, key=lambda r: (str(r["repository"]), r["number"])))]
+    if grouping == "status":
+        buckets = {s: [] for s in STATUSES if not status_excluded(s, terms)}
+        for row in rows:
+            match = next((s for s in STATUSES if same_status(row["status"], s)), None)
+            # A status this tool does not know still gets its own section, under
+            # the name the board actually holds. Someone can add a column in the
+            # web UI, and folding "Icebox" into "(no status)" would report the
+            # work as unplaced when it is placed somewhere we simply have no
+            # policy for. `(no status)` is reserved for genuinely unset, which is
+            # what `validate` reports on.
+            buckets.setdefault(match or row["status"] or "(no status)", []).append(row)
+        return [(name, sorted(items, key=lambda r: r["number"]))
+                for name, items in buckets.items()]
+    # sprint: known sprints in configuration order, then the unassigned.
+    buckets = {name: [] for name in sprint_order}
+    for row in rows:
+        buckets.setdefault(row["sprint"] or "(no sprint)", []).append(row)
+    return [(name, sorted(items, key=lambda r: r["number"])) for name, items in buckets.items()]
+
+
+def render_points(points) -> str:
+    """`8.0` -> `8`, `0.5` -> `0.5`, absent -> an em dash.
+
+    GitHub stores a NUMBER field as a float, so every whole estimate arrives as
+    `8.0`, and a board column reading "8.0" claims a decimal place the estimate
+    does not have. Fractional points are left alone: half-points for trivial work
+    are a real convention, and the tool takes no view on a team's scale.
+    """
+    if points in (None, ""):
+        return "—"
+    if isinstance(points, float) and points.is_integer():
+        return str(int(points))
+    return str(points)
+
+
+def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
+                 project: int, total: int, shown_filter: str) -> str:
+    """The text view. Vertical sections, because five statuses do not fit across 80
+    columns without truncating every title to nothing."""
+    out = [view["name"],
+           f"{kind} · {owner}/projects/{project} · {len(rows)} of {total} items",
+           f"filter: {shown_filter or '(none)'}", ""]
+    empty = []
+    for name, items in sections:
+        if not items:
+            if name:
+                empty.append(name)
+            continue
+        if name:
+            out.append(f"{name} ({len(items)})")
+        width = max((len(r["key"]) for r in items), default=8)
+        for row in items:
+            points = render_points(row["story_points"])
+            title = row["title"]
+            if len(title) > 46:
+                title = title[:45].rstrip() + "…"
+            out.append(
+                f"  {row['key']:<{width}}  {(row['type'] or '?'):<5}  {points:>3}  "
+                f"{(row['sprint'] or '—'):<16}  {title}"
+            )
+        out.append("")
+    if empty:
+        out.append("empty: " + " · ".join(empty))
+    return "\n".join(out).rstrip() + "\n"
+
+
+def board_kind(view: dict, config: dict) -> str:
+    """A view's board type: the profile first, then the most specific filter match."""
+    declared = {b["name"]: b["type"] for b in (config.get("boards") or [])}
+    by_specificity = sorted(BOARD_TYPES.items(), key=lambda kv: len(kv[1]["filter"]),
+                            reverse=True)
+    return declared.get(view["name"]) or next(
+        (k for k, spec in by_specificity
+         if spec["filter"] and spec["filter"] in (view.get("filter") or "")),
+        "custom",
+    )
+
+
+def find_view(login: str, project: int, wanted: str) -> dict:
+    """One view by name: exact first, then unique case-insensitive substring.
+
+    Substring matching so `board show agile` finds "Team: AGILE" without the
+    quoting a colon and a space demand. Ambiguity is **refused and listed**
+    rather than resolved by picking the first -- rendering the wrong team's board
+    under the right team's name is the kind of wrong answer nobody checks.
+    """
+    views = views_of(login, project)
+    exact = [v for v in views if v["name"] == wanted]
+    if exact:
+        return exact[0]
+    matches = [v for v in views if wanted.casefold() in v["name"].casefold()]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        listed = "\n".join(f"    {v['name']}" for v in views)
+        sys.exit(f"no board matches {wanted!r} on project {project}. There is:\n{listed}")
+    listed = "\n".join(f"    {v['name']}" for v in matches)
+    sys.exit(f"{wanted!r} matches more than one board:\n{listed}\n"
+             f"  Name one exactly.")
+
+
+def cmd_board_show(args) -> int:
+    """Render one board as text, or as JSONL that can re-create that text.
+
+    The filter comes from the view, so this shows what the web UI shows rather
+    than what someone retyped -- and `--filter` appends to it rather than
+    replacing it, because a board's own filter is the part that must not be lost.
+    """
+    view = find_view(args.owner, args.project, args.name)
+    kind = board_kind(view, args._config)
+    own = view.get("filter") or ""
+    combined = " ".join(c for c in (own, args.filter) if c)
+    terms = parse_filter(combined)
+
+    active, completed = iterations(args.owner, args.project)
+    current = active[0]["title"] if active else None
+    sprint_order = [i["title"] for i in active + completed]
+
+    keys = {}
+    for entry in profile_keys(args._config):
+        keys.setdefault(entry.get("repo"), entry.get("key"))
+
+    _title, items = fetch_items(args.owner, args.project)
+    issues = [i for i in items
+              if (i.get("content") or {}).get("__typename") == "Issue"
+              and not i.get("isArchived")]
+    rows = [board_row(i, keys) for i in issues
+            if item_matches(i, terms, current_sprint=current)]
+    sections = board_sections(rows, LAYOUT_SECTIONS.get(view["layout"], "status"),
+                              sprint_order, terms)
+
+    stamp = _now()
+    if args.format == "jsonl":
+        body = board_jsonl(view, kind, rows, sections, args, combined, len(issues), stamp)
+        suffix = "jsonl"
+    else:
+        body = render_board(view, kind, rows, sections, args.owner, args.project,
+                            len(issues), combined)
+        suffix = "txt"
+
+    if args.out_dir:
+        directory = pathlib.Path(args.out_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"board_{kind}_{slug(view['name'])}_{file_stamp(stamp)}.{suffix}"
+        path.write_text(body)
+        print(f"  {path}  ({len(rows)} item(s))")
+    else:
+        sys.stdout.write(body)
+    return 0
+
+
+def slug(text: str) -> str:
+    """`Team: AGILE` -> `team-agile`. For a filename, so no colons and no spaces."""
+    kept = [c.lower() if c.isalnum() else "-" for c in text]
+    return "-".join(part for part in "".join(kept).split("-") if part) or "board"
+
+
+def board_jsonl(view: dict, kind: str, rows: list[dict], sections, args,
+                shown_filter: str, total: int, stamp: str) -> str:
+    """One metadata line, then one line per item, in section order.
+
+    The header carries what the text view is built from -- layout, section order,
+    the filter actually applied -- so the display can be re-created from the file
+    without going back to GitHub. Each item names its section for the same reason.
+    """
+    header = {
+        "kind": "board",
+        "name": view["name"],
+        "board_type": kind,
+        "layout": view["layout"],
+        "filter": shown_filter,
+        "view_filter": view.get("filter") or "",
+        "owner": args.owner,
+        "project": args.project,
+        "generated_at": stamp,
+        "sections": [name for name, _ in sections],
+        "item_count": len(rows),
+        "board_item_count": total,
+    }
+    lines = [json.dumps(header, sort_keys=True)]
+    for name, items in sections:
+        for row in items:
+            lines.append(json.dumps({"kind": "item", "section": name, **row},
+                                    sort_keys=True))
+    return "\n".join(lines) + "\n"
+
+
 def cmd_board(args) -> int:
     if args.board_command == "list":
-        # The profile is the authority on a board's type: filters overlap --
-        # backlog's contains kanban's -- so substring matching alone reports
-        # `no:sprint -status:Done` as kanban. Longest filter first for boards
-        # the profile does not know about.
-        declared = {b["name"]: b["type"] for b in (args._config.get("boards") or [])}
-        by_specificity = sorted(
-            BOARD_TYPES.items(), key=lambda kv: len(kv[1]["filter"]), reverse=True
-        )
         for view in views_of(args.owner, args.project):
-            kind = declared.get(view["name"]) or next(
-                (k for k, spec in by_specificity
-                 if spec["filter"] and spec["filter"] in (view.get("filter") or "")),
-                "custom",
-            )
+            kind = board_kind(view, args._config)
             layout = view["layout"].replace("_LAYOUT", "").lower()
             print(f"  #{view['number']:<3} {view['name']:<28} {kind:<8} {layout:<8} "
                   f"{view.get('filter') or ''}")
         return 0
+
+    if args.board_command == "show":
+        return cmd_board_show(args)
 
     result = make_board(args.owner, args.project, args.name, args.type, args.filter)
     print(f"  {result['action']} #{result['number']}: {result['name']} "
@@ -3534,7 +3902,37 @@ MOVE_FIELDS = [
 ]
 
 
+#: The oldest interpreter this tool runs on, and the number `ruff.toml`'s
+#: `target-version` and the CI matrix are both pinned to.
+#:
+#: A `gh` extension runs under whatever `python3` the shebang finds --
+#: `gh extension install` clones a file, it does not provision an interpreter --
+#: so this is not ours to choose, and refusing with a sentence beats an exception
+#: from the middle of a command.
+#:
+#: 3.10 rather than something newer, deliberately, even though it reaches upstream
+#: end of life in October 2026. Upstream EOL stops python.org patches; it does not
+#: remove 3.10 from anybody's machine, Ubuntu 22.04 LTS ships it with distro
+#: support into 2027, and this file uses no 3.11+ feature -- so the floor costs
+#: nothing to hold and dropping it would buy one fewer CI job. Revisit when the
+#: distributions move, not when the version number expires.
+RUNTIME_FLOOR = (3, 10)
+
+
+def require_interpreter() -> None:
+    if sys.version_info < RUNTIME_FLOOR:
+        floor = ".".join(str(n) for n in RUNTIME_FLOOR)
+        running = ".".join(str(n) for n in sys.version_info[:3])
+        sys.exit(
+            f"gh-agile needs Python {floor} or newer; this is {running} "
+            f"({sys.executable}).\n"
+            f"  It runs under whatever `python3` is first on PATH. Point that at a newer "
+            f"one,\n  or install one: 3.12 is what this tool is tested against."
+        )
+
+
 def main() -> int:
+    require_interpreter()
     parser = argparse.ArgumentParser(prog="gh agile", description=__doc__.splitlines()[0])
     # No default, so "not given" is distinguishable from an explicit `@me`. Left
     # unset it comes from `project.owner` in the profile and falls back to the
@@ -3643,6 +4041,24 @@ why this is needed:
     )
     board_sub = board.add_subparsers(dest="board_command", required=True)
     board_sub.add_parser("list", help="every board on the project")
+    board_show = board_sub.add_parser(
+        "show", help="render one board's contents as text, or as JSONL",
+        epilog=field_help([
+            ("name", "text", "required", "the board; an unambiguous substring is enough"),
+            ("--format", "display|jsonl", "optional", "display is a text view; jsonl is one "
+                                                      "metadata line then one line per item"),
+            ("--filter", "query", "optional", "extra terms, ANDed onto the board's own filter"),
+            ("--out-dir", "path", "optional", "write board_<type>_<name>_<stamp>.<ext> here"),
+        ]) + "\n\nfilter terms:\n" + "\n".join(
+            f"  {k:<8} {why}" for k, why in sorted(FILTER_TERMS.items())
+        ) + "\n\nA term outside that list is refused, not ignored: a dropped term renders"
+            "\na board that looks right and shows the wrong items.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    board_show.add_argument("name")
+    board_show.add_argument("--format", default="display", choices=["display", "jsonl"])
+    board_show.add_argument("--filter")
+    board_show.add_argument("--out-dir")
     board_new = board_sub.add_parser("create", help="create or converge a board")
     board_new.add_argument("--name", required=True)
     board_new.add_argument("--type", required=True, choices=sorted(BOARD_TYPES))

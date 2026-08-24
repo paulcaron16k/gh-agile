@@ -120,6 +120,14 @@ carrier. Labels are also the only **additive** primitive in the API — `--add-l
 read-modify-write, unlike a title (whole-value replace) or an iteration configuration (replace-wholesale plus
 collateral damage). That is why the sprint record lives on one.
 
+**A board is reconstructed, never mirrored.** `ProjectV2View` has **no `items` field** — a view hands out its
+`filter` as an opaque string, its `layout` and its grouping, and there is no API for "what does this view show".
+So `board show` evaluates the filter locally against the same items `export` reads. Consequences that are not
+optional: a filter term outside `FILTER_TERMS` is **refused, not ignored** (dropping `label:key:ZMBNI` renders one
+team's board full of another team's work and looks correct); and **empty is not excluded** — a status the filter
+allows but nothing occupies is reported on the `empty:` line, while one the filter removes is not mentioned, because
+calling `Done` empty on a kanban board says nothing was finished.
+
 **A project is a collection, not a filter.** An issue is not on a board until it is added, which is why `sync`
 exists. A user-owned project has six built-in workflows and *auto-add repository issues is not among them*, and
 built-in workflows cannot be enabled through the API at all — the schema has `deleteProjectV2Workflow` and nothing
@@ -147,6 +155,14 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
   spelling — a person writes 14 — and the suffix stops at the file's edge.
 - **Dates are UTC.** `today_utc()`, never `date.today()`. Sprint windows are UTC dates and `@current` is decided
   in UTC; a local date puts the tool a day out of step around midnight.
+- **The extension runs under the user's `python3`, not the venv's.** `gh extension install` clones a file; it
+  provisions no interpreter, and the shebang is `#!/usr/bin/env python3`. So the floor is **3.10** and is not
+  ours to choose. Three settings must agree — `RUNTIME_FLOOR`, `ruff.toml`'s `target-version`, and the CI matrix,
+  which has to *run* the floor: with `target-version = py312`, UP017 rewrote `dt.timezone.utc` to `dt.UTC`
+  (3.11+), lint and every test stayed green because both ran in the 3.12 venv, and the tool crashed on first use
+  under the system 3.10. **A floor no job tests is a promise nothing keeps.** `make venv PYTHON=python3.10`
+  reproduces CI's floor job locally, and it is how the same autofix was then found lurking in `tests/test_time.py`.
+  `scripts/` is exempt: it runs under `$(PY)` or `uv`, and `agile_analytics.py` declares `requires-python >=3.11`.
 - **Read the board with hand-written GraphQL, never `gh project item-list` or `field-list`.** Measured: those
   two cost ~102–106 GraphQL points against 1 for the same request written out, and `field-list`'s cost does not
   even move with `-L`. `paged_project_items` takes a selection so there is one pager and two selections rather

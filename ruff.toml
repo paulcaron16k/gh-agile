@@ -7,12 +7,20 @@
 
 line-length = 99
 
-# The floor the CI matrix tests and `make venv` builds. 3.9, 3.10 and 3.11 are
-# dropped: the first two are end of life and there is no reason to carry a
-# compatibility promise nothing exercises. Keep this in step with the Makefile's
-# PYTHON and the CI matrix -- three places, and a lint target that permits
-# syntax CI cannot run is worse than no lint.
-target-version = "py312"
+# **The oldest interpreter the extension must run on, not the newest one we
+# develop against.** Those are different numbers and conflating them broke the
+# tool: with `py312` here, UP017 rewrote `dt.timezone.utc` to `dt.UTC` (3.11+),
+# lint and 227 tests stayed green because pytest runs in the 3.12 venv, and the
+# first real invocation died with AttributeError under the system python3.10.
+#
+# `gh extension install` clones a file and provisions no interpreter, so the
+# shebang picks up whatever the user has. This setting is the mechanical guard
+# against reaching past that: keep it at the floor and pyupgrade cannot suggest
+# syntax the floor will not run.
+#
+# Keep in step with `RUNTIME_FLOOR` in gh-agile and the CI matrix, which must
+# actually test this version -- an untested floor is a promise nothing keeps.
+target-version = "py310"
 
 [lint]
 select = [

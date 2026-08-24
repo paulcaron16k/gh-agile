@@ -756,8 +756,22 @@ Write. Treat the Admin row as informed guesswork until someone measures it.
 gh auth refresh -s project
 ```
 
-Python 3.12 or newer. Standard library only — no dependencies, and no token is
-ever read, stored or passed by this tool. Authentication is `gh`'s job.
+**Python 3.10 or newer.** Standard library only — no dependencies, and no token
+is ever read, stored or passed by this tool. Authentication is `gh`'s job.
+
+The floor is 3.10 rather than something newer because **`gh extension install`
+clones a file and provisions no interpreter** — the shebang finds whatever
+`python3` the machine has, and that is not ours to choose. So the code uses no
+version-gated syntax, `ruff`'s `target-version` is pinned to the floor so
+pyupgrade cannot suggest any, and CI runs the floor as well as the newest. An
+unsupported interpreter is refused with a sentence rather than an exception from
+the middle of a command.
+
+That is worth stating because it was briefly untrue. Raising `target-version` to
+`py312` let pyupgrade rewrite `datetime.timezone.utc` to `datetime.UTC`, which is
+3.11+; lint and the whole suite stayed green because both run inside the 3.12
+`.venv`, and the tool then crashed on first use under the system 3.10. **A floor
+no job tests is a promise nothing keeps.**
 
 ## Mapping to the Gold Agile data model
 

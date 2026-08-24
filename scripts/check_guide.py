@@ -23,6 +23,7 @@ run; `make self-test` covers those against a scratch project.
 
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 import sys
@@ -97,7 +98,15 @@ def documented_commands() -> list[tuple[int, str]]:
     return out
 
 
-def help_for(words: list[str]) -> str:
+@functools.cache
+def help_for(words: tuple[str, ...]) -> str:
+    """`--help` for one subcommand, once.
+
+    Cached because the guide documents many invocations of the same handful of
+    subcommands, and this spawns an interpreter each time. Uncached it crossed
+    two minutes as the guide grew, which is slow enough that people stop running
+    it -- and a check nobody runs is the thing this script exists to prevent.
+    """
     result = subprocess.run(
         [sys.executable, str(TOOL), *words, "--help"],
         capture_output=True, text=True, env={**os.environ, "COLUMNS": "200"},
@@ -130,12 +139,12 @@ def check(command: str) -> list[str]:
             words.append(token)
     if not words:
         return []
-    text = help_for(words[:1])
+    text = help_for(tuple(words[:1]))
     if "invalid choice" in text or "unrecognized" in text:
         return [f"subcommand {words[0]!r} does not exist"]
     # A two-word subcommand, e.g. `board list`.
     if len(words) > 1 and words[1] in text:
-        text = help_for(words[:2])
+        text = help_for(tuple(words[:2]))
     return [f"{words[0]}: no such flag {flag}" for flag in flags
             if flag not in text and flag not in GLOBAL_FLAGS]
 
