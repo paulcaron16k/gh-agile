@@ -730,13 +730,23 @@ Each member runs `gh auth refresh -s project`. Under SAML the token must also be
 authorized for the organization, or every call fails with a resource error that
 does not mention SSO.
 
-**Status of organization support: unverified.** `gh-agile` has only ever been run
-against user-owned projects. While rewriting `fields_of` this month, one concrete
-reason to doubt it turned up: `fetch_items` catches the error that asking the
-wrong GraphQL root produces and falls back from `user` to `organization`, but
-`project_id` and `sprint_field` do not, so they may exit before reaching the
-fallback. That is `docs/review-2026-08.md` S8 — measure it in the sandbox against
-a real org before committing a team to this.
+**Status of organization support: the code path is fixed; the permission tiers
+are not verified.**
+
+`gh-agile` has only ever been run against user-owned projects, and until
+2026-08-23 an org-owned one would have failed early. `gh api graphql` exits
+non-zero when GraphQL returns an `errors` block, which is what asking
+`user(login:)` about an organization does — so `project_id` and `sprint_field`,
+which walked `user` then `organization` without catching it, died on the first
+root and reported *"Could not resolve to a User with the login of 'acme'"* for a
+login that was correct. All three callers now share `project_node`, which does
+the walk with the catch once. `docs/review-2026-08.md` S8 has the measurement.
+
+What is **still** unverified is the table at the top of this section: whether
+project *Write* covers field creation, iteration configuration and view creation,
+or whether `setup`, `sprint create` and `board create` need *Admin*. That cannot
+be worked out by reading the schema — it needs an org with a second account at
+Write. Treat the Admin row as informed guesswork until someone measures it.
 
 ## Requirements
 

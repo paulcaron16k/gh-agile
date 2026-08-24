@@ -1075,27 +1075,59 @@ def board_item_for(login: str, project: int, repo: str, issue: int) -> dict | No
     return None
 
 
+def project_node(login: str, number: int, selection: str) -> dict | None:
+    """`selection` inside `projectV2`, trying the user root and then the organization.
+
+    Returns the `projectV2` node, or None when neither root has it.
+
+    **The `SystemExit` catch is the whole point of this function existing.** `gh
+    api graphql` exits non-zero when GraphQL returns an `errors` block, and asking
+    the wrong root does exactly that -- HTTP 200, a null owner, and a NOT_FOUND
+    error. Measured 2026-08-23:
+
+        user(login: "github")               exit 1, "Could not resolve to a User"
+        organization(login: "paulcaron16k")  exit 1, "Could not resolve to an Organization"
+
+    `project_id` and `sprint_field` used to run this loop without the catch, so
+    against an organization-owned project they died on the *first* root and never
+    tried the second -- reporting "Could not resolve to a User with the login of
+    'acme'" for a login that was perfectly correct, which sends the reader off to
+    check their spelling. `fetch_items` had always caught it, which is why the
+    read path worked and most of the write path did not.
+
+    Three call sites shared that loop and two of them were wrong, so it lives in
+    one place now and a fourth caller cannot forget the catch.
+    """
+    for root in ("user", "organization"):
+        try:
+            data = graphql(
+                "query($login: String!, $number: Int!) { %s(login: $login) "
+                "{ projectV2(number: $number) { %s } } }" % (root, selection),
+                login=login, number=number,
+            )
+        except SystemExit:
+            continue          # not this root; try the other
+        node = ((data.get("data") or {}).get(root) or {}).get("projectV2")
+        if node:
+            return node
+    return None
+
+
 def project_id(login: str, number: int) -> str:
     if (login, number) in _PROJECT_IDS:
         return _PROJECT_IDS[(login, number)]
-    for root in ("user", "organization"):
-        data = graphql(
-            "query($login: String!, $number: Int!) { %s(login: $login) "
-            "{ projectV2(number: $number) { id } } }" % root,
-            login=login, number=number,
-        )
-        owner = (data.get("data") or {}).get(root)
-        if owner and owner.get("projectV2"):
-            _PROJECT_IDS[(login, number)] = owner["projectV2"]["id"]
-            return _PROJECT_IDS[(login, number)]
-    sys.exit(f"no project {number} for {login!r}")
+    node = project_node(login, number, "id")
+    if not node:
+        sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
+    _PROJECT_IDS[(login, number)] = node["id"]
+    return _PROJECT_IDS[(login, number)]
 
 
 #: `dataType` is deliberately not selected: the callers compare against
 #: `ProjectV2IterationField` and `ProjectV2Field`, which are `__typename` values,
 #: and `gh project field-list` happened to report `__typename` under the key
 #: `type`. Selecting both would invite the two being confused.
-PROJECT_FIELDS_QUERY = """
+PROJECT_FIELDS_SELECTION = """
       fields(first: 50) {
         nodes {
           __typename
@@ -1113,37 +1145,25 @@ def project_fields(login: str, number: int) -> list[dict]:
     `field-list`'s cost did not move with `-L`, so there was no cheaper way to
     call it. Same shape, same callers, two orders of magnitude apart.
 
-    `SystemExit` is caught per root because `gh` exits non-zero when GraphQL
-    returns an `errors` block, which is what asking `user(login:)` about an
-    organization does. `fetch_items` has always caught it here; `project_id` and
-    `sprint_field` do not, which is why an organization-owned project is not yet
-    known to work -- see docs/review-2026-08.md.
+    The user-then-organization fallback, and the `SystemExit` catch that makes it
+    work at all, live in `project_node`.
     """
-    for root in ("user", "organization"):
-        try:
-            data = graphql(
-                "query($login: String!, $number: Int!) { %s(login: $login) "
-                "{ projectV2(number: $number) { %s } } }" % (root, PROJECT_FIELDS_QUERY),
-                login=login, number=number,
-            )
-        except SystemExit:
-            continue
-        node = ((data.get("data") or {}).get(root) or {}).get("projectV2")
-        if node:
-            return [
-                {
-                    "id": field["id"],
-                    "name": field["name"],
-                    "type": field["__typename"],
-                    **({"options": field["options"]} if field.get("options") else {}),
-                }
-                for field in node["fields"]["nodes"]
-                # A field with no id is one this query selected nothing for --
-                # every concrete type implements ProjectV2FieldCommon today, so
-                # this is a guard against a new one appearing, not a live case.
-                if field.get("id")
-            ]
-    sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
+    node = project_node(login, number, PROJECT_FIELDS_SELECTION)
+    if node is None:
+        sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
+    return [
+        {
+            "id": field["id"],
+            "name": field["name"],
+            "type": field["__typename"],
+            **({"options": field["options"]} if field.get("options") else {}),
+        }
+        for field in node["fields"]["nodes"]
+        # A field with no id is one this query selected nothing for -- every
+        # concrete type implements ProjectV2FieldCommon today, so this is a guard
+        # against a new one appearing, not a live case.
+        if field.get("id")
+    ]
 
 
 def fields_of(login: str, number: int, *, refresh: bool = False) -> dict[str, dict]:
@@ -1698,10 +1718,9 @@ def cmd_story(args) -> int:
     return 0
 
 
-ITERATIONS_QUERY = """
-query($login: String!, $number: Int!) {
-  %s(login: $login) {
-    projectV2(number: $number) {
+#: The Sprint iteration field with its iterations, as a selection inside
+#: `projectV2` for `project_node`.
+SPRINT_FIELD_SELECTION = """
       field(name: "Sprint") {
         ... on ProjectV2IterationField {
           id
@@ -1713,9 +1732,7 @@ query($login: String!, $number: Int!) {
           }
         }
       }
-    }
-  }
-}"""
+"""
 
 
 def sprint_field(login: str, number: int) -> dict:
@@ -1725,13 +1742,13 @@ def sprint_field(login: str, number: int) -> dict:
     not its iterations -- and the iterations are the part you need, since an
     iteration is referenced by id, never by title.
     """
-    for root in ("user", "organization"):
-        data = graphql(ITERATIONS_QUERY % root, login=login, number=number)
-        owner = (data.get("data") or {}).get(root)
-        field = (owner or {}).get("projectV2", {}).get("field") if owner else None
-        if field:
-            return field
-    sys.exit("no Sprint iteration field on this project; run `gh agile setup`")
+    node = project_node(login, number, SPRINT_FIELD_SELECTION)
+    if node is None:
+        sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
+    field = node.get("field")
+    if not field:
+        sys.exit("no Sprint iteration field on this project; run `gh agile setup`")
+    return field
 
 
 def iterations(login: str, number: int) -> tuple[list[dict], list[dict]]:
