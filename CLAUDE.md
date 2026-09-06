@@ -174,6 +174,18 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
   spelling, and that is the only thing ever written to the field, because GitHub holds the option name.
 - **A machine may not infer a type.** Nothing in an issue distinguishes an epic from a story from a bug, so
   `sync --adopt` sets `key:` and Status but never `type:`. `validate` reports the gap and a person decides.
+- **Starting work is one call.** `move --status "In Progress"` sets Status, assigns the current sprint when the
+  field is empty, stamps the `sprint:` label, and claims the issue for the caller when nobody holds it. Each of
+  those fills a gap and none overrules a decision — *an unassigned issue is a gap, an assigned one is a
+  decision*, the same rule the sprint heal follows, so an issue somebody already holds is reported and left
+  alone. `--add-assignee` says otherwise: given at all, it assigns whatever the status. The caller is `@me`,
+  resolved by `gh`, because this tool never sees a token and must not guess a username from a git config.
+- **Evidence is written on any status, and required on one.** `--evidence` was read only when the target status
+  demanded a section, so on every other status it was parsed, accepted and discarded — exit 0, status changed,
+  four Zamboni issues left with empty `## Evidence` and the text nowhere else. `read_template` also maps an
+  unheaded blob onto the *single required* section, which is nothing when nothing is required, so
+  `OPTIONAL_SECTIONS` names Evidence for that case. `Done` still refuses an empty section or a `_TBD_`; nothing
+  else validates what it is given, and offering nothing still writes nothing.
 - Non-obvious workarounds carry a comment saying *why*, with the measurement where there was one. Several look
   like removable dead code otherwise — they are not.
 - Refuse rather than guess when the cost lands on someone else later: an illegal `issue_title_prefix` stops every
@@ -203,7 +215,7 @@ Paths, because this work spans four checkouts:
 
 | | |
 |---|---|
-| Project | `paulcaron16k/projects/4`, key `AGILE`, 25 issues, all carrying `key:AGILE` |
+| Project | `paulcaron16k/projects/4`, key `AGILE`; every issue carries `key:AGILE` |
 | Sandbox | `paulcaron16k/agile-test` at `../agile-test`, project `#19`, key `TEST`, no issues. `TEST Sprint 1..3` from 2026-08-17, 2-week cadence. Boards: kanban, backlog, scrum `label:key:TEST`, roadmap. Issue numbers `#1`/`#2` are already spent by a `self-test` run |
 | Sprints | `AGILE Sprint 4` (2026-08-03..16), then `Sprint 1`, `Sprint 2`, `Sprint 3` — the naming seam is known and accepted; renaming clears assignments |
 | Zamboni | `paulcaron16k/Zamboni`, **0 issues**; work is in `docs/tasks.md` (194 `ZMBNI-` ids) at `~/checkout/iceberg/Zamboni` |

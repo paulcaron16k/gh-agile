@@ -1293,7 +1293,7 @@ gh agile story "Compute the reachable file set" --epic 31 \
 #   story #32 under epic #31    (labelled key:ZMBNI, so it is ZMBNI-32)
 ```
 
-**3 — start work; the sprint follows**
+**3 — start work; the sprint and the assignee follow**
 
 ```bash
 gh agile move ZMBNI-32 --status "In Progress"
@@ -1425,7 +1425,9 @@ property that makes it drivable. A working sequence:
 # No --project or --repo: both come from the profile and the working directory.
 # $ISSUE may be 32 or ZMBNI-32.
 
-# Pick up the work, and say so on the board. The current sprint follows.
+# Pick up the work, and say so on the board. The current sprint follows, and so
+# does the assignee -- an issue nobody holds is claimed for whoever `gh` is
+# authenticated as. Pass --add-assignee to name somebody else.
 gh agile move "$ISSUE" --status "In Progress"
 
 # ... make the change, run the tests ...
@@ -1602,6 +1604,10 @@ An **assignee is a point-in-time value**. It is the developer while a story is
 in progress, then often a reviewer, then QA. It answers "who has this now",
 which a board needs and a report cannot use.
 
+`move --status "In Progress"` sets it, claiming an issue nobody holds — section
+7, step 3. That is precisely so the board can answer *who has this now*, and it
+is not an answer to the question below.
+
 **An event answers who did what, and when** — and that is the durable record.
 `github_events` carries `actor_name` on every row, so the question "which
 developer fixed this" is answered by the actor of `change-request-opened`: the
@@ -1657,12 +1663,12 @@ gh agile move --help
 | `setup` | Create fields and labels; converge on re-run |
 | `key` | Record a repository's key; list what is recorded |
 | `project create` / `project sprint-template` / `project title-prefix` | Create the board and record it; choose the sprint cadence; choose the issue-title form |
-| `board list` / `board create` | Scrum, kanban, backlog and roadmap boards over one project |
+| `board list` / `board show` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint create` | Show or append iterations |
 | `epic` / `story` | Create work items with their parent, labels and fields |
 | `set` | Set one field on an item already on the board |
-| `move` | Change status, with the evidence that status requires |
+| `move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
 | `validate` | Check the conventions a machine can check |
 | `export` | Issues and events, full or incremental, to stdout or timestamped files |
 | `self-test` | Stand up a scratch project, exercise everything, tear it down |

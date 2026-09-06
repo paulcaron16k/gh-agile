@@ -41,6 +41,8 @@ status.
 | `#24` | Synthesise custom-field history from snapshots | [WBS-5.1](#wbs-5--filed-but-unbroken-down) |
 | `#26` | Guided workflow and the user guide | — |
 | `#37` | Export pull requests, reviews and comments as events | [WBS-5.2](#wbs-5--filed-but-unbroken-down) |
+| `#60` | `validate`: an epic closed over open children | — (filed from the Zamboni markdown suite; the one check of five with no equivalent here) |
+| `#61` | `project title-prefix`: backfill existing issues | — (the setting decides new titles only; existing ones are not renamed) |
 
 **Not filed:** WBS-1, WBS-3, and the WBS-4 / WBS-6 entries. Filing them is a live write to board `#4` and
 is the owner's call; the breakdown below is written so that each leaf is one issue if they want it to be.
