@@ -3387,7 +3387,19 @@ def cmd_move(args) -> int:
     # typed. `In-Review` and `in review` are the same transition.
     args.status = canonical_status(args.status)
     required = tuple(REQUIRED_FOR.get(args.status.casefold(), ()))
-    sections = read_template(args, required=required) if required else {}
+    # Read whenever the text was offered, not only when the status demands it.
+    # This was `if required else {}`, so on every status but the cycle end the
+    # flags were parsed, accepted and thrown away: no warning, exit 0, and the
+    # status change succeeded, which is every reason to believe the text landed.
+    # Measured on the Zamboni board: four issues moved to In Review with
+    # substantial --evidence, all four bodies left with an empty ## Evidence,
+    # noticed days later when the text existed nowhere else. Recording why
+    # something is Blocked is worth having anyway -- a blocked issue with no note
+    # of what blocks it is the least useful state on a board.
+    offered = getattr(args, "evidence", None) or getattr(args, "evidence_file", None)
+    sections = (read_template(args, required=required or OPTIONAL_SECTIONS,
+                              interactive_ok=bool(required))
+                if required or offered else {})
     if required:
         require_sections(sections, required)
 
@@ -3496,6 +3508,13 @@ def replace_section(body: str, name: str, text: str) -> str:
 #: Which sections a transition demands. Only Done, deliberately: requiring
 #: evidence to start work is ceremony, requiring it to finish is the point.
 REQUIRED_FOR = {"done": ("Evidence",)}
+
+#: Where a bare blob goes when the status demands nothing. `read_template` maps
+#: unheaded text onto the single required section, and with nothing required
+#: there was no section to map onto -- so text passed to `--evidence` on
+#: `In Review` parsed to no sections and vanished a second way, past the guard
+#: above. Evidence, because that is what the flag is called and what the note is.
+OPTIONAL_SECTIONS = ("Evidence",)
 
 
 def master_rows(login: str, project: int, config: dict, stamp: str) -> dict[str, list[dict]]:
@@ -4078,8 +4097,10 @@ SET_FIELDS = [
 MOVE_FIELDS = [
     ("issue", "issue number", "required", "the issue; positional"),
     ("--status", "one of STATUSES", "required", "the status to move to"),
-    ("--evidence", "text or -", "conditional", "required for Done; - reads stdin"),
-    ("--evidence-file", "path or -", "conditional", "file of ## Heading sections; - reads stdin"),
+    ("--evidence", "text or -", "conditional", "required for Done, written on any "
+                                               "status; - reads stdin"),
+    ("--evidence-file", "path or -", "conditional", "file of ## Heading sections; "
+                                                    "- reads stdin"),
     ("--close", "flag", "optional", "close the issue as well"),
     ("--not-planned", "flag", "optional", "close as not planned rather than completed"),
     ("--add-assignee", "login", "optional",
@@ -4363,7 +4384,8 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     move.add_argument("issue", help="issue number, or a KEY-NUMBER reference")
     move.add_argument("--status", required=True, help=f"one of: {', '.join(STATUSES)}")
-    move.add_argument("--evidence", help="section text, or - for stdin")
+    move.add_argument("--evidence", help="section text, or - for stdin. Written whatever "
+                                        "the status; required only for Done")
     move.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
     move.add_argument("--close", action="store_true", help="close the issue as well")
     move.add_argument("--not-planned", action="store_true", help="close as not planned")

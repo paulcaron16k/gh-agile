@@ -1343,6 +1343,25 @@ gh agile set --issue ZMBNI-32 --field Sprint --value "Sprint 2"
 No evidence is required to start. Requiring it here would be ceremony; requiring
 it to finish is the point.
 
+**Evidence is accepted on any status, though — and written.** Recording why
+something is Blocked is worth having: a blocked issue with no note of what
+blocks it is the least useful state on a board.
+
+```bash
+gh agile move ZMBNI-32 --status Blocked --evidence "waiting on the Iceberg 1.6 bump"
+#   #32 body updated: Evidence
+#   #32 Status = Blocked
+```
+
+The flag used to be read *only* on the status that demands it, so text passed to
+any other was parsed, accepted and thrown away — no warning, exit 0, and the
+status change succeeded. Four issues on the Zamboni board went to `In Review`
+with substantial evidence and kept empty `## Evidence` sections; it was noticed
+days later, by which time the text existed nowhere else.
+
+One thing to know: the section is **replaced**, not appended to. Evidence written
+at `In Review` and again at `Done` leaves the second.
+
 **5 — fixed, with evidence**
 
 ```bash
