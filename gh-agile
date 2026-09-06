@@ -3203,6 +3203,44 @@ def cmd_set(args) -> int:
     return 0
 
 
+#: What `--add-assignee` means when it is absent or empty: whoever is running
+#: the command. `gh` resolves it against the token it owns, so the tool neither
+#: sees a credential nor has to guess a username from a git config.
+CALLER = "@me"
+
+
+def issue_assignees(repo: str, issue: int) -> list[str]:
+    """Who the issue is assigned to now.
+
+    Its own call, because `board_items` reads `LEAN_ITEM_SELECTION` -- the item
+    id and the issue number, and deliberately nothing else.
+    """
+    return [a["login"] for a in json.loads(
+        gh(["issue", "view", str(issue), "--repo", repo, "--json", "assignees"])
+    )["assignees"]]
+
+
+def claim_issue(repo: str, issue: int, wanted: str, *, explicit: bool) -> str:
+    """Assign the issue, and say what happened. Additive, like `--add-label`.
+
+    **An unassigned issue is a gap; an assigned one is a decision.** The rule the
+    sprint heal already follows. Starting work claims an issue nobody holds and
+    leaves alone one that somebody does -- silently adding yourself to another
+    person's work would make the convention argue with the team. `--add-assignee`
+    is how to say otherwise: passing it at all -- with a login, or bare for
+    yourself -- assigns whatever the status and whoever already holds it.
+    """
+    if not explicit:
+        held = issue_assignees(repo, issue)
+        if held:
+            return f"  #{issue} already assigned to {', '.join(held)}; left alone"
+    who = wanted or CALLER
+    gh(["issue", "edit", str(issue), "--repo", repo, "--add-assignee", who])
+    # `@me` rather than the login it resolves to: naming the person would cost a
+    # `gh api user` call on every move, to restate what was typed.
+    return f"  #{issue} assigned to {who}"
+
+
 def cmd_move(args) -> int:
     """Change an issue's status, requiring the evidence that status implies.
 
@@ -3274,6 +3312,23 @@ def cmd_move(args) -> int:
         stamped = record_sprint_label(args, repo, args.issue, item["id"])
         if stamped:
             print(f"  #{args.issue} + {stamped}")
+
+    # Starting work claims the issue, for the same reason it assigns the sprint:
+    # work in flight that reads unassigned is invisible to the one question a
+    # board answers beside "what is in progress" -- who has it. Both are
+    # automatic because a person doing three things by hand does two.
+    # Given at all -- even bare, even empty -- is somebody asking, so it is
+    # honoured whatever the status. Absent, only starting work claims. The two
+    # cases mean the same person and different things, which is why the flag has
+    # no argparse default: `default=""` could not tell them apart.
+    given = getattr(args, "add_assignee", None) is not None
+    wanted = (getattr(args, "add_assignee", None) or "").strip()
+    if given or same_status(args.status, CYCLE_START):
+        # After the Status line and never before it. The status write has already
+        # succeeded by here, and these are two grants -- the same split
+        # `board_write_reported` exists for: if the assignee write is refused,
+        # the output has to carry both facts.
+        print(claim_issue(repo, args.issue, wanted, explicit=given))
 
     if same_status(args.status, CYCLE_END):
         # Again at the end: an item carried across a boundary finishes in a
@@ -3899,6 +3954,8 @@ MOVE_FIELDS = [
     ("--evidence-file", "path or -", "conditional", "file of ## Heading sections; - reads stdin"),
     ("--close", "flag", "optional", "close the issue as well"),
     ("--not-planned", "flag", "optional", "close as not planned rather than completed"),
+    ("--add-assignee", "login", "optional",
+     "who to assign; empty or absent is you, and In Progress claims an unassigned issue"),
 ]
 
 
@@ -4180,6 +4237,15 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
     move.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
     move.add_argument("--close", action="store_true", help="close the issue as well")
     move.add_argument("--not-planned", action="store_true", help="close as not planned")
+    # `nargs="?"` so `--add-assignee` with nothing after it is the caller rather
+    # than an argparse error, and `default=None` so "not given" stays tellable
+    # from "given empty". Both name the same person and mean different things:
+    # given is a request, honoured on any status and over an existing assignee;
+    # absent leaves the In Progress rule to decide. `default=""` would collapse
+    # them -- the same trap `--owner` documents a few lines into `main`.
+    move.add_argument("--add-assignee", nargs="?", const="", default=None,
+                      help="who to assign; empty or absent means you (@me). Moving to "
+                           "In Progress claims an unassigned issue either way")
     move.add_argument("--repo", help="only needed if the item's repository cannot be read back")
     move.set_defaults(func=cmd_move)
 
