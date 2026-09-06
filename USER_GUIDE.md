@@ -1299,6 +1299,7 @@ gh agile story "Compute the reachable file set" --epic 31 \
 gh agile move ZMBNI-32 --status "In Progress"
 #   #32 Status = In Progress
 #   #32 Sprint = Sprint 1 (current)
+#   #32 assigned to @me
 ```
 
 **Starting work puts the item in the current sprint** if it is not in one
@@ -1306,6 +1307,32 @@ already. Anything else means in-progress work sitting outside every sprint, and
 a sprint report that quietly omits it. With no active sprint it warns and
 continues — declining to start work because nobody made a sprint would be the
 tool making a process decision.
+
+**Starting work also claims the issue.** Work in flight that reads unassigned is
+invisible to the one question a board answers beside "what is in progress" — who
+has it. `@me` is resolved by `gh`, so the tool never sees a token and never
+guesses a username.
+
+*An unassigned issue is a gap; an assigned one is a decision.* The implicit claim
+fills the gap and leaves the decision alone — an issue somebody already holds is
+reported and not touched, because silently adding yourself to another person's
+work would make the convention argue with the team:
+
+```bash
+gh agile move ZMBNI-32 --status "In Progress"
+#   #32 already assigned to a-teammate; left alone
+```
+
+`--add-assignee` is how to say otherwise. Passing it at all — with a login, or
+bare for yourself — assigns whatever the status and whoever already holds it:
+
+```bash
+gh agile move ZMBNI-32 --status "In Progress" --add-assignee a-teammate
+gh agile move ZMBNI-32 --status Blocked --add-assignee     # bare: you
+```
+
+It is `--add-assignee`, not `--assignee`, because it adds: two people on one
+issue is expressible, and nobody is silently dropped.
 
 To place it in a different sprint, say so:
 
