@@ -137,16 +137,62 @@ or kanban.
 | `layout` | How items are drawn | `BOARD_LAYOUT`, `TABLE_LAYOUT`, `ROADMAP_LAYOUT` |
 | `filter` | The type's base filter, ANDed with any extra | scrum `sprint:@current` · kanban `-status:Done` · backlog `no:sprint -status:Done` · roadmap `label:type:epic` |
 
-Live example from this repository's own board:
+Live example from this repository's own board, `gh agile board list`:
 
 ```
-#2  Team: AGILE only       scrum    board  sprint:@current label:key:AGILE
-#3  Engineering: all work  kanban   board  -status:Done
-#4  Backlog                backlog  table  no:sprint -status:Done
+  #  name                   type     layout  filter
+  ─  ─────────────────────  ───────  ──────  ──────────────────────────────
+  2  Team: AGILE only       scrum    board   sprint:@current label:key:AGILE
+  3  Engineering: all work  kanban   board   -status:Done
+  4  Backlog                backlog  table   no:sprint -status:Done
 ```
+
+That first column is the board's number, and it is one of the ways to name a
+board to `board show`.
 
 **Column limits are not settable.** `ProjectV2View` exposes no limit field, so a
 kanban board's WIP limits stay a web-UI setting.
+
+### Reading a board from the terminal
+
+`gh agile board show` renders one board as text, or as JSONL that can re-create
+that text. Name the board by its number, its exact name, an unambiguous prefix,
+or an unambiguous substring — tried in that order, so a name that is another
+board's prefix resolves rather than being refused. Anything still ambiguous is
+refused and the candidates listed with their numbers.
+
+```
+Engineering: all work
+kanban · paulcaron16k/projects/4 · 10 of 26 items
+filter: -status:Done
+
+  key       type   pts  sprint          title
+  ────────  ─────  ───  ──────────────  ────────────────────────────────────────
+Todo (8)
+  AGILE-24  story    8  AGILE Sprint 4  Synthesise custom-field history from sn…
+In Progress (1)
+  AGILE-65  story    —  Sprint 2        Moving status to in-progress updates th…
+
+empty: Blocked
+```
+
+**A board is reconstructed, never mirrored.** `ProjectV2View` has no `items`
+field — a view hands out its `filter` as an opaque string, its `layout` and its
+grouping, and there is no API for *what does this view show*. So the filter is
+evaluated locally against the same items `export` reads. Two consequences that
+are not optional:
+
+- **A filter term this tool cannot evaluate is refused, not ignored.** Dropping
+  `label:key:ZMBNI` renders one team's board full of another team's work, and it
+  looks correct.
+- **Empty is not excluded.** A status the filter allows but nothing occupies is
+  reported on the `empty:` line; one the filter *removes* is not mentioned at
+  all, because calling `Done` empty on a kanban board says nothing was finished.
+
+The title column takes whatever the other four leave, so a wide terminal shows
+whole titles. A pipe, a file and `--out-dir` get a fixed 80 columns instead: a
+record whose line lengths depend on the window that produced it is a file that
+changes when nothing changed.
 
 ### A complete view of one issue
 
@@ -160,7 +206,7 @@ Neither source is sufficient alone; a reader needs both.
 | `state` | issue | GitHub's only two | `OPEN`, `CLOSED` |
 | `stateReason` | issue | Distinguishes finished from abandoned | `COMPLETED`, `NOT_PLANNED` |
 | `labels[]` | issue | Type and key ride here, since issue types are org-only | `type:epic\|story\|bug`, `key:<KEY>` |
-| `assignees[]` | issue | **Many**, where Jira has one. Point-in-time: developer, then reviewer, then QA | logins |
+| `assignees[]` | issue | **Many**, where Jira has one. Point-in-time: developer, then reviewer, then QA. `move` to `In Progress` claims an unassigned issue for the caller | logins |
 | `author` | issue | GitHub has no separate reporter field | login |
 | `parent` | issue | The sub-issue edge — this is what an epic *is* | issue number |
 | `closingIssuesReferences` | pull request | Names who did the work; the source of `worked_by` | PR number + author |
@@ -169,6 +215,44 @@ Neither source is sufficient alone; a reader needs both.
 | `Story Points`, `Priority`, `FR` | **project item** | Estimate, priority, traceability | see above |
 | `started_at`, `done_at` | timeline | First `In Progress`, arrival at `Done` | timestamps |
 | `worked_by` | derived | Closing PR's author, else who moved it to review/done | login |
+
+### Who has it now, and who did the work
+
+Two different questions, and only one of them is the assignee.
+
+**`assignees[]` answers "who has this now".** It is point-in-time — the
+developer while a story is in progress, then often a reviewer, then QA — so it
+is what a board needs and what a report cannot use.
+
+Starting work sets it. `move --status "In Progress"` assigns the issue to the
+caller if nobody holds it, alongside setting `Sprint`, because work in flight
+that reads unassigned is invisible to the one question a board answers beside
+*what is in progress*.
+
+*An unassigned issue is a gap; an assigned one is a decision* — the rule the
+sprint heal already follows. The implicit claim fills the gap and never
+overrules the decision: an issue somebody already holds is reported and left
+alone, since silently adding yourself to another person's work would make the
+convention argue with the team.
+
+```bash
+gh agile move 53 --status "In Progress"                      # claims it for you
+gh agile move 53 --status "In Progress" --add-assignee dev   # or for someone
+gh agile move 53 --status Blocked --add-assignee             # bare: you
+```
+
+`--add-assignee` is how to say otherwise. Passing it at all — with a login, or
+bare for yourself — assigns whatever the status and whoever already holds it. It
+*adds*, like `--add-label`, so two people on one issue is expressible and nobody
+is silently dropped. The caller is `@me`, which `gh` resolves against the token
+it owns: this tool never sees a credential and never guesses a username from a
+git config that may be anybody's.
+
+**An event answers "who did the work", and that is the durable record.**
+`github_events` carries `actor_name` on every row, so which developer fixed a
+thing is the actor of `change-request-opened` — the person who opened the pull
+request that closed the issue. A fact about an action, not a mutable field
+somebody may have changed since.
 
 ## Why not just `gh project item-list`?
 
@@ -424,7 +508,7 @@ Profile settings, all under `sprint`:
 | 7 | No two sprints overlap | Placement tests **intersection**, not containment. An early version tested containment, read a partial overlap as uncovered, and created three overlapping sprints on a live board — which makes `@current` ambiguous, the one thing it exists to resolve |
 | 8 | `ensure` is idempotent | It computes the shortfall against what exists. An early version created `ahead + 1` every run |
 | 9 | Assignments survive a configuration change | Read before, re-applied after — see above. Anything that could not be re-applied is named on stderr |
-| 10 | Starting work assigns the current sprint | `move --status "In Progress"` sets `Sprint` if the item has none. Otherwise in-progress work sits outside every sprint and the sprint report quietly omits it |
+| 10 | Starting work assigns the current sprint, and claims the issue | `move --status "In Progress"` sets `Sprint` if the item has none, and assigns the issue if nobody holds it. Otherwise in-progress work sits outside every sprint and the sprint report quietly omits it, or reads unassigned and the board cannot say who has it. Both fill a gap and neither overrules a decision: an issue somebody already holds is reported and left alone, and `--add-assignee` is how to say otherwise |
 | 11 | The sprint an issue was worked in **survives** | A `sprint:YYYY-MM-DD` label on the issue. The `Sprint` field cannot be relied on for history: any iteration write clears it board-wide, including for closed issues in completed sprints |
 | 12 | The field is repaired, not just reported | `gh agile sprint reconcile` sets each item's `Sprint` from its labels, latest winning. Safe to automate: it copies a recorded fact back into a field GitHub cleared, and invents nothing |
 | 13 | Carryover is visible | An issue worked across a boundary carries a label per sprint. The field holds only the latest |
@@ -584,6 +668,10 @@ why this tool saves and re-applies them.
 
 **WIP limits.** `ProjectV2View` exposes no limit field. A kanban board's column
 limits stay a web-UI setting.
+
+**Ask a view what it shows.** `ProjectV2View` has no `items` field either, so
+`board show` evaluates the view's filter locally rather than reading back what
+the web UI draws — see [above](#reading-a-board-from-the-terminal).
 
 **Project automations.** The schema has `deleteProjectV2Workflow` and nothing
 that creates, enables or configures one, so `setup` cannot converge a project's

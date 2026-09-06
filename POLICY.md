@@ -90,6 +90,13 @@ closed items say only "done" has thrown away the reasoning that made the decisio
 defensible. When a question is reopened — and it will be — this is the difference
 between re-deciding and re-reading.
 
+*As work proceeds* is meant literally, and the tool honours it: `gh agile move
+--evidence` writes the section whatever the status, so what was ruled out on the
+way to `In Review`, or what a `Blocked` item is blocked on, is recorded when it
+is known rather than reconstructed at the end. Only `Done` **requires** it —
+requiring evidence to start work is ceremony; requiring it to finish is the
+point.
+
 **Closing an issue means the acceptance condition is met**, not that work stopped.
 Work that stopped for another reason is closed with a comment saying which, or
 labelled `wontfix` and closed as **not planned** so the two are distinguishable in
@@ -103,8 +110,10 @@ the export.
    condition is not ready. `gh agile validate` lists these; it is the agenda.
 2. **Plan** — assign items to the current `Sprint` iteration. Capacity is last
    sprint's completed points, not optimism.
-3. **Work** — one item in `In Progress` per person. Moving to `In Review` means a
-   pull request exists and references the issue with `Fixes #N`.
+3. **Work** — one item in `In Progress` per person, and the board says which
+   person: starting work claims the issue for whoever started it, unless somebody
+   already holds it. Moving to `In Review` means a pull request exists and
+   references the issue with `Fixes #N`.
 4. **Close** — the merge closes the issue; automation sets `Done`.
 5. **Review** — export, look at the numbers in §6, write down one thing to change.
 

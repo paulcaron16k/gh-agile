@@ -28,6 +28,12 @@ import pytest
 BODY = "## Intent\nwhy\n\n## Acceptance\nwhat\n\n## Evidence\n"
 
 
+def touches_the_body(call: list[str]) -> bool:
+    """A `gh` call that reads or writes the issue body, as opposed to one that
+    reads or writes the assignees."""
+    return ("--body" in call) or (call[:2] == ["issue", "view"] and "body" in call)
+
+
 @pytest.fixture
 def run(monkeypatch, tool):
     """`cmd_move` with the board stubbed out, capturing every `gh` call."""
@@ -36,7 +42,12 @@ def run(monkeypatch, tool):
     def fake_gh(args, **kwargs):
         calls.append(args)
         if args[:2] == ["issue", "view"]:
-            return json.dumps({"body": BODY})
+            # Both reads `move` makes: the body, for the evidence sections, and
+            # the assignees, for the claim that starting work performs. One fake
+            # answering only `--json body` broke the moment the two landed
+            # together -- each was green on its own branch and the combination
+            # was never built until both merged.
+            return json.dumps({"body": BODY, "assignees": []})
         return ""
 
     monkeypatch.setattr(tool, "gh", fake_gh)
@@ -103,9 +114,12 @@ class TestNoEvidenceOffered:
     @pytest.mark.parametrize("status", ["In Review", "Blocked", "In Progress"])
     def test_the_body_is_left_alone(self, tool, run, status):
         """Nothing offered means nothing read and nothing written -- no cost, and
-        no `## Evidence` heading appearing on an issue that never asked for one."""
-        calls = run(status)
-        assert [c for c in calls if c[:2] in (["issue", "view"], ["issue", "edit"])] == []
+        no `## Evidence` heading appearing on an issue that never asked for one.
+
+        The body specifically: `In Progress` also reads assignees and may write
+        one, which is a different command's business.
+        """
+        assert [c for c in run(status) if touches_the_body(c)] == []
 
     def test_and_no_prompt_is_raised(self, tool, run, capsys):
         """`read_template` prompts at a terminal. A plain `move --status Blocked`
