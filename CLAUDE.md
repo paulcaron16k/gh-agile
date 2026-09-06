@@ -19,7 +19,7 @@ sees one, and no command takes a `--token` flag.
 
 ```bash
 make venv          # create .venv from requirements-dev.txt -- do this first
-make test          # 123 offline unit tests, no network, no GitHub account, ~0.4s
+make test          # offline unit tests, no network, no GitHub account, under a second
 make lint          # ast parse + ruff over gh-agile, tests/, scripts/
 make check-guide   # every command in USER_GUIDE.md exists; read-only ones run in a cron-like env
 make coverage      # unit tests with a coverage report
