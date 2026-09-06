@@ -251,7 +251,9 @@ class TestSlug:
 
 
 class TestFindView:
-    VIEWS = [{"name": "Backlog"}, {"name": "Team: AGILE"}, {"name": "Team: ZMBNI"}]
+    VIEWS = [{"number": 2, "name": "Backlog"},
+             {"number": 5, "name": "Team: AGILE"},
+             {"number": 6, "name": "Team: ZMBNI"}]
 
     @pytest.fixture(autouse=True)
     def views(self, monkeypatch, tool):
@@ -265,15 +267,48 @@ class TestFindView:
 
     def test_an_exact_name_wins_over_a_substring(self, tool, monkeypatch):
         monkeypatch.setattr(tool, "views_of",
-                            lambda *a, **k: [{"name": "Team"}, {"name": "Team: AGILE"}])
+                            lambda *a, **k: [{"number": 1, "name": "Team"},
+                                             {"number": 2, "name": "Team: AGILE"}])
         assert tool.find_view("o", 1, "Team")["name"] == "Team"
 
-    def test_an_ambiguous_substring_is_refused_and_lists_the_candidates(self, tool):
+    def test_the_view_number(self, tool):
+        """What `board list` prints, and the handle that survives a rename."""
+        assert tool.find_view("o", 1, "5")["name"] == "Team: AGILE"
+
+    def test_a_number_naming_no_view_is_refused(self, tool):
+        with pytest.raises(SystemExit) as exit_info:
+            tool.find_view("o", 1, "9")
+        assert "no board matches" in str(exit_info.value)
+
+    def test_a_board_named_with_digits_wins_over_the_number(self, tool, monkeypatch):
+        """An exact name is still first: `2` is a number *unless* a board is called 2."""
+        monkeypatch.setattr(tool, "views_of",
+                            lambda *a, **k: [{"number": 1, "name": "2"},
+                                             {"number": 2, "name": "Backlog"}])
+        assert tool.find_view("o", 1, "2")["number"] == 1
+
+    def test_a_prefix_beats_a_substring(self, tool, monkeypatch):
+        """`board show Sprint` means the board called "Sprint board", not the one
+        that mentions sprints halfway through its name. Both are substring
+        matches; only one starts with it, so it resolves instead of being refused."""
+        monkeypatch.setattr(tool, "views_of",
+                            lambda *a, **k: [{"number": 1, "name": "Sprint board"},
+                                             {"number": 2, "name": "Team sprint review"}])
+        assert tool.find_view("o", 1, "Sprint")["name"] == "Sprint board"
+
+    def test_an_ambiguous_prefix_is_still_refused(self, tool):
         with pytest.raises(SystemExit) as exit_info:
             tool.find_view("o", 1, "Team")
         message = str(exit_info.value)
         assert "more than one board" in message
         assert "Team: AGILE" in message and "Team: ZMBNI" in message
+
+    def test_an_ambiguous_match_lists_the_numbers_to_pick_from(self, tool):
+        """The refusal names the other way to say which one."""
+        with pytest.raises(SystemExit) as exit_info:
+            tool.find_view("o", 1, "Team")
+        message = str(exit_info.value)
+        assert "5  Team: AGILE" in message and "6  Team: ZMBNI" in message
 
     def test_no_match_lists_what_there_is(self, tool):
         with pytest.raises(SystemExit) as exit_info:
@@ -298,3 +333,157 @@ class TestRenderPoints:
         row = tool.board_row(item(points=8.0), {})
         assert isinstance(row["story_points"], float)      # for a typed consumer
         assert tool.render_points(row["story_points"]) == "8"   # for a person
+
+
+def row(key="AGILE-9", kind="story", points=None, sprint=None, title="a title"):
+    """A `board_row` result, trimmed to what the text view reads."""
+    return {"key": key, "type": kind, "story_points": points,
+            "sprint": sprint, "title": title}
+
+
+VIEW = {"name": "Engineering: all work", "layout": "BOARD_LAYOUT", "filter": "-status:Done"}
+
+
+def rendered(tool, rows, width=80, sections=None):
+    sections = [("Todo", rows)] if sections is None else sections
+    return tool.render_board(VIEW, "kanban", rows, sections, "o", 4, len(rows),
+                             "-status:Done", width)
+
+
+class TestDisplayWidth:
+    """Where the width comes from, and where it deliberately does not.
+
+    `shutil.get_terminal_size` reads `$COLUMNS` before it asks the device, so a
+    run writing to a file would otherwise inherit the width of the shell that
+    launched it. The `isatty` check has to come first.
+    """
+
+    class Stream:
+        def __init__(self, tty):
+            self._tty = tty
+
+        def isatty(self):
+            return self._tty
+
+    def test_a_pipe_gets_the_fixed_width(self, tool, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "203")
+        assert tool.display_width(self.Stream(tty=False)) == tool.BOARD_WIDTH
+
+    def test_a_terminal_gets_its_own_width(self, tool, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "203")
+        assert tool.display_width(self.Stream(tty=True)) == 203
+
+    def test_a_stream_that_cannot_say_gets_the_fixed_width(self, tool):
+        assert tool.display_width(object()) == tool.BOARD_WIDTH
+
+
+class TestElide:
+    @pytest.mark.parametrize("text,width,want", [
+        ("short", 20, "short"),
+        ("exactly ten", 11, "exactly ten"),      # fits: untouched
+        ("one over the edge", 16, "one over the ed…"),
+        ("cut just after a space", 10, "cut just…"),   # the space goes with the tail
+        ("nospacehereatallok", 10, "nospacehe…"),
+    ])
+    def test_elide(self, tool, text, width, want):
+        assert tool.elide(text, width) == want
+        assert len(tool.elide(text, width)) <= width
+
+
+class TestBoardColumns:
+    def test_the_title_takes_what_the_others_leave(self, tool):
+        columns = tool.board_columns([row()], 80)
+        spent = sum(columns[c] for c in ("key", "type", "points", "sprint"))
+        assert columns["title"] == 80 - (spent + 10)     # two spaces before each of five
+
+    def test_a_wider_terminal_widens_only_the_title(self, tool):
+        narrow = tool.board_columns([row()], 80)
+        wide = tool.board_columns([row()], 200)
+        assert {c: wide[c] for c in narrow if c != "title"} == \
+               {c: narrow[c] for c in narrow if c != "title"}
+        assert wide["title"] - narrow["title"] == 120
+
+    def test_a_column_is_never_narrower_than_its_heading(self, tool):
+        columns = tool.board_columns([row(key="A-1", kind="bug")], 80)
+        assert columns["key"] == len("key") and columns["type"] == len("type")
+        assert columns["points"] == len("pts") and columns["sprint"] == len("sprint")
+
+    def test_widths_are_measured_across_every_row_not_per_section(self, tool):
+        """Per-section widths staggered the sections against each other, and left
+        the one heading true of the first section only."""
+        rows = [row(key="A-1"), row(key="AGILE-100")]
+        assert tool.board_columns(rows, 80)["key"] == len("AGILE-100")
+
+    def test_the_title_stops_giving_ground_at_the_minimum(self, tool):
+        assert tool.board_columns([row()], 20)["title"] == tool.MIN_TITLE_WIDTH
+
+
+class TestRenderBoard:
+    def test_the_columns_carry_a_heading(self, tool):
+        """Five unlabelled columns put `8` next to `AGILE Sprint 4`."""
+        lines = rendered(tool, [row(points=8.0, sprint="AGILE Sprint 4")]).splitlines()
+        heading = next(line for line in lines if "title" in line)
+        for label in ("key", "type", "pts", "sprint", "title"):
+            assert label in heading
+        assert lines[lines.index(heading) + 1].strip().startswith("─")
+
+    def test_the_heading_lines_up_with_the_rows(self, tool):
+        lines = rendered(tool, [row(key="AGILE-100", title="a title")]).splitlines()
+        heading = next(line for line in lines if line.strip().startswith("key"))
+        item_line = next(line for line in lines if "AGILE-100" in line)
+        assert heading.index("title") == item_line.index("a title")
+
+    def test_an_empty_board_has_no_heading(self, tool):
+        text = rendered(tool, [], sections=[("Todo", [])])
+        assert "pts" not in text
+        assert "empty: Todo" in text
+
+    def test_a_wide_terminal_keeps_the_whole_title(self, tool):
+        long_title = "Export pull requests, reviews and comments as events"
+        assert long_title in rendered(tool, [row(title=long_title)], width=200)
+
+    def test_a_title_too_long_for_the_width_is_elided(self, tool):
+        long_title = "Export pull requests, reviews and comments as events"
+        text = rendered(tool, [row(title=long_title)], width=80)
+        assert long_title not in text and "…" in text
+
+    def test_no_line_runs_past_the_width(self, tool):
+        """The old rendering elided at a hard 46 and still put the row at 88."""
+        rows = [row(key="AGILE-100", points=13.0, sprint="AGILE Sprint 4",
+                    title="Export pull requests, reviews and comments as events")]
+        for width in (80, 100, 200):
+            assert max(len(line) for line in rendered(tool, rows, width).splitlines()) <= width
+
+    def test_the_sections_and_the_empty_line_survive(self, tool):
+        rows = [row()]
+        text = rendered(tool, rows, sections=[("Todo", rows), ("In Review", [])])
+        assert "Todo (1)" in text and "empty: In Review" in text
+
+
+class TestRenderBoardList:
+    VIEWS = [
+        {"number": 1, "name": "View 1", "layout": "TABLE_LAYOUT", "filter": None},
+        {"number": 3, "name": "Engineering: all work", "layout": "BOARD_LAYOUT",
+         "filter": "-status:Done"},
+    ]
+    CONFIG = {"boards": [{"name": "Engineering: all work", "type": "kanban"}]}
+
+    def test_the_columns_carry_a_heading(self, tool):
+        heading = tool.render_board_list(self.VIEWS, self.CONFIG).splitlines()[0]
+        for label in ("#", "name", "type", "layout", "filter"):
+            assert label in heading
+
+    def test_the_number_is_bare_because_it_is_what_show_takes(self, tool):
+        lines = tool.render_board_list(self.VIEWS, self.CONFIG).splitlines()
+        assert lines[2].split() == ["1", "View", "1", "custom", "table"]
+
+    def test_the_name_column_fits_the_longest_name(self, tool):
+        """It was a fixed 28, and "Engineering: all work" ran into the type."""
+        lines = tool.render_board_list(self.VIEWS, self.CONFIG).splitlines()
+        row_line = next(line for line in lines if "Engineering" in line)
+        assert "  kanban" in row_line
+        assert row_line.index("kanban") == lines[0].index("type")
+
+    def test_a_view_with_no_filter_leaves_no_trailing_space(self, tool):
+        for line in tool.render_board_list(self.VIEWS, self.CONFIG).splitlines():
+            assert line == line.rstrip()

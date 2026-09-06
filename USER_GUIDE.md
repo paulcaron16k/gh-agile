@@ -337,7 +337,8 @@ gantt
 
 ```bash
 gh agile board show "Engineering: all work"
-gh agile board show agile                 # an unambiguous substring is enough
+gh agile board show 3                     # the number `board list` prints
+gh agile board show Eng                   # a prefix, or any unambiguous substring
 gh agile board show Backlog --filter "label:type:epic"
 gh agile board show Backlog --format jsonl
 gh agile board show Backlog --out-dir exports/
@@ -347,14 +348,26 @@ Engineering: all work
 kanban · paulcaron16k/projects/4 · 8 of 23 items
 filter: -status:Done
 
+  key       type   pts  sprint          title
+  ────────  ─────  ───  ──────────────  ──────────────────────────────────────
 Todo (8)
-  AGILE-9   epic     —  —                 Read side: export and validate
-  AGILE-10  epic     —  —                 Write side: setup, epic, story
-  AGILE-24  story    8  AGILE Sprint 4    Synthesise custom-field history from snapshots
-  AGILE-37  story    8  —                 Export pull requests, reviews and comments as…
+  AGILE-9   epic     —  —               Read side: export and validate
+  AGILE-10  epic     —  —               Write side: setup, epic, story
+  AGILE-24  story    8  AGILE Sprint 4  Synthesise custom-field history from sn…
+  AGILE-37  story    8  —               Export pull requests, reviews and comme…
 
 empty: In Progress · Blocked · In Review
 ```
+
+**Four ways to say which board.** Its number, its exact name, an unambiguous
+prefix, or an unambiguous substring — tried in that order, so a name that is
+another board's prefix resolves rather than being refused. Anything still
+ambiguous is refused and the candidates listed, with their numbers.
+
+**The width comes from the terminal.** The title column takes whatever the other
+four leave, so a wide window shows whole titles. Output to a pipe, a file or
+`--out-dir` is a fixed 80 columns instead: a record whose line lengths depend on
+the window that produced it is a file that changes when nothing changed.
 
 **The filter comes from the view, not from you.** That is the point: the board
 was defined once, in the profile and on GitHub, and this renders *that*
@@ -461,10 +474,14 @@ gh agile board create --name "Backlog"      --type backlog --save
 gh agile board list
 ```
 ```
-  #2   Team SPARK           scrum    board    sprint:@current label:key:SPARK
-  #3   Engineering          kanban   board    -status:Done
-  #4   Backlog              backlog  table    no:sprint -status:Done
+  #  name         type     layout  filter
+  ─  ───────────  ───────  ──────  ──────────────────────────────
+  2  Team SPARK   scrum    board   sprint:@current label:key:SPARK
+  3  Engineering  kanban   board   -status:Done
+  4  Backlog      backlog  table   no:sprint -status:Done
 ```
+
+That first column is the board's number, and `board show` takes it.
 
 `--filter` is ANDed with the type's own, so a scrum board for one key is the
 type plus one clause. `--save` records the board in the profile, after which
