@@ -974,6 +974,35 @@ sprint_closed_in  = '2026-08-24'
 **Where they disagree, believe the labels.** Set `sprint.record_label: false` to
 turn the stamping off.
 
+#### Work that never started, and work that was abandoned
+
+The label is normally read from the item's `Sprint` field — but only
+`In Progress` fills that field, so an issue taken **straight from `Todo` to
+`Done`** used to close with no label at all, and `validate` would then report the
+state the tool had just created. The sprint is now derived from the moment of the
+close instead, through the same rule `sprint backfill --source timeline` applies,
+so the live stamp and the repair pass cannot disagree:
+
+```bash
+gh agile move 53 --status Done --evidence "..." --close   #  #53 + sprint:2026-08-31
+```
+
+**An abandoned issue is given no derived label.** `sprint:` means *the sprint this
+was worked in*, and work closed with `--not-planned` was worked in none —
+deriving one would stamp every abandoned issue into whichever sprint it was
+abandoned in and pad that sprint with work nobody did. `validate` does not ask an
+abandoned issue for a label, and `sprint backfill` does not supply one, because a
+repair pass that re-asserts what the validator stopped demanding is the same
+mistake wearing the other hat.
+
+A label the **field** supports is kept either way: a story genuinely worked in
+Sprint 2 and then given up on really was worked in Sprint 2. Only a *derived*
+label has to ask how the issue was closed.
+
+A close that falls outside every sprint window is stamped with nothing and
+reported. Gaps are ordinary — sprints are created on demand — and nothing invents
+one to fill the hole.
+
 ### Putting the field back: `sprint reconcile`
 
 Believing the labels only means something if something reconciles *toward*

@@ -2007,19 +2007,14 @@ def backfill_sprint_labels(args) -> int:
     import datetime as dt
 
     active, completed = iterations(args.owner, args.project)
-    spans = []
-    for it in active + completed:
-        start = dt.date.fromisoformat(it["startDate"])
-        spans.append((start, start + dt.timedelta(days=it["duration"] - 1), it["title"]))
-    spans.sort()
+    spans = sprint_spans(active + completed)
     if not spans:
         sys.exit("no sprints exist on this project; nothing to backfill from")
 
     def covering(stamp: str):
         if not stamp:
             return None
-        when = dt.date.fromisoformat(stamp[:10])
-        return next((sp for sp in spans if sp[0] <= when <= sp[1]), None)
+        return sprint_covering(spans, dt.date.fromisoformat(stamp[:10]))
 
     data = rows(args.owner, args.project, with_history=args.source == "timeline")
     stamped = skipped = uncovered = 0
@@ -2031,7 +2026,16 @@ def backfill_sprint_labels(args) -> int:
             if match:
                 wanted.append(match)
         else:
-            for stamp in (row.get("started_at"), row.get("done_at")):
+            # The close moment is dropped for an abandoned issue, and the start
+            # moment kept: a story genuinely worked in Sprint 2 and then given up
+            # on really was worked in Sprint 2, while one closed as not planned
+            # without ever starting was worked in no sprint at all. Without this
+            # the repair pass silently re-asserts the label `validate` has just
+            # stopped demanding -- and `backfill` is precisely what someone runs
+            # *because* `validate` complained.
+            abandoned = (row.get("state_reason") or "").upper() == ABANDONED
+            moments = (row.get("started_at"), None if abandoned else row.get("done_at"))
+            for stamp in moments:
                 if not stamp:
                     continue
                 match = covering(stamp)
@@ -2560,26 +2564,89 @@ def make_board(login: str, project: int, name: str, kind: str, extra: str | None
             "filter": combined, "action": action}
 
 
-def record_sprint_label(args, repo: str, issue_number: int, item_id: str) -> str | None:
+def sprint_spans(iters: list[dict]) -> list[tuple]:
+    """Each iteration as `(start, end, title)`, with real dates and sorted.
+
+    One function rather than two, because `move` and `sprint backfill` both have
+    to answer "which sprint contains this moment" and a board where the live
+    stamp and the repair pass disagree is worse than one where neither works.
+    """
+    import datetime as dt
+
+    spans = []
+    for it in iters:
+        start = dt.date.fromisoformat(it["startDate"])
+        spans.append((start, start + dt.timedelta(days=it["duration"] - 1), it["title"]))
+    return sorted(spans)
+
+
+def sprint_covering(spans: list[tuple], when):
+    """The span containing `when`, or `None`. A date in a gap belongs to no sprint.
+
+    Gaps are ordinary -- sprints are created on demand, so a quiet month has
+    none -- and nothing here invents one to fill the hole.
+    """
+    return next((sp for sp in spans if sp[0] <= when <= sp[1]), None)
+
+
+#: A close that says the work was abandoned rather than finished. GitHub's own
+#: value, carried through the export as `state_reason` so the two are
+#: distinguishable there too.
+ABANDONED = "NOT_PLANNED"
+
+
+def record_sprint_label(args, repo: str, issue_number: int, item_id: str,
+                        *, not_planned: bool = False) -> str | None:
     """Stamp the issue with the sprint it is in, as `sprint:YYYY-MM-DD`.
 
     Called when work starts and again when it closes, so an issue carried across
     a boundary ends up with one label per sprint it lived in -- which the
     `Sprint` field cannot express at all, holding only the latest.
+
+    **The `Sprint` field is not the only source.** It used to be the only one, and
+    an issue taken straight from `Todo` to `Done` never passes through the one
+    transition that fills it -- so the field was empty, this returned `None`
+    silently, and `validate` then reported the state the tool had just created:
+    `closed with no sprint: label -- run sprint backfill`. Measured on #72,
+    closed the day it was filed. `backfill --source timeline` recovered the right
+    answer from a board-wide read a moment later, which is the whole objection:
+    the tool held that fact when it mattered and declined to use it. So when the
+    field is empty the label is derived from the moment, through the same
+    `sprint_covering` the repair pass uses.
+
+    **An abandoned issue is never given a derived label.** The label asserts *the
+    sprint this was worked in*, and work closed as `not planned` was worked in
+    none -- deriving one would stamp every abandoned issue into whichever sprint
+    it was abandoned in and pad that sprint with work nobody did. A label the
+    *field* supports is kept either way: a story genuinely worked in Sprint 2 and
+    then abandoned really was worked in Sprint 2.
     """
     if not sprint_settings(args._config).get("record_label", True):
         return None
-    assigned = sprint_assignments(args.owner, args.project).get(item_id)
-    if not assigned:
-        return None
     active, completed = iterations(args.owner, args.project)
+    assigned = sprint_assignments(args.owner, args.project).get(item_id)
     match = next((i for i in active + completed if i["title"] == assigned), None)
-    if not match:
+
+    derived = match is None
+    if derived:
+        if not_planned:
+            return None
+        span = sprint_covering(sprint_spans(active + completed), today_utc())
+        if span is None:
+            return None
+        start = span[0].isoformat()
+    else:
+        start = match["startDate"]
+
+    issue = json.loads(gh(["issue", "view", str(issue_number), "--repo", repo,
+                           "--json", "labels,stateReason"]))
+    # The flag covers the close this run is performing; `stateReason` covers one
+    # performed earlier, in the web UI or by an older run. Either is an answer to
+    # "was this abandoned", and only a derived label has to ask.
+    if derived and (issue.get("stateReason") or "").upper() == ABANDONED:
         return None
-    label = f"{SPRINT_LABEL}{match['startDate']}"
-    existing = json.loads(gh(["issue", "view", str(issue_number), "--repo", repo,
-                              "--json", "labels"]))["labels"]
-    if label in {lb["name"] for lb in existing}:
+    label = f"{SPRINT_LABEL}{start}"
+    if label in {lb["name"] for lb in issue["labels"]}:
         return None
     ensure_labels(repo, [label])
     gh(["issue", "edit", str(issue_number), "--repo", repo, "--add-label", label])
@@ -3369,6 +3436,17 @@ def claim_issue(repo: str, issue: int, wanted: str, *, explicit: bool) -> str:
     return f"  #{issue} assigned to {who}"
 
 
+def abandoning(args) -> bool:
+    """Whether this run is closing the issue as *not planned*.
+
+    Both flags, because `--not-planned` alone changes nothing: `cmd_move` reads
+    it only inside `if args.close`, so without `--close` it is a stated intention
+    that never reaches GitHub, and a sprint label must not be withheld on the
+    strength of one.
+    """
+    return bool(getattr(args, "not_planned", False) and getattr(args, "close", False))
+
+
 def cmd_move(args) -> int:
     """Change an issue's status, requiring the evidence that status implies.
 
@@ -3449,7 +3527,8 @@ def cmd_move(args) -> int:
                 # declining to start work because nobody created a sprint would
                 # be the tool making a process decision.
                 print("  no active sprint; leaving Sprint unset", file=sys.stderr)
-        stamped = record_sprint_label(args, repo, args.issue, item["id"])
+        stamped = record_sprint_label(args, repo, args.issue, item["id"],
+                                      not_planned=abandoning(args))
         if stamped:
             print(f"  #{args.issue} + {stamped}")
 
@@ -3475,7 +3554,8 @@ def cmd_move(args) -> int:
         # different sprint than it started, and the closing one is what a
         # velocity figure is built from. Both labels survive; the latest date is
         # the sprint it closed in, and the earlier ones are the carryover.
-        stamped = record_sprint_label(args, repo, args.issue, item["id"])
+        stamped = record_sprint_label(args, repo, args.issue, item["id"],
+                                      not_planned=abandoning(args))
         if stamped:
             print(f"  #{args.issue} + {stamped}")
 
@@ -3891,7 +3971,13 @@ def cmd_validate(args) -> int:
                         if lb.startswith(SPRINT_LABEL))
         if same_status(status, CYCLE_START) and not row.get("field_sprint"):
             problems[f"{CYCLE_START} but in no sprint"].append(ident)
-        if row["state"] == "CLOSED" and same_status(status, CYCLE_END) and not stamps:
+        # Not asked of an abandoned issue. The label means *the sprint this was
+        # worked in*, and work closed as not planned was worked in none -- so
+        # demanding one here is what put a false `sprint:2026-08-31` on #72,
+        # a duplicate closed on sight, via the `sprint backfill` this very
+        # message recommends.
+        if (row["state"] == "CLOSED" and same_status(status, CYCLE_END) and not stamps
+                and (row.get("state_reason") or "").upper() != ABANDONED):
             problems["closed with no sprint: label -- run `sprint backfill`"].append(ident)
         if stamps and row.get("field_sprint"):
             live = sprint_starts.get(row["field_sprint"])
