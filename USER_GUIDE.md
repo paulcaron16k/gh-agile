@@ -1410,6 +1410,40 @@ days later, by which time the text existed nowhere else.
 One thing to know: the section is **replaced**, not appended to. Evidence written
 at `In Review` and again at `Done` leaves the second.
 
+**And you do not have to write it twice.** `move --status Done` checks the body,
+not only the flags, so an issue whose `## Evidence` was written earlier closes
+with nothing supplied at all:
+
+```bash
+gh agile move ZMBNI-32 --status "In Review" --evidence "the probe table, the numbers"
+gh agile move ZMBNI-32 --status Done --close
+#   #32 Evidence already in the body
+#   #32 Status = Done
+```
+
+The body is left byte-identical in that case — nothing is rewritten. Supplying
+text still replaces the section and is still validated, so a good body does not
+excuse a bad `--evidence`.
+
+This used to refuse. The validator only ever looked at the text handed to it on
+the command line, which was the same thing as the result while `Done` was the
+only status that could write evidence — and stopped being so the moment it was
+not. The cost was never the error message: retyping a long section invites
+`--evidence "see above"`, and a one-line placeholder that satisfies the validator
+is exactly the erosion this rule exists to prevent. A guard that makes the honest
+path expensive teaches the dishonest one.
+
+A body that is missing the section, has left it empty, or still says `_TBD_` is
+refused as before — and the refusal now names the body rather than a missing
+flag:
+
+```
+the issue body does not carry what a move to Done requires:
+  - ## Evidence is missing or empty
+  Nothing was supplied on the command line either. Write the section
+  on the issue, or pass --evidence TEXT, --evidence-file FILE, or - for stdin.
+```
+
 **5 — fixed, with evidence**
 
 ```bash

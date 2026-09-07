@@ -1572,6 +1572,19 @@ def require_sections(sections: dict[str, str], required: tuple[str, ...]) -> Non
     thrown away the reasoning. A template nobody validates is a suggestion, so
     this is where the rule stops being advisory.
     """
+    problems = section_problems(sections, required)
+    if problems:
+        sys.exit("the body is not complete:\n  - " + "\n  - ".join(problems))
+
+
+def section_problems(sections: dict[str, str], required: tuple[str, ...]) -> list[str]:
+    """What is missing, empty or still a placeholder. One definition, two callers.
+
+    `move` asks this of the text it was handed *and* of the body the issue
+    already carries, and the two must agree on what "complete" means -- a body
+    good enough to close on must be a body that would have passed had it been
+    typed at the prompt.
+    """
     problems = []
     for name in required:
         value = (sections.get(name) or "").strip()
@@ -1579,8 +1592,13 @@ def require_sections(sections: dict[str, str], required: tuple[str, ...]) -> Non
             problems.append(f"## {name} is missing or empty")
         elif value == PLACEHOLDER:
             problems.append(f"## {name} is still {PLACEHOLDER}")
-    if problems:
-        sys.exit("the body is not complete:\n  - " + "\n  - ".join(problems))
+    return problems
+
+
+def issue_body(repo: str, issue: int) -> str:
+    """The issue's body as it stands now."""
+    return json.loads(gh(["issue", "view", str(issue), "--repo", repo,
+                          "--json", "body"]))["body"]
 
 
 BODY_TEMPLATE = """## Intent
@@ -3474,7 +3492,38 @@ def cmd_move(args) -> int:
     # noticed days later when the text existed nowhere else. Recording why
     # something is Blocked is worth having anyway -- a blocked issue with no note
     # of what blocks it is the least useful state on a board.
-    offered = getattr(args, "evidence", None) or getattr(args, "evidence_file", None)
+    offered = bool(getattr(args, "evidence", None) or getattr(args, "evidence_file", None))
+
+    # What the issue already says counts. `require_sections` validated the text
+    # *supplied on the command line* and never looked at the body, which was
+    # harmless while `Done` was the only status that could write evidence --
+    # supplied and resulting were the same thing. Since evidence can be written
+    # at `In Review`, the common shape is write-then-close, and that was exactly
+    # the shape this refused: AGILE-62's own body carried a full Evidence
+    # section and `move 62 --status Done` still exited with "no text supplied".
+    #
+    # The cost was never the message. Retyping a long section invites
+    # `--evidence "see above"`, and a one-line placeholder that satisfies the
+    # validator is precisely the erosion POLICY.md §4 exists to prevent. A guard
+    # that makes the honest path expensive teaches the dishonest one.
+    body = None
+    if required and not offered:
+        body = issue_body(repo, args.issue)
+        problems = section_problems(parse_sections(body), required)
+        if not problems:
+            print(f"  #{args.issue} {', '.join(required)} already in the body")
+            required = ()
+        elif not sys.stdin.isatty():
+            # Named as a body problem, not as a missing argument. The old message
+            # said only "no text supplied", which is the misleading half: it sent
+            # people to look for a flag when the answer was to write the section.
+            sys.exit(
+                f"the issue body does not carry what a move to {args.status} requires:\n"
+                "  - " + "\n  - ".join(problems) + "\n"
+                "  Nothing was supplied on the command line either. Write the section\n"
+                "  on the issue, or pass --evidence TEXT, --evidence-file FILE, or - "
+                "for stdin."
+            )
     sections = (read_template(args, required=required or OPTIONAL_SECTIONS,
                               interactive_ok=bool(required))
                 if required or offered else {})
@@ -3486,8 +3535,8 @@ def cmd_move(args) -> int:
         sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
 
     if sections:
-        body = json.loads(gh(["issue", "view", str(args.issue), "--repo", repo,
-                              "--json", "body"]))["body"]
+        if body is None:
+            body = issue_body(repo, args.issue)
         for name, text in sections.items():
             body = replace_section(body, name, text)
         gh(["issue", "edit", str(args.issue), "--repo", repo, "--body", body])
