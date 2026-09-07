@@ -18,6 +18,8 @@ The distinction matters here more than in most repositories, because `#11` is *"
 tasks.md"* — this project's stated direction is away from markdown backlogs. A second backlog in `docs/`
 would be the thing the tool exists to replace. A plan is not a backlog.
 
+The `status` column below reads:
+
 | Status | Meaning |
 |---|---|
 | `done` | Delivered and verified, with the verification named |
@@ -25,6 +27,58 @@ would be the thing the tool exists to replace. A plan is not a backlog.
 | `todo` | Not started |
 | `blocked` | Cannot start; the entry says what on |
 | `decided` | Deliberately not doing, or accepted as-is. The entry says why |
+
+**This file also carries the live state** — which repositories, which projects, which keys, which
+checkouts. It is the one place those are written down, so CLAUDE.md points here rather than repeating
+them: a fact kept in two files is a fact that will eventually disagree with itself, and the one that is
+loaded automatically is the one nobody thinks to correct.
+
+---
+
+## Live state
+
+Verified 2026-09-07. **What goes here: identities and locations — things that change when somebody
+decides they should.** What does not go here: counts, statuses, which sprint is current, what is on a
+board. Those change by themselves, a written-down copy is stale within the day, and every one of them
+has a command that answers it live:
+
+| Question | Ask |
+|---|---|
+| What is on a board, and in which column | `gh agile board show <number\|name>` |
+| Which boards exist on a project | `gh agile board list` |
+| Which sprint is current, and what has run | `gh agile sprint list` |
+| Do the conventions hold | `gh agile validate` |
+| What is open, and what is it labelled | `gh issue list --repo <owner/name>` |
+
+### Checkouts
+
+| Path | What |
+|---|---|
+| `~/checkout/prj_mgmt/gh-agile` | **this repo** (`paulcaron16k/gh-agile`), branch `main` |
+| `~/checkout/prj_mgmt/agile-test` | **the sandbox** (`paulcaron16k/agile-test`). See its `plan.txt` |
+| `~/checkout/iceberg/Zamboni` | Zamboni (`paulcaron16k/Zamboni`) |
+| `~/checkout/db/` | the dbt-duckdb work, unrelated |
+| `~/checkout/prj_mgmt/gitstats`, `~/checkout/prj_mgmt/mergestat` | third-party tools, unrelated to this repo |
+
+`~/checkout/prj_mgmt/my-gh-agile` was a duplicate clone and is **gone**. Recorded so nobody goes looking
+for it on the strength of an older note.
+
+### Projects
+
+| Key | Where | Profile |
+|---|---|---|
+| `AGILE` | `paulcaron16k/projects/4` | `.github/agile.json` in this repo. Boards: `Engineering: all work` (kanban), `Backlog`, `Team: AGILE` (scrum), `Team: ZMBNI` (scrum), plus GitHub's default `View 1`. No `issue_title_prefix`, so titles are unprefixed |
+| `ZMBNI` | `paulcaron16k/projects/23` | `~/checkout/iceberg/Zamboni/.github/agile.json`. Boards: `Sprint board` (scrum), `Kanban`. `issue_title_prefix: key`, so titles read `ZMBNI-34 ...`. **The profile records no `project.owner`** — a number without an account is not an identity, and `gh agile project owner` is the fix |
+| `TEST` | `paulcaron16k/projects/19` | `~/checkout/prj_mgmt/agile-test/.github/agile.json`. Boards: `Engineering: all work`, `Backlog`, `Team: TEST` (scrum), `Roadmap`. `issue_title_prefix: key+type`. Issue numbers `#1` and `#2` are already spent by a `self-test` run |
+
+**Zamboni's markdown backlog is retired.** `~/checkout/iceberg/Zamboni/docs/tasks.md` no longer exists;
+that work is GitHub issues on project `23` now, which is what `#11`, `#20`, `#21` and `#22` were for.
+
+**The AGILE sprint series has a naming seam**: `AGILE Sprint 4` came before `Sprint 1`, `Sprint 2`,
+`Sprint 3`. Known and accepted, and left alone deliberately — renaming an iteration clears every
+assignment on the board, which is the defect this whole tool is built around.
+
+**Export** for AGILE goes to `exports/AGILE/` (gitignored), watermark in `.gh_agile_export.json`.
 
 ---
 

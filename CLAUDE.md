@@ -195,7 +195,7 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
 
 | File | What |
 |---|---|
-| `docs/tasks.md` | The work breakdown for what is left, cross-referenced to board ids. **The board is the source of truth for status; that file carries method** — the order, and the gotcha that costs an afternoon |
+| `docs/tasks.md` | The work breakdown for what is left, cross-referenced to board ids, **and the live state** — repositories, projects, keys, checkouts. **The board is the source of truth for status; that file carries method** — the order, and the gotcha that costs an afternoon |
 | `docs/lessons.md` | Findings that cost something to learn, with the measurement. Read before repeating an experiment |
 | `POLICY.md` | The conventions `validate` enforces |
 | `GOLD_MODEL.md` | The silver→gold boundary, and what this repo does not write |
@@ -203,20 +203,18 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
 
 ## Live state
 
-Paths, because this work spans four checkouts:
+**It is not here. It is in `docs/tasks.md`, and that is the only copy.**
 
-| Path | What |
-|---|---|
-| `~/checkout/prj_mgmt/gh-agile` | this repo (`paulcaron16k/gh-agile`), branch `main` |
-| `~/checkout/prj_mgmt/agile-test` | **the sandbox** (`paulcaron16k/agile-test`) |
-| `~/checkout/prj_mgmt/my-gh-agile` | a duplicate clone, no local changes. Probably a staging step; **ask before deleting** |
-| `~/checkout/iceberg/Zamboni` | Zamboni, whose `docs/tasks.md` still holds 194 `ZMBNI-` ids |
-| `~/checkout/db/` | the dbt-duckdb work, unrelated |
+Which repositories, which projects and project numbers, which keys, which checkouts, which profile sits
+where — all of it lives in that file's *Live state* section. **Read it before touching anything live**,
+because none of it is loaded automatically and this file will not tell you.
 
-| | |
-|---|---|
-| Project | `paulcaron16k/projects/4`, key `AGILE`; every issue carries `key:AGILE` |
-| Sandbox | `paulcaron16k/agile-test` at `../agile-test`, project `#19`, key `TEST`, no issues. `TEST Sprint 1..3` from 2026-08-17, 2-week cadence. Boards: kanban, backlog, scrum `label:key:TEST`, roadmap. Issue numbers `#1`/`#2` are already spent by a `self-test` run |
-| Sprints | `AGILE Sprint 4` (2026-08-03..16), then `Sprint 1`, `Sprint 2`, `Sprint 3` — the naming seam is known and accepted; renaming clears assignments |
-| Zamboni | `paulcaron16k/Zamboni`, **0 issues**; work is in `docs/tasks.md` (194 `ZMBNI-` ids) at `~/checkout/iceberg/Zamboni` |
-| Export | `exports/AGILE/` (gitignored), watermark in `.gh_agile_export.json` |
+The reason it is not written here twice: a fact kept in two files eventually disagrees with itself, and
+the copy that loses is the one loaded automatically — nobody thinks to correct a file they never opened.
+This one said Zamboni had no issues and its work was 194 ids in a markdown file, months after that
+backlog was retired and the issues were real. So: **do not restate live state in this file, and do not
+"helpfully" copy it back.** Add it to `docs/tasks.md` or leave it out.
+
+That section records *identities and locations* only, and deliberately no counts, statuses or "what is
+in the current sprint". Those change on their own and are answered live — `board show`, `board list`,
+`sprint list`, `validate`, `gh issue list` — and the section names which command answers what.
