@@ -873,7 +873,8 @@ minute or more to become readable.
 ## The rules it enforces
 
 `gh agile validate` checks what a machine can: every story has an epic, every
-epic has stories, statuses come from the declared set, closed items are *Done*
+epic has stories **and agrees with them in both directions**, statuses come from
+the declared set, closed items are *Done*
 and open ones are not, and everything carries a `type:` label. The conventions
 themselves — and which parts a person owns rather than a machine — are in
 [POLICY.md](POLICY.md).
