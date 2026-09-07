@@ -1191,6 +1191,25 @@ are web-UI toggles.
 find an item that lost its sprint, a story with no epic, or a closed issue whose
 status never reached Done.
 
+**It also checks that an epic and its children agree, in both directions.** An
+epic finished while a sub-issue is still open is the obvious one. The other is
+the one nobody sees:
+
+```
+every sub-issue is closed but the epic is not (1):
+  #26 Guided workflow and the user guide: 6/6 sub-issue(s) closed
+```
+
+An epic marked finished over open children is a claim visibly too strong — the
+open children are right there under it. An epic left open with every child closed
+looks like nothing at all: no field disagrees, no child is in the wrong state, it
+simply persists. That is why it accumulates, and why roll-up was the largest
+single source of stale board state on the first team to report it.
+
+An epic with no children at all is not reported by either rule — that is `epic has
+no stories`, and one issue under two headings is noise rather than a second
+finding.
+
 `--id` narrows the report to one issue, for when you already have a suspect:
 
 ```bash

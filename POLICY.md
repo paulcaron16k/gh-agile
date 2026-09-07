@@ -62,7 +62,7 @@ column by hand, that is a bug in the tooling.
 | Attach a story to its epic | **Machine** | Part of creation. Doing it after the fact is how orphans happen |
 | Move an item across the board | Person | The board is the interface; dragging is fine |
 | Set status from a merged pull request | **Machine** | `Fixes #N` closes the issue; a workflow sets `Done` |
-| Check every story has an epic, statuses are legal, closed items are dated | **Machine** | `gh agile validate`, in CI |
+| Check every story has an epic, statuses are legal, closed items are dated, an epic and its children agree | **Machine** | `gh agile validate`, in CI |
 | Export the backlog with history for analysis | **Machine** | `gh agile export` |
 | Decide what the export means | Person | See §6 |
 

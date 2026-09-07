@@ -3956,6 +3956,34 @@ def cmd_validate(args) -> int:
             problems["story has no epic"].append(ident)
         if "type:epic" in labels and not row["sub_issues_total"]:
             problems["epic has no stories"].append(ident)
+
+        # The roll-up, both ways. Ported from the Zamboni markdown suite's
+        # `test_an_epic_is_only_done_when_all_its_stories_are`, which was the one
+        # check of its five with no equivalent here.
+        #
+        # Only for an epic that has children: one with none is `epic has no
+        # stories` above, and reporting the same issue under two headings is
+        # noise rather than a second finding.
+        #
+        # `subIssuesSummary.completed` is GitHub's name for the count of **closed**
+        # children, not for how many were closed as completed -- measured on `#9`,
+        # which reported 6 of 7 with six children closed, one of those as
+        # `NOT_PLANNED`. That is the count this wants: an epic is waiting on what
+        # is still open, whatever reason the rest were closed for.
+        if "type:epic" in labels and row["sub_issues_total"]:
+            total, closed = row["sub_issues_total"], row["sub_issues_done"]
+            finished = row["state"] == "CLOSED" or same_status(status, CYCLE_END)
+            tally = f"{ident}: {closed}/{total} sub-issue(s) closed"
+            if finished and closed < total:
+                problems["epic is finished with a sub-issue still open"].append(tally)
+            # The direction that goes unnoticed. An epic marked finished over open
+            # children is a claim visibly too strong -- the open children are right
+            # there under it. An epic left open with every child closed looks like
+            # nothing at all: no field disagrees, no child is in the wrong state,
+            # it simply persists. Reported by the Zamboni team as the single
+            # largest source of stale board state, three epics at once. See #72.
+            if not finished and closed == total:
+                problems["every sub-issue is closed but the epic is not"].append(tally)
         if row["state"] == "CLOSED" and status and not same_status(status, CYCLE_END):
             problems[f"closed but status is not {CYCLE_END}"].append(f"{ident}: {status!r}")
         if row["state"] == "OPEN" and same_status(status, CYCLE_END):

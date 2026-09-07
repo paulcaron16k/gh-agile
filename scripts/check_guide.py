@@ -166,9 +166,21 @@ def run_safe(command: str) -> tuple[bool, str]:
         ["sh", "-c", f"cd {ROOT} && {argv}"],
         capture_output=True, text=True, env=CRON_ENV,
     )
-    return result.returncode == 0, (result.stderr or result.stdout).strip().splitlines()[-1:][0] if (
-        result.stderr or result.stdout
-    ).strip() else "no output"
+    note = (result.stderr or result.stdout).strip()
+    note = note.splitlines()[-1] if note else "no output"
+    ok = result.returncode == 0
+    # `validate` exits 1 when it finds something, and that is a report rather
+    # than a failure: the command ran and did its job. Without this, the
+    # documentation check is really a test of how tidy the board happens to be
+    # today, and it goes red the moment a real epic is left open over closed
+    # children -- which is what happened the first time the roll-up check ran.
+    #
+    # Matched on the summary line, not on the exit code alone, because
+    # `sys.exit("message")` also exits 1: a project that cannot be reached must
+    # still fail here.
+    if not ok and " validate" in argv and "problem(s) across" in result.stdout:
+        ok = True
+    return ok, note
 
 
 def main() -> int:
@@ -192,7 +204,11 @@ def main() -> int:
             continue
         ran += 1
         status = "ok" if ok else "FAIL"
-        print(f"  [{status}] {command[:72]}")
+        # A finding is shown even though the command passed. Reporting `[ok]` and
+        # nothing else for a board with a real problem would be the false
+        # assurance this script exists to remove.
+        finding = f"  -- {note}" if ok and "problem(s) across" in note else ""
+        print(f"  [{status}] {command[:72]}{finding}")
         if not ok:
             problems.append(f"USER_GUIDE.md:{line}: {command[:60]} -> {note}")
 
