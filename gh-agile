@@ -1432,12 +1432,43 @@ def title_prefix_mode(config: dict) -> str:
     return mode
 
 
+#: The three values a `type:` label may carry. One list, because
+#: `strip_title_prefix` has to recognise exactly what `prefixed_title` writes.
+ISSUE_TYPES = ("epic", "story", "bug")
+
+
 def prefixed_title(mode: str, key: str, number: int, kind: str, title: str) -> str:
     """The title an issue carries once its number is known. `kind` is Epic/Story."""
     if mode == "off":
         return title
     label = f"{kind.capitalize()}: " if mode == "key+type" else ""
     return f"{key}-{number} {label}{title}"
+
+
+def strip_title_prefix(title: str, key: str) -> str:
+    """`title` with a prefix **this tool would have written** taken back off.
+
+    Deliberately narrow, and that is the whole point of it. It removes
+    `<KEY>-<digits> ` and then an optional `<Type>: ` drawn from `ISSUE_TYPES` --
+    exactly the shapes `prefixed_title` produces, and nothing else. A title
+    beginning `RFC-2119 keywords`, `CVE-2021-4034 write-up` or `ZMBNI-adjacent
+    work` is somebody's own words and survives untouched, because a backfill that
+    guesses at what looks like a prefix quietly destroys titles nobody can
+    recover.
+
+    The number is not checked against the issue's own. A title carrying another
+    issue's id is wrong either way, and stripping it lets the sweep replace it
+    with the right one -- where leaving it would produce `KEY-34 KEY-12 ...` on
+    the next run. That double-prefixing is the exact trap the hand-written shell
+    loop on the Zamboni board fell into.
+    """
+    head, sep, rest = title.partition(" ")
+    if not sep or not head.startswith(f"{key}-") or not head[len(key) + 1:].isdigit():
+        return title
+    kind, sep2, tail = rest.partition(" ")
+    if sep2 and kind.endswith(":") and kind[:-1].casefold() in ISSUE_TYPES:
+        return tail
+    return rest
 
 
 def apply_title_prefix(config, repo: str, number: int, key, kind: str, title: str) -> str:
@@ -3257,6 +3288,62 @@ def write_sprint_template(config: dict, template: str, path) -> dict:
     return settings
 
 
+def backfill_titles(args, config: dict, mode: str) -> int:
+    """Rename every issue on the project to match `mode`. Idempotent, by design.
+
+    `project title-prefix` changes what *new* issues are called, and says so --
+    which leaves a board adopting the setting permanently mixed: everything
+    before it bare, everything after carrying `KEY-<n>`. Measured on the Zamboni
+    board the day the setting was taken up, where 18 of 19 issues predated it.
+
+    The hand-written version is a shell loop over `gh issue list` calling
+    `gh issue edit --title`, and it is short enough to write twice and subtle
+    enough to get wrong once: skip on "already has a prefix" and a re-run
+    double-prefixes, because the prefix it found belonged to a different issue.
+    Here the title is **stripped and rebuilt** instead of tested, so the result
+    depends on the issue rather than on how many times this has run.
+
+    The key comes from the issue's own `key:` label before the profile's default
+    for the repository -- a mono-repo carries several keys against one repo, and
+    the label is which one this issue answers to.
+    """
+    data = rows(args.owner, args.project, with_history=False)
+    renamed = skipped = unkeyed = 0
+    for row in sorted(data, key=lambda r: (r["repository"], r["number"])):
+        repo, number, title = row["repository"], row["number"], row["title"]
+        labels = set(row["labels"].split(";")) if row["labels"] else set()
+        key = next((lb[len(KEY_LABEL):] for lb in labels if lb.startswith(KEY_LABEL)), None)
+        key = key or next(iter(keys_for_repo(config, repo)), None)
+        if not key:
+            # Nothing to prefix with and nothing safe to strip: without a key,
+            # `strip_title_prefix` cannot tell this tool's prefix from the
+            # issue's own words. Reported rather than skipped in silence.
+            unkeyed += 1
+            print(f"    ? {repo}#{number}: no key applies; left alone")
+            continue
+        kind = next((lb[len("type:"):] for lb in labels if lb.startswith("type:")), None)
+        # `key+type` needs a type and a machine may not infer one, so an issue
+        # with no `type:` label gets the key-only form -- the part that
+        # identifies it. Same rule `sync --adopt` follows.
+        effective = mode if (mode != "key+type" or kind) else "key"
+        want = prefixed_title(effective, key, number, kind or "", strip_title_prefix(title, key))
+        if want == title:
+            skipped += 1
+            continue
+        if args.dry_run:
+            print(f"    would rename {repo}#{number}: {want}")
+        else:
+            gh(["issue", "edit", str(number), "--repo", repo, "--title", want])
+            print(f"    renamed {repo}#{number}: {want}")
+        renamed += 1
+
+    verb = "would rename" if args.dry_run else "renamed"
+    print(f"  {verb} {renamed}, already correct {skipped}, across {len(data)} item(s)")
+    if unkeyed:
+        print(f"  {unkeyed} item(s) had no key and were left alone", file=sys.stderr)
+    return 0
+
+
 def cmd_project(args) -> int:
     """Create the board and record it in the profile, or set its cadence.
 
@@ -3269,20 +3356,33 @@ def cmd_project(args) -> int:
     config = args._config
     target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
     if args.project_command == "title-prefix":
-        # Existing issues are deliberately left alone. Renaming a board's worth
-        # of issues emits a RenamedTitleEvent for each, and a title changing
-        # under someone mid-sprint is worse than a board that is consistent only
-        # from here on.
+        # Existing issues are left alone unless `--backfill` asks otherwise.
+        # Renaming a board's worth of issues emits a RenamedTitleEvent for each
+        # and changes titles under people mid-sprint, so it stays something
+        # somebody chooses rather than something the setting does on their behalf.
+        if args.dry_run and not args.backfill:
+            sys.exit("--dry-run only means something with --backfill.\n"
+                     "  Without it this command writes one line to the profile and "
+                     "renames nothing.")
         project = config.setdefault("project", {})
         project["issue_title_prefix"] = args.mode
         if args.mode != "off" and not (config.get("keys") or []):
             sys.exit("no keys are listed in the profile, so there is nothing to prefix "
                      "titles with.\n  Add one first: gh agile key --key ZMBNI")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         print(f"  issue title prefix: {args.mode}  e.g. {TITLE_PREFIX_MODES[args.mode]}")
-        print(f"  written to {target}; applies to issues created from now on")
-        return 0
+        if args.dry_run:
+            # Nothing is written, the profile included: a preview that quietly
+            # changed the setting would be a preview nobody could trust.
+            print(f"  would write to {target}")
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+            print(f"  written to {target}")
+        if not args.backfill:
+            print("  applies to issues created from now on; "
+                  "`--backfill` renames the ones already there")
+            return 0
+        return backfill_titles(args, config, args.mode)
 
     if args.project_command == "owner":
         # For a profile written before the owner was recorded. `project create`
@@ -4037,7 +4137,7 @@ def cmd_validate(args) -> int:
             problems[f"closed but status is not {CYCLE_END}"].append(f"{ident}: {status!r}")
         if row["state"] == "OPEN" and same_status(status, CYCLE_END):
             problems[f"status {CYCLE_END} but still open"].append(ident)
-        if not labels & {"type:epic", "type:story", "type:bug"}:
+        if not labels & {f"type:{t}" for t in ISSUE_TYPES}:
             problems["no type: label"].append(ident)
 
         # Sprint invariants. The validator used to be blind to sprints, which
@@ -4463,10 +4563,23 @@ why this is needed:
         "title-prefix", help="whether new issue titles carry their key and type",
         epilog="modes:\n" + "\n".join(
             f"  {name:<10} {example}" for name, example in TITLE_PREFIX_MODES.items()
-        ) + "\n\nExisting issues are not renamed.",
+        ) + """
+
+Existing issues are not renamed unless --backfill says so. It rebuilds each
+title rather than testing whether one looks prefixed already, so a second run
+changes nothing and an issue carrying another issue's id is corrected rather
+than prefixed twice.
+
+--mode off strips a prefix this tool would have written -- `KEY-12 ` and an
+optional `Epic: ` -- and nothing else. A title that merely begins like one,
+`RFC-2119 keywords`, is somebody's own words and is left alone.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     prefix.add_argument("--mode", required=True, choices=list(TITLE_PREFIX_MODES))
+    prefix.add_argument("--backfill", action="store_true",
+                        help="also rename the issues already on the project")
+    prefix.add_argument("--dry-run", action="store_true",
+                        help="with --backfill: list the renames and write nothing at all")
     project_sub.add_parser(
         "owner", help="record whose account holds this project, for an older profile",
         epilog="Takes the resolved --owner: `gh agile --owner LOGIN project owner`, or\n"
