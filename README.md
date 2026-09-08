@@ -582,7 +582,7 @@ want the board to show who is working on a card, the automations described in
 find an item that lost its sprint, a story with no epic, or a closed issue whose
 status never reached Done.
 
-## Export: silver tables, three grains
+## Export: silver tables, four grains
 
 **What is exported is silver.** `github_issues` and `github_events` are GitHub's
 facts under GitHub's names. The Gold `agile_*` tables belong to the
@@ -600,14 +600,37 @@ Gold's vocabulary. See [GOLD_MODEL.md](GOLD_MODEL.md).
 | Grain | Rows | Refresh |
 |---|---|---|
 | `github_issues` | one per work item, fields flattened, joined to status history | incremental |
-| `github_events` | one per timeline event, with actor and timestamp | incremental |
+| `github_events` | one per timeline event, plus a pull request's opened / reviewed / commented / merged | incremental |
+| `github_prs` | one per pull request: size, review round-trips, the issues it closes | incremental, **server-side** |
 | `github_project`, `github_boards`, `github_sprints` | the configuration | **always full** |
 
 ```bash
 gh agile export --grain all --csv --out-dir exports/   # everything
 gh agile export --grain both --csv --out-dir exports/  # issues + events
+gh agile export --grain prs --csv --out-dir exports/
 gh agile export --grain master --csv --out-dir exports/
 ```
+
+**`github_prs` is the only grain GitHub filters for us.** The projects API has no
+server-side `updatedAt`, so the issue grains read the board and discard what has
+not changed; the pull-request grain asks search for `updated:>=<watermark>` and
+never transfers a pull request nobody has touched. Measured on this repository:
+`is:pr` matched 11 and `is:pr updated:>=<yesterday>` matched 7, for one page
+costing 8 GraphQL points with reviews and their comments nested inside.
+
+**Reviews name a second person**, which is why this grain exists. The author did
+the work; the reviewer approved it or sent it back. No issue event distinguishes
+them, so *who reviewed what, and how often did it come back* is unanswerable from
+the issue timeline alone. The review's state — `APPROVED`, `CHANGES_REQUESTED`,
+`COMMENTED`, `DISMISSED` — rides in the event's `state` column.
+
+**No diff hunk, no patch, no review or comment body.** These rows make events and
+metrics, not code analysis: content would multiply the export size, carry source
+into wherever the CSVs land, and serve nothing the flow metrics need. PR size,
+review round-trips, time to first review, review latency and reviewer count all
+come from metadata alone — and those are the flow problems teams actually act on.
+A real complexity score needs the code, so it belongs where the code already is:
+a linter in CI publishing a score this exporter could carry.
 
 Master data is small, changes rarely, and is reloaded whole every time. A
 watermark over it would be a way to miss the one change that mattered — a
@@ -683,9 +706,12 @@ built-in workflows and every one of them stays a manual web-UI step — see
 `createIssueField` resolves only an Organization node. Type and key therefore
 ride labels: `type:story`, `key:ZMBNI`.
 
-**Pull requests, reviews and review comments** are not yet a grain of their own.
-Issue-linked PR events are exported as `change-request-opened`; the rest is
-tracked as AGILE-37.
+**Diff content, of any kind.** `github_prs` and the review events carry pull
+request *metadata* — additions, deletions, changed files, review states — and
+never a hunk, a patch, or a review or comment body. A quality or complexity score
+is deliberately out too: computing one needs the source, which is exactly what is
+excluded, so the right shape is a linter in CI publishing its score for this
+exporter to carry.
 
 **Dependencies.** Not a limitation so much as a rule: `gh extension install`
 clones the repository and installs nothing, so this stays standard library only.

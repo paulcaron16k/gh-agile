@@ -142,7 +142,7 @@ exists. A user-owned project has six built-in workflows and *auto-add repository
 built-in workflows cannot be enabled through the API at all — the schema has `deleteProjectV2Workflow` and nothing
 that creates or updates one. Every project automation is a manual web-UI step.
 
-**Export: silver tables.** `github_issues`, `github_events`, `github_project`, `github_boards`, `github_sprints`.
+**Export: silver tables.** `github_issues`, `github_events`, `github_prs`, `github_project`, `github_boards`, `github_sprints`.
 Gold `agile_*` belongs to the ExperienceFlow model and is produced by a silver→gold transform in the IWS pipeline;
 nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
 
@@ -150,6 +150,12 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
   are per-second, and two status changes on one issue in the same second are ordinary — the earlier
   `issue|kind|occurred` produced 187 rows with 181 distinct hashes, and both the compactor and any keyed target
   drop the duplicates silently.
+- **`github_prs` is the only grain with a server-side filter.** The projects API has no `updatedAt`
+  filter, so the issue grains read the whole board and discard client-side; the pull-request grain asks
+  search for `updated:>=<watermark>` and never transfers a pull request nobody touched. Its event hash
+  includes the review's or comment's **node id**, not only the second: a batch review submits all its
+  comments at once, so `pr|kind|occurred|actor` collides for exactly the rows one reviewer left in one
+  pass. No `body`, no diff, no patch -- asserted against the query text itself, not just the row builder.
 - **The watermark advances only on `--out-dir`.** It promises that everything up to it was delivered somewhere
   durable, and stdout is not. Reads to stdout stay incremental and say what they left alone.
 - **One `state_key`.** The out-dir branch once shadowed it with the project key, so the watermark was read from
