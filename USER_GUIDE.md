@@ -1280,6 +1280,49 @@ alone: renaming a board's worth of issues emits a timeline event for each, and a
 title changing under someone mid-sprint is worse than a board that is consistent
 only from here on.
 
+### Bringing the issues that predate it into line: `--backfill`
+
+Left there, a board that adopts the setting is permanently mixed — everything
+before it bare, everything after carrying `KEY-<n>`. On the Zamboni board the day
+it was taken up, 18 of 19 issues predated it. So when you *do* want the sweep, ask
+for it:
+
+```bash
+gh agile project title-prefix --mode key --backfill --dry-run
+gh agile project title-prefix --mode key --backfill
+```
+```
+  issue title prefix: key  e.g. ZMBNI-34 Retention policy
+  would write to .github/agile.json
+    would rename paulcaron16k/gh-agile#9: AGILE-9 Read side: export and validate
+    would rename paulcaron16k/gh-agile#10: AGILE-10 Write side: setup, epic, story
+  would rename 31, already correct 0, across 31 item(s)
+```
+
+`--dry-run` writes **nothing at all**, the profile line included — a preview that
+quietly changed the setting would be a preview nobody could trust.
+
+**It rebuilds each title rather than testing whether one looks prefixed already.**
+That is the difference between this and the shell loop everyone writes first:
+skip on "this one has a prefix" and a re-run double-prefixes, because the prefix
+it found may carry a *different* issue's number. Here the result depends on the
+issue, not on how many times the command has run — so a second run reports
+`renamed 0`, and an issue mistakenly carrying `ZMBNI-12` is corrected to
+`ZMBNI-34` rather than becoming `ZMBNI-34 ZMBNI-12 …`.
+
+**`--mode off --backfill` strips only what this tool would have written** —
+`KEY-12 ` and an optional `Epic: `. A title that merely begins that way,
+`RFC-2119 keywords in requirement levels`, is somebody's own words and is left
+alone. A backfill that guessed at what looked like a prefix would quietly destroy
+titles that exist nowhere else.
+
+The key comes from the issue's own `key:` label before the profile's default for
+the repository: a mono-repo carries several keys against one repo, and the label
+is which one that issue answers to. An issue with no key at all is reported and
+left alone, since without one there is nothing safe to strip. And `key+type` falls
+back to the key-only form for an issue with no `type:` label — a machine may not
+infer a type, and a correct short prefix beats an invented one.
+
 ### What it costs, and the alternative for half of it
 
 The number does not exist until the issue does, so a prefixed issue is created
@@ -1744,7 +1787,7 @@ gh agile move --help
 |---|---|
 | `setup` | Create fields and labels; converge on re-run |
 | `key` | Record a repository's key; list what is recorded |
-| `project create` / `project sprint-template` / `project title-prefix` | Create the board and record it; choose the sprint cadence; choose the issue-title form |
+| `project create` / `project sprint-template` / `project title-prefix` | Create the board and record it; choose the sprint cadence; choose the issue-title form and optionally backfill it |
 | `board list` / `board show` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint create` | Show or append iterations |
