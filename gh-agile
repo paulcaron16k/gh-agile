@@ -382,6 +382,228 @@ def field_values(item: dict) -> dict[str, object]:
     return out
 
 
+#: Pull requests touched since the watermark, with everything `github_prs` and
+#: the review events need and **nothing from a diff**.
+#:
+#: `search` with `updated:>=` is the whole reason this grain can be incremental.
+#: The projects API has no server-side `updatedAt` filter, so `rows()` reads the
+#: board and discards untouched issues client-side; search does the filtering on
+#: GitHub's side, so an incremental run never fetches a pull request nobody has
+#: touched. Measured on this repository 2026-09-08: `is:pr` alone matched 11,
+#: `is:pr updated:>=2026-09-07T00:00:00Z` matched 7, and the full selection below
+#: cost **8 GraphQL points** for a page of 25 with reviews and their comments
+#: nested inside.
+#:
+#: No `body`, no `bodyText`, no diff hunk and no patch: these rows exist to make
+#: events and metrics, not to analyse code. `additions`, `deletions`,
+#: `changedFiles` and the review states carry every signal the flow metrics need
+#: -- PR size, round-trips, time to first review -- without a line of source.
+PR_SEARCH_QUERY = """
+query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 25, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {
+        id number title url state isDraft
+        createdAt updatedAt closedAt mergedAt
+        author { login }
+        repository { nameWithOwner }
+        baseRefName headRefName
+        additions deletions changedFiles
+        commits(first: 1) { totalCount }
+        reviewDecision
+        mergedBy { login }
+        closingIssuesReferences(first: 10) {
+          nodes { number repository { nameWithOwner } labels(first: 10) { nodes { name } } }
+        }
+        reviews(first: 30) {
+          totalCount
+          nodes {
+            id state submittedAt author { login }
+            comments(first: 20) { nodes { id createdAt author { login } } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def pull_requests(config: dict, since: str | None) -> list[dict]:
+    """Every pull request in the profile's repositories, touched since `since`.
+
+    One search per repository rather than one across all of them, because a
+    `repo:` term is how search is scoped and several of them ORed together is a
+    query the caller cannot page independently.
+    """
+    out = []
+    for repo in sorted({e["repo"] for e in profile_keys(config) if e.get("repo")}):
+        query = f"repo:{repo} is:pr"
+        if since:
+            query += f" updated:>={since}"
+        cursor = None
+        while True:
+            # `gh api graphql` hands back the whole response, `data` envelope
+            # and all -- the same unwrap `paged_project_items` does.
+            page = (graphql(PR_SEARCH_QUERY, q=query,
+                            **({"after": cursor} if cursor else {}))
+                    .get("data") or {})["search"]
+            # A search of type ISSUE returns issues too, and they come back as
+            # empty objects because the selection is entirely inside the
+            # PullRequest fragment.
+            out.extend(node for node in page["nodes"] if node.get("id"))
+            if not page["pageInfo"]["hasNextPage"]:
+                break
+            cursor = page["pageInfo"]["endCursor"]
+    return out
+
+
+def key_for_issue(number: int, repo: str | None, labels: list[str], keys: dict) -> str:
+    """An issue's Jira-style key: its own `key:` label, then the repo's default.
+
+    **Explicit beats assumed.** A `key:` label on the issue wins over the
+    profile's first-key-for-this-repo, which is what makes a mono-repo carrying
+    several keys against one repository distinguishable at all.
+    """
+    labelled = next((lb[len(KEY_LABEL):] for lb in labels if lb.startswith(KEY_LABEL)), None)
+    return f"{labelled}-{number}" if labelled else issue_key(repo, number, keys)
+
+
+def closing_keys(pull: dict, keys: dict) -> list[str]:
+    """The issue keys this pull request closes, in the order GitHub reports them."""
+    return [
+        key_for_issue(node["number"], (node.get("repository") or {}).get("nameWithOwner"),
+                      [n["name"] for n in (node.get("labels") or {}).get("nodes") or []], keys)
+        for node in (pull.get("closingIssuesReferences") or {}).get("nodes") or []
+    ]
+
+
+def pr_row(pull: dict, keys: dict) -> dict:
+    """One `github_prs` row: metadata and the review proxies, never content.
+
+    The derived columns are the ones a flow report actually acts on -- size,
+    round-trips, how long a review took to arrive -- and none of them needs a
+    line of source. A real complexity score does need the code, which is exactly
+    what is excluded here; the right shape for that is a linter already running
+    in CI publishing its score for this exporter to carry.
+    """
+    reviews = (pull.get("reviews") or {}).get("nodes") or []
+    submitted = sorted(r["submittedAt"] for r in reviews if r.get("submittedAt"))
+    reviewers = sorted({(r.get("author") or {}).get("login") or "" for r in reviews} - {""})
+    return {
+        "repository": (pull.get("repository") or {}).get("nameWithOwner") or "",
+        "number": pull["number"],
+        "ext_pr_id": pull["id"],
+        "title": pull["title"],
+        "url": pull["url"],
+        "state": pull["state"],
+        "is_draft": pull.get("isDraft", False),
+        "authored_by": (pull.get("author") or {}).get("login") or "",
+        "base_ref": pull.get("baseRefName") or "",
+        "head_ref": pull.get("headRefName") or "",
+        "additions": pull.get("additions") or 0,
+        "deletions": pull.get("deletions") or 0,
+        "changed_files": pull.get("changedFiles") or 0,
+        "commits": (pull.get("commits") or {}).get("totalCount") or 0,
+        "review_decision": pull.get("reviewDecision") or "",
+        "reviews_total": (pull.get("reviews") or {}).get("totalCount") or 0,
+        "changes_requested_total": sum(
+            1 for r in reviews if r.get("state") == "CHANGES_REQUESTED"),
+        "reviewers": ";".join(reviewers),
+        "reviewer_count": len(reviewers),
+        "closes_issues": ";".join(closing_keys(pull, keys)),
+        "created_at": pull["createdAt"],
+        "updated_at": pull["updatedAt"],
+        "closed_at": pull.get("closedAt") or "",
+        "merged_at": pull.get("mergedAt") or "",
+        "merged_by": (pull.get("mergedBy") or {}).get("login") or "",
+        "first_review_at": submitted[0] if submitted else "",
+        "last_review_at": submitted[-1] if submitted else "",
+        # Seconds, like every other duration here, and no unit in the name.
+        "time_to_first_review": seconds_between(
+            pull["createdAt"], submitted[0] if submitted else None),
+        "review_latency": seconds_between(
+            submitted[-1] if submitted else None, pull.get("mergedAt")),
+        "time_to_merge": seconds_between(pull["createdAt"], pull.get("mergedAt")),
+    }
+
+
+#: What a pull request's life is called in `github_events`. Named for the action
+#: rather than for GitHub's object, so the silver -> gold transform maps them
+#: without knowing what a pull request is -- the same rule the issue-side
+#: `change-request-opened` already follows.
+PR_EVENTS = ("change-request-opened", "change-request-reviewed",
+             "change-request-commented", "change-request-merged")
+
+
+def pr_event_rows(pull: dict, project: str, keys: dict) -> list[dict]:
+    """A pull request's life as `github_events` rows.
+
+    **Reviews name a second person.** The author did the work and the reviewer
+    approved or rejected it; no issue event distinguishes them, which is why
+    "who reviewed what, and how often did it come back" is unanswerable from the
+    issue timeline alone. The review's own state -- `APPROVED`,
+    `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED` -- rides in the `state` column.
+
+    These carry `process_type: pull-requests`. The issue-side
+    `change-request-opened` in `event_rows` is a different row about the same
+    fact, scoped to the issue a pull request closes, and it stays: a consumer is
+    already reading it, and `process_type` is what tells the two apart.
+
+    The hash includes the review's or comment's **node id**, not just the
+    second. GitHub timestamps to the second and a batch review submits every one
+    of its comments at once, so `pr|kind|occurred|actor` collides for exactly the
+    rows a reviewer left in one pass -- the same defect measured on the issue
+    side, where 187 rows collapsed to 181 distinct hashes.
+    """
+    import hashlib
+
+    closes = closing_keys(pull, keys)
+    base = {
+        "function_code": "github",
+        "process_type": "pull-requests",
+        "process_id": pull["number"],
+        "issue_key": closes[0] if closes else "",
+        "ext_process_id": pull["id"],
+        "project_id": project,
+        "event_category": "activity",
+        "prior_state": "",
+        "state_changed": False,
+        "was_automated": "",
+        "detail": f"PR #{pull['number']}",
+    }
+
+    def row(name: str, occurred: str, actor: str, state: str = "", node: str = "") -> dict:
+        return {
+            **base,
+            "event_hash": hashlib.sha256(
+                "|".join((pull["id"], name, occurred or "", actor, state, node)).encode()
+            ).hexdigest(),
+            "event_name": name,
+            "occurred_at": occurred,
+            "actor_name": actor,
+            "ext_actor_id": actor,
+            "state": state,
+        }
+
+    out = [row(PR_EVENTS[0], pull["createdAt"],
+               (pull.get("author") or {}).get("login") or "", node=pull["id"])]
+    for review in (pull.get("reviews") or {}).get("nodes") or []:
+        reviewer = (review.get("author") or {}).get("login") or ""
+        if review.get("submittedAt"):
+            out.append(row(PR_EVENTS[1], review["submittedAt"], reviewer,
+                           state=review.get("state") or "", node=review.get("id") or ""))
+        for comment in (review.get("comments") or {}).get("nodes") or []:
+            out.append(row(PR_EVENTS[2], comment["createdAt"],
+                           (comment.get("author") or {}).get("login") or "",
+                           node=comment.get("id") or ""))
+    if pull.get("mergedAt"):
+        out.append(row(PR_EVENTS[3], pull["mergedAt"],
+                       (pull.get("mergedBy") or {}).get("login") or "", node=pull["id"]))
+    return out
+
+
 def event_rows(issue: dict, events: list[dict], project: str,
                closing_prs: list[dict] | None = None) -> list[dict]:
     """Timeline events as `github_events` rows -- one row per event.
@@ -902,15 +1124,11 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
         fields = field_values(item)
         repo = (content.get("repository") or {}).get("nameWithOwner")
         labels = [n["name"] for n in content["labels"]["nodes"]]
-        # Explicit beats assumed: a `key:` label on the issue wins over the
-        # profile's first-key-for-this-repo default, which is what makes a
-        # mono-repo with several keys distinguishable at all.
-        labelled = next((lb[len(KEY_LABEL):] for lb in labels if lb.startswith(KEY_LABEL)), None)
         row = {
-            "issue_key": (
-                f"{labelled}-{content['number']}" if labelled
-                else issue_key(repo, content["number"], keys)
-            ),
+            # `key_for_issue` carries the explicit-beats-assumed rule, shared
+            # with the pull-request grain so a PR and the issue it closes cannot
+            # disagree about what that issue is called.
+            "issue_key": key_for_issue(content["number"], repo, labels, keys),
             "repository": repo,
             "number": content["number"],
             "title": content["title"],
@@ -3837,6 +4055,27 @@ def cmd_export(args) -> int:
     events: list[dict] | None = [] if args.grain in ("events", "both", "all") else None
     data = rows(args.owner, args.project, with_history=not args.no_history,
                 since=since, events=events)
+
+    # Pull requests are fetched once and used twice: for `github_prs`, and for
+    # the review events that go into `github_events`. `since` goes to GitHub as
+    # `updated:>=` rather than being applied here, so an incremental run never
+    # transfers a pull request nobody has touched -- the search is the only part
+    # of this export with a server-side filter, and `--grain prs` is therefore
+    # the cheapest grain to run often.
+    pulls: list[dict] | None = None
+    if args.grain in ("prs", "events", "both", "all"):
+        keys = {}
+        for entry in profile_keys(args._config):
+            keys.setdefault(entry.get("repo"), entry.get("key"))
+        project_key = (args._config.get("project") or {}).get("key") or str(args.project)
+        fetched = pull_requests(args._config, since)
+        if args.grain in ("prs", "all"):
+            pulls = [pr_row(pull, keys) for pull in fetched]
+        if events is not None:
+            for pull in fetched:
+                events.extend(pr_event_rows(pull, project_key, keys))
+        print(f"  {len(fetched)} pull request(s)"
+              + (f" updated since {since}" if since else ""), file=sys.stderr)
     for row in data:
         # Stamped per row as well as in the filename: a loader that concatenates
         # several exports keeps the ordering without re-deriving it from a path.
@@ -3852,6 +4091,10 @@ def cmd_export(args) -> int:
             event["exported_at"] = started
         print(f"  {len(events)} event row(s)", file=sys.stderr)
 
+    if pulls is not None:
+        for pull in pulls:
+            pull["exported_at"] = started
+
     if args.out_dir:
         # One directory per project key, so several projects can export into one
         # tree without colliding: exports/ZMBNI/agile_issues_....csv
@@ -3861,22 +4104,28 @@ def cmd_export(args) -> int:
             directory = directory / project_key
         directory.mkdir(parents=True, exist_ok=True)
         suffix = "csv" if args.csv else "json"
-        tables = [("issues", data), ("events", events)]
+        # Built from what was asked for rather than filtered afterwards: the
+        # skip rules were a list of exceptions per grain, and `prs` would have
+        # meant two more of them.
+        tables = []
+        if args.grain in ("issues", "both", "all"):
+            tables.append(("issues", data))
+        if events is not None:
+            tables.append(("events", events))
+        if pulls is not None:
+            tables.append(("prs", pulls))
         if args.grain in ("master", "all"):
             tables += list(master_rows(args.owner, args.project, args._config, started).items())
         for grain, payload in tables:
             if payload is None:
-                continue
-            if grain == "issues" and args.grain in ("events", "master"):
-                continue
-            if grain == "events" and args.grain == "master":
                 continue
             path = directory / f"github_{grain}_{file_stamp(started)}.{suffix}"
             with path.open("w", newline="") as handle:
                 _write(payload, handle, csv_format=args.csv)
             print(f"  wrote {path}", file=sys.stderr)
     else:
-        _write(data if args.grain != "events" else events, sys.stdout, csv_format=args.csv)
+        _write({"events": events, "prs": pulls}.get(args.grain, data),
+               sys.stdout, csv_format=args.csv)
 
     # The watermark advances only when the rows were written to timestamped
     # files. A watermark is a promise that everything up to it has been
@@ -4690,11 +4939,13 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
     export = sub.add_parser("export", help="items, field values and status history")
     export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
     export.add_argument("--grain", default="issues",
-                        choices=["issues", "events", "both", "master", "all"],
+                        choices=["issues", "events", "prs", "both", "master", "all"],
                         help="issues is one row per work item; events one row per timeline "
-                             "event, from the same queries; master is the configuration -- "
-                             "project, boards and sprints -- always a full refresh "
-                             "(default: %(default)s)")
+                             "event, from the same queries, plus a pull request's opened, "
+                             "reviewed, commented and merged; prs is one row per pull "
+                             "request with its size, review round-trips and the issues it "
+                             "closes; master is the configuration -- project, boards and "
+                             "sprints -- always a full refresh (default: %(default)s)")
     export.add_argument("--since", help="ISO8601 lower bound on updated_at; overrides the state file")
     export.add_argument(
         "--state",

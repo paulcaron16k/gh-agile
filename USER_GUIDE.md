@@ -1578,17 +1578,19 @@ Two rules worth encoding in whatever drives it:
 
 ---
 
-## 9. Exporting issues and events
+## 9. Exporting issues, events and pull requests
 
-Two grains, because they answer different questions and cannot share a file:
+Three grains, because they answer different questions and cannot share a file:
 
 | Grain | One row per | Gold table |
 |---|---|---|
 | `issues` | work item, every custom field flattened, joined to its status history | `agile_issues` |
-| `events` | thing that happened — status change, assignment, label, close, reopen | `agile_events` |
+| `events` | thing that happened — status change, assignment, label, close, reopen, and a pull request's opened / reviewed / commented / merged | `agile_events` |
+| `prs` | pull request: size, review round-trips, and the issues it closes | — |
 
 ```bash
 gh agile export --grain both --csv --out-dir exports/
+gh agile export --grain prs --csv --out-dir exports/
 ```
 ```
   full export: 24 row(s)
@@ -1597,7 +1599,42 @@ gh agile export --grain both --csv --out-dir exports/
   wrote exports/AGILE/github_events_20260816T031917Z.csv
 ```
 
-**Events cost no extra API calls.** The expensive part of an export is the
+### Pull requests, reviews and merges
+
+**Reviews name a second person.** The author did the work; the reviewer approved
+it or sent it back. No issue event distinguishes them, so *who reviewed what, and
+how often did it come back* cannot be answered from the issue timeline. The review
+state — `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED` — rides in the
+event's `state` column, and the rows carry `process_type: pull-requests` so they
+are distinguishable from the issue-scoped `change-request-opened` that has always
+been exported for a closing PR.
+
+```
+  change-request-opened        2026-09-08T02:15:47Z  paulcaron16k  state=''
+  change-request-reviewed      2026-09-08T02:15:55Z  paulcaron16k  state='COMMENTED'
+  change-request-commented     2026-09-08T02:15:57Z  paulcaron16k  state=''
+  change-request-merged        2026-09-08T02:16:27Z  paulcaron16k  state=''
+```
+
+`github_prs` carries the metrics beside them — `additions`, `deletions`,
+`changed_files`, `commits`, `review_decision`, `reviews_total`,
+`changes_requested_total`, `reviewers`, `time_to_first_review`, `review_latency`,
+`time_to_merge`, `closes_issues`. Durations are integer seconds, like every other
+duration here.
+
+**This grain is the only one GitHub filters for us.** The projects API has no
+server-side `updatedAt`, so the issue grains read the whole board and discard what
+has not changed; this one asks search for `updated:>=<watermark>` and never
+transfers a pull request nobody has touched. On this repository, `is:pr` matched
+11 and `is:pr updated:>=<yesterday>` matched 7.
+
+**No diff hunk, no patch, no review or comment body.** These rows make events and
+metrics, not code analysis. Content would multiply the export size, carry source
+into wherever the CSVs land, and serve nothing the flow metrics need — PR size,
+round-trips and review latency are the flow problems teams act on, and none needs
+a line of source.
+
+**Events cost no extra API calls.** The expensive part of an issue export is the
 timeline query, one per issue, and it already runs to produce the history
 columns — `started_at`, `done_at`, `cycle_time_days`. The event grain is that
 same data reshaped.

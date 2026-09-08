@@ -1,6 +1,6 @@
 # Mapping GitHub to the Gold Agile data model
 
-> **What this tool exports is silver.** `github_issues` and `github_events` are
+> **What this tool exports is silver.** `github_issues`, `github_events` and `github_prs` are
 > GitHub's facts under GitHub's names. The Gold `agile_*` tables belong to the
 > ExperienceFlow model and are the output of a **silver → gold transform that
 > lives in the IWS Partner pipeline**, not here — that is where
@@ -183,6 +183,13 @@ Found by running out, not by reading the code.
 2. **One export per grain.** `agile_issues` is one row per item;
    `agile_events` is one row per timeline event. They are different files, not
    one denormalised sheet.
+   `github_prs` is a third: one row per pull request, carrying the size and
+   review-round-trip signals a flow report needs. Its review events land in
+   `github_events` under `process_type: pull-requests`, beside the issue-scoped
+   `change-request-opened` that `event_rows` already emitted -- both rows are
+   wanted, and `process_type` is what tells the two apart. **A review is the only
+   record naming a second person**: the author did the work, the reviewer
+   accepted or rejected it, and no issue event distinguishes them.
 3. **Snapshots are part of the design, not a workaround.** They are the only
    source of custom-field history.
 4. **Case-insensitive status matching.** GitHub's stock options are `Todo`,
