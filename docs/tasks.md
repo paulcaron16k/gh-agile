@@ -89,14 +89,12 @@ status.
 
 | id | title | WBS |
 |---|---|---|
-| `#9` | Read side: export and validate | — (epic, largely delivered) |
-| `#10` | Write side: setup, epic, story | — (epic, largely delivered) |
-| `#12` | Analysis pipeline to the Gold model | [WBS-4.2](#wbs-4--finish-the-unit-suffix-convention) |
-| `#24` | Synthesise custom-field history from snapshots | [WBS-5.1](#wbs-5--filed-but-unbroken-down) |
-| `#26` | Guided workflow and the user guide | — |
+| `#12` | Analysis pipeline to the Gold model | [WBS-5.2](#wbs-5--filed-but-unbroken-down) |
 | `#37` | Export pull requests, reviews and comments as events | [WBS-5.2](#wbs-5--filed-but-unbroken-down) |
-| `#60` | `validate`: an epic closed over open children | — (filed from the Zamboni markdown suite; the one check of five with no equivalent here) |
-| `#61` | `project title-prefix`: backfill existing issues | — (the setting decides new titles only; existing ones are not renamed) |
+
+Everything else that was listed here is closed. `#9` read side, `#10` write side, `#26` the guided
+workflow and `#70` repository engineering all closed on the roll-up as their last story landed, which is
+the check `#60` added doing its job. `#24` is closed as **not planned for this repository** — see WBS-5.1.
 
 **Not filed:** WBS-1, WBS-3, and the WBS-4 / WBS-6 entries. Filing them is a live write to board `#4` and
 is the owner's call; the breakdown below is written so that each leaf is one issue if they want it to be.
@@ -182,12 +180,12 @@ not the other is not a convention.
 
 ## WBS-5 — Filed, but unbroken-down
 
-Both are real and neither is decomposed. Listed so that "not in the WBS" does not read as "not needed".
+Listed so that "not in the WBS" does not read as "not needed".
 
 | id | title | description | status |
 |---|---|---|---|
-| WBS-5.1 | Synthesise custom-field history | `#24`. GitHub emits a timeline event for `Status` and for nothing else, so points / sprint / priority history has to come from **diffing scheduled exports**. That makes the export cadence a data-model decision, not an ops one | `todo` |
-| WBS-5.2 | Export PRs, reviews and comments as events | `#37`. No diff hunks, no patches — events only | `todo` |
+| WBS-5.1 | Synthesise custom-field history | **Moved out of this repository, 2026-09-08.** GitHub emits a timeline event for `Status` and for nothing else, so points / sprint / priority history has to come from **diffing scheduled exports** — a transform over silver, not an extraction from GitHub, and `GOLD_MODEL.md` puts `agile_*` outside this repo. It also wants a query engine, and the extension is standard-library-only permanently. `scripts/agile_analytics.py` is the home. `#24` closed as not planned. **The requirement survives the move and is time-sensitive: the export cadence is a data-model decision, not an ops one, and it cannot be retrofitted — the snapshots nobody took do not exist** | `decided` |
+| WBS-5.2 | Export PRs, reviews and comments as events | `#37`. No diff hunks, no patches — events only. **Stays here**: it extends `github_events`, which is silver and this tool's own table, and it needs `gh`, the pager, the `event_hash` rule and the watermark. A separate tool would re-implement all of that to append rows to a table this repository already writes | `todo` |
 
 ---
 
