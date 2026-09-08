@@ -26,7 +26,16 @@ make coverage      # unit tests with a coverage report
 make self-test     # LIVE: stands up a scratch project, exercises it, tears it down
 make scratch       # LIVE: leaves a scratch project standing;  make teardown NUM=<n>
 make metrics DIR=exports/AGILE
+make merge-check   # the suite against HEAD + origin/main. Run it BEFORE merging
+make ci-status     # whether main's last CI run passed
+make hooks         # install the post-merge hook that reports a red main
 ```
+
+**Green on a branch is not green on the merge.** Two pull requests cut from the same base, each passing
+alone, left `main` red the moment both landed — and the `push: main` run that caught it told nobody, so
+the next branch was cut from a broken `main`. Branch protection's *require branches to be up to date*
+would prevent it and needs GitHub Pro on a private repo (measured: 403). `merge-check` is the local form,
+`hooks` is the backstop. See `docs/lessons.md`.
 
 The three LIVE targets default to the sandbox and refuse anything else; see the testing policy below.
 

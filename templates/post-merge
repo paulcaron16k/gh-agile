@@ -1,0 +1,15 @@
+#!/bin/sh
+# Tell me when the branch I just pulled is broken.
+#
+# `git pull` after merging a pull request is the moment somebody is already at
+# the terminal, and it was the moment this repository's `main` sat red without
+# anyone noticing -- CI had run and failed, and nothing surfaced it.
+#
+# Install with `make hooks`. Read-only, never blocks the merge: it exits 0
+# whatever it finds, because a hook that can stop you pulling is a hook people
+# delete.
+[ -x "$(command -v gh)" ] || exit 0
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+[ "$branch" = "main" ] || exit 0
+python3 "$(git rev-parse --show-toplevel)/scripts/ci_status.py" --branch main --quiet || true
+exit 0

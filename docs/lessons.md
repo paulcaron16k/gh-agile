@@ -112,6 +112,41 @@ skipped.
 
 ## About the code
 
+**Green on two branches is not green on the merge, and a red default branch is silent.** Two pull
+requests, `#66` and `#67`, were cut from the same base `23caaa6`, touched different code, and passed on
+their own branches — 335 and 332 tests. Merging both left `main` red at `ebd4b4d` with two failures:
+`move` on `In Progress` had learned to read assignees, and the other branch's fake `gh` answered only
+`--json body`. Reproduced afterwards, one commit at a time:
+
+| checkout | result |
+|---|---|
+| `bd1646d` — `#66` merged | 335 passed |
+| `c795832` — `#67`'s branch commit | 332 passed |
+| `ebd4b4d` — both merged | **2 failed**, 350 passed |
+| `c795832` with `bd1646d` merged in locally | **2 failed**, 350 passed |
+
+**Neither pull request's CI was wrong.** Each answered a question about a base that no longer existed by
+the time either merged, and nothing re-asked it. GitHub already builds the merge commit for a
+`pull_request` event — the staleness is that it does so once, when the run starts.
+
+The normal remedy is branch protection with *require branches to be up to date before merging*, which
+re-runs the checks when the base moves. It is not available here:
+
+```
+$ gh api repos/paulcaron16k/gh-agile/branches/main/protection
+403  Upgrade to GitHub Pro or make this repository public to enable this feature.
+```
+
+**And CI did catch it.** The `push: branches: [main]` run fired and failed. `main` then sat red while the
+next branch was cut from it, a pull request was opened, reviewed and merged; it was found by running
+`make test` for an unrelated reason. A signal nobody is shown is the same as no signal — which is the
+same lesson as *"Stop reporting permission failures as success"*, arriving from the other direction.
+
+So, two habits with a target each: `make merge-check` before merging, which merges `origin/main` into a
+throwaway worktree and runs the suite — the fourth row of that table is exactly what it does — and
+`make hooks`, whose `post-merge` hook reports a red `main` the next time you pull, because that is the
+moment somebody is already looking at the terminal.
+
 **A target nobody runs is a target that does not work.** `make scratch` created a project, had its `setup`
 refused because `--project 20` disagreed with `project.number 4` in the profile, and **still exited 0** —
 handing back a scratch project with no fields and no labels while reporting success. Broken since

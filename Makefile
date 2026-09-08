@@ -37,7 +37,7 @@ PY    := $(VENV)/bin/python
 #     make venv PYTHON=python3.10
 PYTHON ?= python3.12
 
-.PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help
+.PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help merge-check ci-status hooks
 
 # Every Python target runs through $(PY) and checks the venv exists first.
 # Nothing here may fall back to the system interpreter: a suite that silently
@@ -120,6 +120,9 @@ help:
 	@echo "make check-guide         every command in USER_GUIDE.md exists; the safe ones run"
 	@echo "make metrics DIR=<path>  compact an export directory and report Agile metrics"
 	@echo "make lint                syntax and style"
+	@echo "make merge-check         run the suite against HEAD + origin/main -- BEFORE merging"
+	@echo "make ci-status           whether main's last CI run passed"
+	@echo "make hooks               install the post-merge hook that reports a red main"
 	@echo
 	@echo "OWNER=$(OWNER)  REPO=$(REPO)"
 	@echo
@@ -225,3 +228,46 @@ lint:
 	$(require_venv)
 	$(PY) -c "import ast; ast.parse(open('gh-agile').read()); print('gh-agile parses')"
 	$(VENV)/bin/ruff check gh-agile tests/ scripts/
+
+# Run the suite against what merging would actually produce: this branch with
+# the current origin/main merged into it. **Run it before merging.**
+#
+# Green on a branch is not green on the merge. Measured: `#66` and `#67` were cut
+# from the same base `23caaa6`, passed 335 and 332 tests on their own branches,
+# and left `main` red at `ebd4b4d` with two failures the moment both landed.
+# Neither pull request's CI could have seen the other -- their runs were correct
+# and answered a question about a base that no longer existed by the time either
+# merged.
+#
+# GitHub's own answer to this is branch protection with *require branches to be
+# up to date before merging*, which re-runs the checks when the base moves. It
+# needs GitHub Pro on a private repository, measured as a 403. So this is the
+# local form of the same idea, and it reproduces that failure exactly.
+#
+# A throwaway worktree, so the working tree is untouched and a merge conflict
+# costs nothing.
+MERGE_CHECK_DIR := $(CURDIR)/.merge-check
+merge-check:
+	$(require_venv)
+	@git fetch -q origin main
+	@rm -rf $(MERGE_CHECK_DIR)
+	@git worktree prune
+	@git worktree add -q --detach $(MERGE_CHECK_DIR) HEAD
+	@ln -sfn $(CURDIR)/$(VENV) $(MERGE_CHECK_DIR)/.venv
+	@cd $(MERGE_CHECK_DIR) && git -c user.email=merge-check@local -c user.name=merge-check 		merge -q --no-edit origin/main 		|| { echo "  merge conflict with origin/main; resolve it before merging"; 		     cd $(CURDIR); git worktree remove --force $(MERGE_CHECK_DIR); exit 1; }
+	@echo "  HEAD + origin/main:"
+	@cd $(MERGE_CHECK_DIR) && $(CURDIR)/$(PY) -m pytest tests/ -q 		&& $(CURDIR)/$(VENV)/bin/ruff check gh-agile tests/ scripts/ 		|| { cd $(CURDIR); git worktree remove --force $(MERGE_CHECK_DIR); exit 1; }
+	@git worktree remove --force $(MERGE_CHECK_DIR)
+	@echo "  the merge is green"
+
+# Whether the last finished CI run on main passed. Read-only; calls `gh run list`.
+ci-status:
+	@$(PY) scripts/ci_status.py --branch main
+
+# Install the post-merge hook, so a red main says so the next time you pull.
+# Copied rather than symlinked: a hook that vanishes when a branch is checked
+# out is a hook that stops working on the day it matters.
+hooks:
+	@cp templates/post-merge .git/hooks/post-merge
+	@chmod +x .git/hooks/post-merge
+	@echo '  installed .git/hooks/post-merge -- "git pull" on main now reports a red build'
