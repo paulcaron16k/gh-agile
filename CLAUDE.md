@@ -137,6 +137,14 @@ team's board full of another team's work and looks correct); and **empty is not 
 allows but nothing occupies is reported on the `empty:` line, while one the filter removes is not mentioned, because
 calling `Done` empty on a kanban board says nothing was finished.
 
+**A board may span repositories, and `sync` is the one command that must not guess one.** `apply_defaults`
+fills `--repo` from the working directory for every command that acts on a single issue. It did so for
+`sync` too, which made its documented default -- every repository in the profile keys -- unreachable, so a
+team responsible for several repositories could never get the rest of their issues onto the shared board.
+`keys` is an ordered list for exactly this case, `issue_key` puts the key on the repository because a
+project can span them, and a scrum board slices one team out with `label:key:...`. Watch the summary
+count: `across 1 repo(s)` on a two-repo profile is the symptom.
+
 **A project is a collection, not a filter.** An issue is not on a board until it is added, which is why `sync`
 exists. A user-owned project has six built-in workflows and *auto-add repository issues is not among them*, and
 built-in workflows cannot be enabled through the API at all — the schema has `deleteProjectV2Workflow` and nothing
