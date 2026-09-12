@@ -158,6 +158,13 @@ def run_safe(command: str) -> tuple[bool, str]:
     if any(token in command for token in PLACEHOLDERS):
         return True, "not run (placeholder)"
     argv = command.replace("gh-agile", str(TOOL), 1).replace("gh agile", str(TOOL), 1)
+    # **The trailing comment goes before anything is appended.** These run through
+    # `sh -c`, so a documented line ending in `# every repo in the profile keys`
+    # swallowed the safety flag added after it -- `gh agile sync  # ... --dry-run`
+    # is a real sync -- and the check that exists to prove the guide is honest
+    # wrote 35 issues onto a live board. Measured 2026-09-12, and harmless only
+    # for as long as `sync` happened to be looking at one repository.
+    argv = strip_comment(argv)
     # Read-only variants only: never write state or a file during a check.
     for flag, addition in (("export", " --no-history --no-state"), ("sync", " --dry-run")):
         if f" {flag}" in argv and addition.strip().split()[0] not in argv:
@@ -181,6 +188,24 @@ def run_safe(command: str) -> tuple[bool, str]:
     if not ok and " validate" in argv and "problem(s) across" in result.stdout:
         ok = True
     return ok, note
+
+
+def strip_comment(command: str) -> str:
+    """`cmd  # why` -> `cmd`. Quote-aware, because a `#` can be an argument.
+
+    Only a `#` that begins a word outside quotes starts a comment, which is the
+    shell's own rule: `--title "fixes #12"` and `--query "a#b"` keep theirs.
+    """
+    quote = None
+    for i, char in enumerate(command):
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "#" and (i == 0 or command[i - 1].isspace()):
+            return command[:i].rstrip()
+    return command.rstrip()
 
 
 def main() -> int:
