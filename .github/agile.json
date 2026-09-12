@@ -1,6 +1,10 @@
 {
   "boards": [
     {
+      "name": "Sprint board",
+      "type": "scrum"
+    },
+    {
       "name": "Engineering: all work",
       "type": "kanban"
     },
@@ -9,13 +13,13 @@
       "type": "backlog"
     },
     {
-      "filter": "label:key:ZMBNI",
-      "name": "Team: ZMBNI",
+      "filter": "label:key:AGILE",
+      "name": "Team: AGILE",
       "type": "scrum"
     },
     {
-      "filter": "label:key:AGILE",
-      "name": "Team: AGILE",
+      "filter": "label:key:REPORTS",
+      "name": "Team: REPORTS",
       "type": "scrum"
     }
   ],
@@ -26,12 +30,13 @@
       "repo": "paulcaron16k/gh-agile"
     },
     {
-      "key": "ZMBNI",
-      "name": "Zamboni Iceberg table maintainer",
-      "repo": "paulcaron16k/Zamboni"
+      "key": "REPORTS",
+      "name": "Agile reporting on the gh-agile export",
+      "repo": "paulcaron16k/agile-reports"
     }
   ],
   "project": {
+    "issue_title_prefix": "key",
     "key": "AGILE",
     "name": "gh-agile: Agile management on GitHub",
     "number": 4,
