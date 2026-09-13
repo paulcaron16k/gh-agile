@@ -4685,6 +4685,19 @@ MOVE_FIELDS = [
 #: distributions move, not when the version number expires.
 RUNTIME_FLOOR = (3, 10)
 
+#: When to **look at the floor again** -- deliberately not when it expires
+#: upstream. The paragraph above settles that: EOL stops python.org patches and
+#: removes 3.10 from nobody's machine, so the trigger is the distributions moving.
+#: Ubuntu 22.04 LTS carries 3.10 with standard support to April 2027, which is the
+#: date worth a prompt.
+#:
+#: Hand-maintained, and honestly so: there is no offline source for it and this
+#: file may not grow a dependency to fetch one. `tests/test_version_floor.py`
+#: warns -- not fails -- once the date is past, because a floor being worth
+#: revisiting is not a reason to break the build. Raising the floor means moving
+#: this with it.
+RUNTIME_FLOOR_REVIEW = "2027-04-30"
+
 
 def require_interpreter() -> None:
     if sys.version_info < RUNTIME_FLOOR:
