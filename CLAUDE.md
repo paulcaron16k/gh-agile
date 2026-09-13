@@ -150,6 +150,13 @@ exists. A user-owned project has six built-in workflows and *auto-add repository
 built-in workflows cannot be enabled through the API at all — the schema has `deleteProjectV2Workflow` and nothing
 that creates or updates one. Every project automation is a manual web-UI step.
 
+**Export stays CSV and standard library, and the load side is somebody else's.** The ceiling is mechanical:
+`gh extension install` clones and installs nothing. A request needing dlt, SQLAlchemy, Parquet or Iceberg is
+**out of scope and closed as such** -- the day export must emit Parquet is the day it leaves the extension.
+Meltano and dlt already do GitHub ELT; this repo produces silver files and says what is in them. CSVs carry
+no schema, so that saying is `github_catalog.json` (`#92`) -- Singer/Meltano shape, and named `github_` not
+`agile_` because ExperienceFlowAI's Gold `agile_catalog.json` already exists outside this repo.
+
 **Export: silver tables.** `github_issues`, `github_events`, `github_prs`, `github_project`, `github_boards`, `github_sprints`.
 Gold `agile_*` belongs to the ExperienceFlow model and is produced by a silver→gold transform in the IWS pipeline;
 nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
