@@ -379,6 +379,26 @@ layout is one flat list, a roadmap groups by sprint. Vertical sections rather
 than side-by-side columns because five statuses across 80 characters leaves
 about fifteen for each title.
 
+**A board that excludes nothing says so.** A view with no filter shows every item
+on the project, and its name is usually promising otherwise — a view renamed
+`Backlog` in the web UI and never given a filter looks like a backlog and behaves
+like a project dump, so closed work appears there *and* in the scrum board's Done
+section at the same time:
+
+```
+  'Backlog' has no filter, so it shows every item on the project.
+    A board that excludes nothing is usually a view that was named and never
+    configured.
+    `gh agile board create --name 'Backlog' --type scrum|kanban|backlog|roadmap`
+    converges an existing view by name and gives it the filter for that type.
+```
+
+The advice goes to stderr and the fact stays in the board, so a redirected or
+`--out-dir` run still records that the board excluded nothing. **No type is
+guessed from the name** — a view called `Backlog` probably wants the backlog
+filter, and *probably* is not good enough to write a filter on somebody's board.
+Passing `--filter` yourself makes the board filtered, and the message goes away.
+
 **Empty and excluded are different, and the output says which.** A status the
 filter allows but nothing occupies is listed on the `empty:` line, because "In
 Review is empty" is a thing a board exists to tell you. A status the filter

@@ -487,3 +487,79 @@ class TestRenderBoardList:
     def test_a_view_with_no_filter_leaves_no_trailing_space(self, tool):
         for line in tool.render_board_list(self.VIEWS, self.CONFIG).splitlines():
             assert line == line.rstrip()
+
+
+class TestABoardThatExcludesNothing:
+    """A board with no filter shows every item on the project, and its name is
+    usually promising otherwise.
+
+    On the Zamboni project, GitHub's default view had been renamed `Backlog` in
+    the web UI and never given the backlog filter, so closed work appeared there
+    and in the scrum board's Done section at the same time. It was reported as a
+    bug in `board show`, and `board show` was doing the one thing it promises:
+    **a board is reconstructed, never mirrored**, so the filter comes from the
+    view rather than from its name. Both signals were there -- `custom` rather
+    than `backlog`, and `filter: (none)` -- and both were easy to read past.
+
+    The fact is stated; the type is **not** inferred from the name, because
+    guessing that a view called `Backlog` wants the backlog filter is the same
+    name-based inference that refusing an unknown filter term exists to prevent.
+    """
+
+    def test_the_rendered_filter_line_says_so(self, tool):
+        text = rendered(tool, [row()], sections=[("Todo", [row()])])
+        assert "filter: -status:Done" in text        # the fixture's own filter
+        unfiltered = tool.render_board(
+            {"name": "View 1", "layout": "TABLE_LAYOUT", "filter": ""},
+            "custom", [row()], [("", [row()])], "o", 4, 1, "", 80)
+        assert "excludes nothing" in unfiltered
+
+    def test_the_fact_travels_with_a_written_board(self, tool):
+        """It is in the rendering, so an `--out-dir` file carries it too -- the
+        record should say the board excluded nothing."""
+        unfiltered = tool.render_board(
+            {"name": "View 1", "layout": "TABLE_LAYOUT", "filter": ""},
+            "custom", [row()], [("", [row()])], "o", 4, 1, "", 80)
+        assert "(none)" in unfiltered and "excludes nothing" in unfiltered
+
+
+class TestTheUnfilteredWarning:
+    @pytest.fixture
+    def show(self, monkeypatch, tool, capsys):
+        def go(view_filter, extra=None):
+            import argparse
+            monkeypatch.setattr(tool, "find_view", lambda *a, **k: {
+                "name": "View 1", "number": 1, "layout": "TABLE_LAYOUT",
+                "filter": view_filter})
+            monkeypatch.setattr(tool, "iterations", lambda *a, **k: ([], []))
+            monkeypatch.setattr(tool, "fetch_items", lambda *a, **k: ("t", []))
+            args = argparse.Namespace(owner="o", project=4, name="View 1",
+                                      filter=extra, format="display", out_dir=None,
+                                      _config={})
+            tool.cmd_board_show(args)
+            return capsys.readouterr()
+        return go
+
+    def test_an_unfiltered_view_is_called_out(self, tool, show):
+        err = show("").err
+        assert "has no filter" in err and "every item on the project" in err
+
+    def test_the_advice_goes_to_stderr_not_into_the_board(self, tool, show):
+        """So a redirected or `--out-dir` run keeps the fact and drops the
+        suggestion."""
+        out = show("")
+        assert "board create" in out.err and "board create" not in out.out
+
+    def test_no_board_type_is_guessed_from_the_name(self, tool, show):
+        """It lists the types rather than picking one. A view called `Backlog`
+        probably wants the backlog filter, and probably is not good enough."""
+        err = show("").err
+        for kind in ("scrum", "kanban", "backlog", "roadmap"):
+            assert kind in err
+
+    def test_a_filtered_view_says_nothing(self, tool, show):
+        assert show("-status:Done").err == ""
+
+    def test_nor_does_one_the_caller_filtered(self, tool, show):
+        """A filterless view shown with `--filter status:Todo` **is** filtered."""
+        assert show("", extra="status:Todo").err == ""

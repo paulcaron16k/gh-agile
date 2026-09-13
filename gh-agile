@@ -3265,7 +3265,7 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
     """
     out = [view["name"],
            f"{kind} · {owner}/projects/{project} · {len(rows)} of {total} items",
-           f"filter: {shown_filter or '(none)'}", ""]
+           f"filter: {shown_filter or '(none) -- this board excludes nothing'}", ""]
     columns = board_columns(rows, width)
     if rows:
         # A heading, because five unlabelled columns put `8` next to
@@ -3363,6 +3363,32 @@ def cmd_board_show(args) -> int:
     own = view.get("filter") or ""
     combined = " ".join(c for c in (own, args.filter) if c)
     terms = parse_filter(combined)
+
+    if not terms:
+        # **A board that excludes nothing is not a board**, and the reader is
+        # usually being misled by its name rather than by this tool. On the
+        # Zamboni project a view renamed `Backlog` in the web UI had never been
+        # given the backlog filter, so closed work showed there and in the scrum
+        # board's Done section at once -- reported as a bug here, and it was not
+        # one: a board is reconstructed, never mirrored, so the filter comes from
+        # the view rather than from its name. Both signals were present and both
+        # were easy to skim past.
+        #
+        # The *type* is deliberately not inferred from the name. Guessing that a
+        # view called `Backlog` wants the backlog filter is the same
+        # name-based inference that refusing an unknown filter term exists to
+        # avoid. The fact is stated and the choice is left with the reader.
+        #
+        # `terms`, not the view's own filter: a filterless view shown with
+        # `--filter status:Todo` is filtered, and must not be flagged.
+        print(f"  {view['name']!r} has no filter, so it shows every item on the "
+              f"project.\n"
+              f"    A board that excludes nothing is usually a view that was named "
+              f"and never configured.\n"
+              f"    `gh agile board create --name {view['name']!r} --type "
+              f"{'|'.join(BOARD_TYPES)}` converges an\n"
+              f"    existing view by name and gives it the filter for that type.",
+              file=sys.stderr)
 
     active, completed = iterations(args.owner, args.project)
     current = active[0]["title"] if active else None
