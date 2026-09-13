@@ -231,6 +231,16 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
 | `GOLD_MODEL.md` | The silver→gold boundary, and what this repo does not write |
 | `USER_GUIDE.md` | The published guide; `make check-guide` keeps it honest |
 
+Some of it is code rather than prose, and none of it is guessable from a file name:
+
+| File | The practice, and what enforces it |
+|---|---|
+| `ruff.toml` | The rule set is **pinned**, because the same code passed one ruff version and reported thirty findings with the next. `target-version` is the floor, and `tests/test_version_floor.py` fails if it drifts from `RUNTIME_FLOOR` or the CI matrix |
+| `.github/workflows/ci.yml` | Every supported interpreter, **including the floor and with no gaps** — a floor no job tests is a promise nothing keeps. Same test holds the matrix to it |
+| `Makefile` | The live targets default to the sandbox and refuse any other repository without `ALLOW_LIVE=1`; every Python target refuses to run outside `.venv`, and `tests/conftest.py` refuses again from the inside. `merge-check` before merging, `hooks` so a red `main` reaches you |
+| `scripts/check_guide.py` | Every command in the guide exists, and the read-only ones run. It strips a trailing comment before appending `--dry-run`, because the shell ate the flag once and a real `sync` wrote 35 issues to a live board |
+| `templates/` | The `post-merge` hook, and the GitHub workflows that need no stored credential |
+
 ## Live state
 
 **It is not here. It is in `docs/tasks.md`, and that is the only copy.**
