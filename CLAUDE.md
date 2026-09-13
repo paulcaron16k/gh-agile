@@ -187,7 +187,7 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
   in UTC; a local date puts the tool a day out of step around midnight.
 - **The extension runs under the user's `python3`, not the venv's.** `gh extension install` clones a file; it
   provisions no interpreter, and the shebang is `#!/usr/bin/env python3`. So the floor is **3.10** and is not
-  ours to choose. Three settings must agree — `RUNTIME_FLOOR`, `ruff.toml`'s `target-version`, and the CI matrix,
+  ours to choose. Three settings must agree — and `tests/test_version_floor.py` now checks that they do — `RUNTIME_FLOOR`, `ruff.toml`'s `target-version`, and the CI matrix,
   which has to *run* the floor: with `target-version = py312`, UP017 rewrote `dt.timezone.utc` to `dt.UTC`
   (3.11+), lint and every test stayed green because both ran in the 3.12 venv, and the tool crashed on first use
   under the system 3.10. **A floor no job tests is a promise nothing keeps.** `make venv PYTHON=python3.10`
