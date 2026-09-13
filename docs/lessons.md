@@ -14,6 +14,29 @@ behaviour, the six built-in workflows, the write-only series anchor, the `503`s 
 name `ProjectV2Iteration` implies an identified object; it carries `startDate`, `duration` and `title` and
 no id, which is the whole defect this tool is built around.
 
+**A project workflow can close your issue before you do, and GitHub attributes it to you.** Measured
+2026-09-13 on project `#19`: setting `Status` to `Done` and issuing **no close at all** left the issue
+CLOSED as `COMPLETED` one second later. The `ClosedEvent` names the *project owner*, not
+`github-project-automation`, so the timeline is indistinguishable from a close the tool performed — which
+is how the mechanism was mis-read the first time it was seen.
+
+Three consequences, each measured separately:
+
+| probe | result |
+|---|---|
+| `Status = Done`, no close | CLOSED / `COMPLETED`, ~1s later, attributed to the caller |
+| `gh issue close --reason` on an already-closed issue | no-op, `already closed` on stderr, **exit 0** |
+| close with the reason *first*, then `Status = Done` | `NOT_PLANNED` survives |
+
+So `move --status Done --not-planned --close` discarded the reason and reported success, because the
+tool's close arrived second and `gh` exits 0 for a close that changed nothing. **The reason cannot be
+repaired afterwards** — there is no second chance on a closed issue.
+
+The fix is ordering, and it is not obvious from reading the code: close *before* writing `Status`. The
+lesson generalises past this field — **when a project automation and this tool write the same thing, the
+tool has to go first, because GitHub will not tell you it lost.** And an exit code from `gh` is not
+evidence that a write happened.
+
 **A `503` comes in bursts, so a retry loop without backoff is one attempt.** Six immediate retries of
 `gh api user` all failed inside the same second, while the same call typed into a shell succeeded; one
 retry twenty seconds later worked first time. Measured 2026-08-17 during a Partial System Outage.

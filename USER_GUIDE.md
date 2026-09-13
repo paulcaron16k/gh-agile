@@ -1540,6 +1540,23 @@ the body is not complete:
 planned, so work that stopped for another reason stays distinguishable in the
 export.
 
+**The close happens before the status is written, and that ordering is load-bearing.**
+A project can carry a built-in *auto-close when Status is Done* workflow, and it
+closes the issue as **completed** — attributed to you, not to the automation, so
+the timeline gives no hint. `gh issue close --reason` on an issue that is already
+closed changes nothing and still exits 0, and the reason cannot be corrected
+afterwards. Going first is the only way `--not-planned` survives on such a
+project, and the tool checks what GitHub actually recorded rather than trusting
+the exit code:
+
+```
+  #34 closed as not planned
+  #34 Status = Done
+```
+
+If the reason comes back wrong anyway, it says so on stderr rather than printing
+`closed`. Reopening and closing again is the only repair.
+
 **6 — close the epic**
 
 ```bash
