@@ -3772,6 +3772,44 @@ def claim_issue(repo: str, issue: int, wanted: str, *, explicit: bool) -> str:
     return f"  #{issue} assigned to {who}"
 
 
+#: What GitHub records for a close, against what `gh issue close --reason` is told.
+CLOSE_REASONS = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
+
+
+def close_issue(repo: str, issue: int, *, not_planned: bool) -> None:
+    """Close the issue, and check GitHub recorded the reason that was asked for.
+
+    **The exit code cannot be trusted here.** `gh issue close --reason` on an
+    issue that is already closed prints `already closed` to stderr, changes
+    nothing, and exits 0 -- so a discarded `--not-planned` looked exactly like a
+    successful one. Reported rather than assumed, for the same reason permission
+    failures stopped being reported as success.
+
+    The read costs one call on one transition, and it is the difference between
+    `closed` and the truth. `abandoned` and `completed` are not interchangeable:
+    the export keeps them apart in `state_reason`, and `validate` and
+    `sprint backfill` both decide whether to demand a `sprint:` label from it --
+    so a reason silently downgraded to `COMPLETED` puts a false *worked in this
+    sprint* label on an issue nobody worked.
+    """
+    wanted = "not planned" if not_planned else "completed"
+    gh(["issue", "close", str(issue), "--repo", repo, "--reason", wanted])
+    recorded = json.loads(gh(["issue", "view", str(issue), "--repo", repo,
+                              "--json", "state,stateReason"]))
+    reason = (recorded.get("stateReason") or "").upper()
+    if reason == CLOSE_REASONS[wanted]:
+        print(f"  #{issue} closed as {wanted}")
+        return
+    # Not fatal: the issue *is* closed, the status is set, and failing here would
+    # leave the caller worse off than telling them. Loud, though, and on stderr.
+    print(f"  #{issue} closed, but GitHub recorded {reason or 'no reason'} rather than "
+          f"{CLOSE_REASONS[wanted]}.\n"
+          f"    A project workflow that closes on Status=Done gets there first, and the "
+          f"reason\n"
+          f"    cannot be changed once an issue is closed. Reopen and close it again to "
+          f"correct it.", file=sys.stderr)
+
+
 def abandoning(args) -> bool:
     """Whether this run is closing the issue as *not planned*.
 
@@ -3860,6 +3898,21 @@ def cmd_move(args) -> int:
         gh(["issue", "edit", str(args.issue), "--repo", repo, "--body", body])
         print(f"  #{args.issue} body updated: {', '.join(sections)}")
 
+    # **Closed before the Status is written, and the order is the whole fix.**
+    # A project can carry a built-in *auto-close when Status is Done* workflow.
+    # Measured on the sandbox 2026-09-13: setting Status to `Done` and issuing no
+    # close at all left the issue CLOSED as `COMPLETED` one second later -- and
+    # GitHub attributes that close to the **project owner**, not to
+    # `github-project-automation`, which is why the timeline looked like ours.
+    #
+    # Arriving second is fatal rather than merely late: `gh issue close --reason`
+    # on an already-closed issue is a no-op that warns to stderr and **exits 0**,
+    # so `--not-planned` was discarded and the command still printed `closed`.
+    # There is no repair afterwards; the reason cannot be changed on a closed
+    # issue. Closing first, then setting Status, keeps `NOT_PLANNED` -- measured
+    # on the same project that loses it the other way round.
+    if args.close:
+        close_issue(repo, args.issue, not_planned=args.not_planned)
     set_field(args.owner, args.project, item["id"], "Status", args.status)
     print(f"  #{args.issue} Status = {args.status}")
 
@@ -3926,10 +3979,6 @@ def cmd_move(args) -> int:
         if stamped:
             print(f"  #{args.issue} + {stamped}")
 
-    if args.close:
-        gh(["issue", "close", str(args.issue), "--repo", repo,
-            "--reason", "not planned" if args.not_planned else "completed"])
-        print(f"  #{args.issue} closed")
     return 0
 
 
