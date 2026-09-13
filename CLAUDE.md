@@ -56,7 +56,7 @@ throwaway issues created and deleted leaving permanent holes in the issue-number
 two export files deleted. `gh-agile` is near alpha with issue tracking now load-bearing, and `Zamboni` is heading
 for production. Neither is a test fixture.
 
-Order of escalation: **offline tests → agile-test → gh-agile → Zamboni.** Most work needs no live repo at all now.
+Order of escalation: **offline tests → agile-test → gh-agile.** Zamboni is a different team's repository on a different board and is no longer in this profile; it is not an escalation step. Most work needs no live repo at all now.
 Only `self-test`, sprint destruction/repair and `sync --adopt` must hit real GitHub.
 
 **The Makefile enforces this rather than asking.** `OWNER` and `REPO` default to the sandbox, and `self-test` and
