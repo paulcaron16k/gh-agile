@@ -157,6 +157,15 @@ Meltano and dlt already do GitHub ELT; this repo produces silver files and says 
 no schema, so that saying is `github_catalog.json` (`#92`) -- Singer/Meltano shape, and named `github_` not
 `agile_` because ExperienceFlowAI's Gold `agile_catalog.json` already exists outside this repo.
 
+**`github_catalog.json` is the export contract**, in Singer/Meltano shape: every stream, every column,
+typed, nullable-or-not, keyed, with the replication method. A CSV carries no schema, so without it a
+loader guesses -- and an empty `time_to_first_review` read as `0` rather than null is the same class of
+error as `cycle_time_days` against `cycle_time_hours`. Not `agile_catalog.json`: that name is
+ExperienceFlowAI's **Gold** catalog, outside this repo. Two things it states that a type cannot: joined
+lists stay **strings** with a `;` separator, because promising an array means owning the escaping; and
+`github_events` declares **no replication key**, because the watermark filters the *issue* on
+`updated_at` and an event's `occurred_at` is not the field the window was applied to.
+
 **Export: silver tables.** `github_issues`, `github_events`, `github_prs`, `github_project`, `github_boards`, `github_sprints`.
 Gold `agile_*` belongs to the ExperienceFlow model and is produced by a silver→gold transform in the IWS pipeline;
 nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.

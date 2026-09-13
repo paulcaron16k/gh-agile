@@ -570,7 +570,7 @@ def pr_event_rows(pull: dict, project: str, keys: dict) -> list[dict]:
         "event_category": "activity",
         "prior_state": "",
         "state_changed": False,
-        "was_automated": "",
+        "was_automated": None,
         "detail": f"PR #{pull['number']}",
     }
 
@@ -638,7 +638,7 @@ def event_rows(issue: dict, events: list[dict], project: str,
             # transform maps it without knowing what a pull request is.
             "event_name": "change-request-opened",
             "occurred_at": pull["createdAt"], "actor_name": author, "ext_actor_id": author,
-            "state": "", "prior_state": "", "state_changed": False, "was_automated": "",
+            "state": "", "prior_state": "", "state_changed": False, "was_automated": None,
             "detail": f"PR #{pull['number']}",
         })
     for event in events:
@@ -690,7 +690,9 @@ def event_rows(issue: dict, events: list[dict], project: str,
             "state_changed": bool(
                 event.get("status") and event.get("status") != event.get("previousStatus")
             ),
-            "was_automated": event.get("wasAutomated", ""),
+            # Only a status change carries it; `None` on every other event rather
+            # than `""`, for the same reason as `epic_number`.
+            "was_automated": event.get("wasAutomated"),
             "detail": detail,
         }
         out.append(row)
@@ -1138,7 +1140,11 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             "labels": ";".join(labels),
             "assignees": ";".join(n["login"] for n in content["assignees"]["nodes"]),
             "milestone": (content.get("milestone") or {}).get("title") or "",
-            "epic_number": (content.get("parent") or {}).get("number") or "",
+            # `None` rather than `""` when there is no parent. An empty string in
+            # an integer column makes the column's type a union of integer and
+            # string, which a loader cannot turn into a DDL type -- and CSV is
+            # unchanged either way, since `csv.DictWriter` writes both as empty.
+            "epic_number": (content.get("parent") or {}).get("number"),
             "epic_title": (content.get("parent") or {}).get("title") or "",
             "sub_issues_total": (content.get("subIssuesSummary") or {}).get("total") or 0,
             "sub_issues_done": (content.get("subIssuesSummary") or {}).get("completed") or 0,
@@ -1178,7 +1184,7 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
                 or first_actor(raw_events, ("In Review", CYCLE_END))
                 or ""
             )
-            row["closing_pr"] = pulls[0]["number"] if pulls else ""
+            row["closing_pr"] = pulls[0]["number"] if pulls else None
             if events is not None:
                 events.extend(event_rows(
                     {"id": content["id"], "number": content["number"],

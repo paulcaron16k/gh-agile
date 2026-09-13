@@ -1,0 +1,275 @@
+{
+  "_comment": [
+    "The export contract for the silver tables `gh agile export` writes.",
+    "",
+    "A CSV carries no schema, so without this every consumer guesses: `number` as",
+    "text, a duration as a float, an empty `time_to_first_review` as 0 rather than",
+    "null. This file exists so a loader can generate correct DDL without inspecting",
+    "data, and `tests/test_export_catalog.py` fails when it drifts from what the",
+    "export actually produces.",
+    "",
+    "Singer/Meltano catalog shape, because that is what the consumers already read.",
+    "",
+    "NOT `agile_catalog.json`. That name is taken: it is ExperienceFlowAI's GOLD",
+    "catalog, lives outside this repository and describes the `agile_*` tables. What",
+    "is here is silver -- GitHub's facts under GitHub's names -- and the `github_`",
+    "prefix is the reminder. See GOLD_MODEL.md.",
+    "",
+    "Conventions that apply throughout, and that a type alone cannot say:",
+    "",
+    "  Durations are an integer count of SECONDS and no column name carries a unit",
+    "  suffix. In days, cycle times reported 0.0 and a median of 0.0 was published as",
+    "  a measurement. A null duration means an endpoint is missing -- an unreviewed",
+    "  pull request has no `time_to_first_review` -- and is NOT zero.",
+    "",
+    "  Timestamps are ISO8601 UTC with a trailing Z. Absent is null.",
+    "",
+    "  Lists are joined with a SEMICOLON and typed as strings, not arrays. Promising",
+    "  an array would oblige a loader to split them, and then this file would own the",
+    "  escaping rule for a separator appearing inside a value. `labels`, `assignees`,",
+    "  `reviewers`, `sprint_starts`, `closes_issues`, `keys`, `repos`.",
+    "",
+    "  `exported_at` stamps every row of every stream with the run that produced it,",
+    "  so a loader concatenating several exports keeps their order without deriving",
+    "  it from a filename.",
+    "",
+    "REPLICATION KEYS, stated rather than guessed. The three incremental streams are",
+    "filtered by ONE watermark applied to the ISSUE's `updated_at` -- and for",
+    "`github_prs` by the pull request's `updated_at`, server-side, via `updated:>=`.",
+    "An event's `occurred_at` is NOT what the incremental window was applied to: an",
+    "old event on a recently-touched issue is re-exported, and a new event on an",
+    "untouched issue is not. Declaring `occurred_at` as the replication key would",
+    "tell a consumer something untrue, so `github_events` declares none and is",
+    "resolved on `event_hash` instead. Incremental runs deliberately overlap and",
+    "re-send rows; every stream is idempotent on its key_properties."
+  ],
+  "streams": [
+    {
+      "tap_stream_id": "github_issues",
+      "stream": "github_issues",
+      "key_properties": ["repository", "number"],
+      "metadata": [
+        {
+          "breadcrumb": [],
+          "metadata": {
+            "replication-method": "INCREMENTAL",
+            "replication-key": "updated_at",
+            "comment": "Keyed on repository AND number: a board may span repositories and both have a #12."
+          }
+        }
+      ],
+      "schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "_additionalProperties_comment": [
+          "`field_<name>` columns are the project's own fields, lower-cased with spaces",
+          "as underscores, and a project may define any of them. The five `setup`",
+          "creates are declared below with their types; anything else a project adds",
+          "arrives as an extra column, which is why this schema is open."
+        ],
+        "properties": {
+          "issue_key": {"type": "string", "description": "Jira-style, from the key: label or the profile, e.g. AGILE-93. Falls back to owner/repo#93 when no key applies."},
+          "repository": {"type": "string"},
+          "number": {"type": "integer", "description": "Per repository, shared with pull requests, never reused."},
+          "title": {"type": "string"},
+          "url": {"type": "string"},
+          "state": {"type": "string", "enum": ["OPEN", "CLOSED"]},
+          "state_reason": {"type": "string", "description": "COMPLETED, NOT_PLANNED, REOPENED, or empty. Finished and abandoned are not the same thing.", "enum": ["COMPLETED", "NOT_PLANNED", "REOPENED", ""]},
+          "labels": {"type": "string", "description": "Semicolon-joined. Carries type:, key: and sprint:."},
+          "assignees": {"type": "string", "description": "Semicolon-joined logins. Point-in-time: who has it now, not who did the work."},
+          "milestone": {"type": "string"},
+          "epic_number": {"type": ["null", "integer"], "description": "The parent issue. Null when the issue has no parent."},
+          "epic_title": {"type": "string"},
+          "sub_issues_total": {"type": "integer"},
+          "sub_issues_done": {"type": "integer", "description": "GitHub's name is `completed`; it counts CLOSED children whatever reason they closed for."},
+          "reported_by": {"type": "string", "description": "Who opened it. GitHub's author cannot be changed afterwards, so it is a stronger reporter than Jira's."},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"},
+          "closed_at": {"type": ["null", "string"], "format": "date-time"},
+          "archived": {"type": "boolean"},
+          "sprint_starts": {"type": "string", "description": "Semicolon-joined YYYY-MM-DD, oldest first: every sprint the issue was worked in. From the sprint: labels, which survive an iteration write; field_sprint does not."},
+          "sprint_closed_in": {"type": "string", "description": "The last of sprint_starts."},
+          "added_to_board_at": {"type": ["null", "string"], "format": "date-time"},
+          "started_at": {"type": ["null", "string"], "format": "date-time", "description": "First arrival at In Progress, from the issue timeline. Not derivable from project item state."},
+          "done_at": {"type": ["null", "string"], "format": "date-time"},
+          "cycle_time": {"type": ["null", "integer"], "description": "SECONDS from started_at to done_at. Null when either end is missing."},
+          "lead_time": {"type": ["null", "integer"], "description": "SECONDS from added_to_board_at to done_at."},
+          "worked_by": {"type": "string", "description": "The closing pull request's author, else whoever moved it to review or done."},
+          "closing_pr": {"type": ["null", "integer"]},
+          "field_status": {"type": "string", "description": "Project single-select: Todo, In Progress, Blocked, In Review, Done."},
+          "field_sprint": {"type": "string", "description": "The iteration's title as the project holds it NOW. Cleared board-wide by any iteration write -- believe sprint_starts where they disagree."},
+          "field_story_points": {"type": ["null", "number"], "description": "Number, not integer: half points are a real convention."},
+          "field_priority": {"type": "string", "enum": ["lowest", "low", "medium", "high", "highest", ""]},
+          "field_fr": {"type": "string", "description": "Requirement traceability, free text."},
+          "field_title": {"type": "string", "description": "GitHub's built-in Title field on the project item."},
+          "exported_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    {
+      "tap_stream_id": "github_events",
+      "stream": "github_events",
+      "key_properties": ["event_hash"],
+      "metadata": [
+        {
+          "breadcrumb": [],
+          "metadata": {
+            "replication-method": "INCREMENTAL",
+            "comment": "No replication-key, deliberately. The watermark filters the ISSUE on updated_at, so occurred_at is not the field the window was applied to. Resolve latest-wins on event_hash."
+          }
+        }
+      ],
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event_hash": {"type": "string", "description": "sha256 over issue|kind|occurred|actor|previousStatus|status|detail, or over the pull request's node ids. Stable across exports so an overlapping run overwrites rather than duplicates. Timestamps are per-second and two changes in one second are ordinary, which is why it is not issue|kind|occurred alone."},
+          "function_code": {"type": "string", "enum": ["github"]},
+          "process_type": {"type": "string", "enum": ["issues", "pull-requests"], "description": "Which object the row is about. change-request-opened appears under BOTH: once scoped to the issue a pull request closes, once to the pull request itself."},
+          "process_id": {"type": "integer", "description": "Issue or pull request number."},
+          "issue_key": {"type": "string", "description": "Empty for a pull request closing no issue."},
+          "ext_process_id": {"type": "string", "description": "GitHub node id."},
+          "project_id": {"type": "string"},
+          "event_category": {"type": "string"},
+          "event_name": {"type": "string", "description": "Named for the action, not GitHub's object, so a transform maps it without knowing what a pull request is."},
+          "occurred_at": {"type": "string", "format": "date-time"},
+          "actor_name": {"type": "string", "description": "Who did it. On a review this is the REVIEWER, which no issue event distinguishes."},
+          "ext_actor_id": {"type": "string"},
+          "state": {"type": "string", "description": "The status moved to, or a review's APPROVED / CHANGES_REQUESTED / COMMENTED / DISMISSED."},
+          "prior_state": {"type": "string"},
+          "state_changed": {"type": "boolean"},
+          "was_automated": {"type": ["null", "boolean"], "description": "Status changes only; null on every other event."},
+          "detail": {"type": "string"},
+          "exported_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    {
+      "tap_stream_id": "github_prs",
+      "stream": "github_prs",
+      "key_properties": ["repository", "number"],
+      "metadata": [
+        {
+          "breadcrumb": [],
+          "metadata": {
+            "replication-method": "INCREMENTAL",
+            "replication-key": "updated_at",
+            "comment": "The only stream GitHub filters for us: `updated:>=<watermark>` in the search query, so an incremental run never transfers a pull request nobody touched."
+          }
+        }
+      ],
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "_content_comment": "No diff hunk, no patch, no review or comment body. These rows make events and metrics, not code analysis.",
+        "properties": {
+          "repository": {"type": "string"},
+          "number": {"type": "integer"},
+          "ext_pr_id": {"type": "string"},
+          "title": {"type": "string"},
+          "url": {"type": "string"},
+          "state": {"type": "string", "enum": ["OPEN", "CLOSED", "MERGED"]},
+          "is_draft": {"type": "boolean"},
+          "authored_by": {"type": "string"},
+          "base_ref": {"type": "string"},
+          "head_ref": {"type": "string"},
+          "additions": {"type": "integer"},
+          "deletions": {"type": "integer"},
+          "changed_files": {"type": "integer"},
+          "commits": {"type": "integer"},
+          "review_decision": {"type": "string", "enum": ["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""]},
+          "reviews_total": {"type": "integer"},
+          "changes_requested_total": {"type": "integer", "description": "Review round-trips: how often it came back."},
+          "reviewers": {"type": "string", "description": "Semicolon-joined distinct logins."},
+          "reviewer_count": {"type": "integer"},
+          "closes_issues": {"type": "string", "description": "Semicolon-joined issue keys."},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"},
+          "closed_at": {"type": ["null", "string"], "format": "date-time"},
+          "merged_at": {"type": ["null", "string"], "format": "date-time"},
+          "merged_by": {"type": "string"},
+          "first_review_at": {"type": ["null", "string"], "format": "date-time"},
+          "last_review_at": {"type": ["null", "string"], "format": "date-time"},
+          "time_to_first_review": {"type": ["null", "integer"], "description": "SECONDS, created to first review. Null when never reviewed -- NOT zero."},
+          "review_latency": {"type": ["null", "integer"], "description": "SECONDS, last review to merge."},
+          "time_to_merge": {"type": ["null", "integer"], "description": "SECONDS, created to merged. Null when not merged."},
+          "exported_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    {
+      "tap_stream_id": "github_project",
+      "stream": "github_project",
+      "key_properties": ["project_id"],
+      "metadata": [
+        {
+          "breadcrumb": [],
+          "metadata": {
+            "replication-method": "FULL_TABLE",
+            "comment": "Master data: small, changes rarely, reloaded whole. A watermark over it would be a way to miss the one change that mattered."
+          }
+        }
+      ],
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {"type": "integer"},
+          "project_name": {"type": "string"},
+          "project_key": {"type": "string"},
+          "keys": {"type": "string", "description": "Semicolon-joined."},
+          "repos": {"type": "string", "description": "Semicolon-joined. A board may span repositories."},
+          "sprint_cadence": {"type": "integer", "description": "The profile's hand-authored cadence_days -- a person writes 14. The one place a day count survives, and the suffix stops at the file's edge."},
+          "sprint_start_day": {"type": "string"},
+          "exported_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    {
+      "tap_stream_id": "github_boards",
+      "stream": "github_boards",
+      "key_properties": ["project_id", "board_id"],
+      "metadata": [{"breadcrumb": [], "metadata": {"replication-method": "FULL_TABLE"}}],
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {"type": "integer"},
+          "board_id": {"type": "integer", "description": "The view number, as `board list` prints it."},
+          "board_name": {"type": "string"},
+          "board_type": {"type": "string", "enum": ["scrum", "kanban", "backlog", "roadmap", "custom"]},
+          "layout": {"type": "string", "enum": ["BOARD_LAYOUT", "TABLE_LAYOUT", "ROADMAP_LAYOUT"]},
+          "filter": {"type": "string", "description": "The view's own filter, verbatim. Empty means the board excludes nothing."},
+          "exported_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    {
+      "tap_stream_id": "github_sprints",
+      "stream": "github_sprints",
+      "key_properties": ["project_id", "sprint_name"],
+      "metadata": [
+        {
+          "breadcrumb": [],
+          "metadata": {
+            "replication-method": "FULL_TABLE",
+            "comment": "Iterations carry no stable id: any configuration write re-mints every one of them, so a sprint is identified by name and date here rather than by id."
+          }
+        }
+      ],
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {"type": "integer"},
+          "sprint_name": {"type": "string"},
+          "start_date": {"type": "string", "format": "date"},
+          "end_date": {"type": "string", "format": "date"},
+          "duration": {"type": "integer", "description": "DAYS, and the exception that proves the rule: it is GitHub's own field on the iteration, reproduced verbatim rather than converted."},
+          "state": {"type": "string", "enum": ["active", "completed"]},
+          "exported_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    }
+  ]
+}
