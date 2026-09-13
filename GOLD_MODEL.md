@@ -176,6 +176,17 @@ Two rules follow, and they shape any tool that writes to a board:
 
 Found by running out, not by reading the code.
 
+## The silver contract
+
+`github_catalog.json`, in this repository, describes what the export writes: six streams, every column
+typed and nullable-or-not, `key_properties`, and the replication method per stream. It is the input a
+silver→gold transform is entitled to assume, and it is checked against the real export rather than
+maintained by hand alone.
+
+**It is not `agile_catalog.json`.** That is the Gold catalog described below, it lives outside this
+repository, and it describes the `agile_*` tables. The `github_` prefix is the reminder that everything
+here is silver.
+
 ## Consequences for the exporter
 
 1. **Two queries, joined on the issue node ID.** Current state from the project,
