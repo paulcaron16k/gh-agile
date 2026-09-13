@@ -5086,6 +5086,25 @@ def apply_defaults(args) -> None:
             repo = repo_for_key(config, key)
             if not repo:
                 sys.exit(f"no repository for key {key!r} in the profile")
+        elif args.command == "sync":
+            # **`sync` is the exception, and the exception is the feature.** Every
+            # other command here acts on one issue in one repository, so the clone
+            # you are standing in is the right guess. `sync` fills a board, and a
+            # board may span repositories: `keys` is an ordered list for exactly
+            # that, `issue_key` puts the key on the repository rather than the
+            # project because a project can span them, and a scrum board slices
+            # one team's work out of the shared board with `label:key:...`.
+            #
+            # Filling that in from the working directory made the documented
+            # default -- every repository in the profile -- unreachable, so a team
+            # responsible for several repositories could never get the other
+            # repositories' issues onto their board. `sync` is the only way an
+            # issue arrives on one at all, a project being a collection rather
+            # than a filter, so there was no other route either.
+            #
+            # Left as None. `cmd_sync` sweeps the profile's repositories when it
+            # is, and `--repo` or `--key` still narrows to one.
+            repo = None
         else:
             repo = current_repo()
             if not repo:

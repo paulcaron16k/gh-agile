@@ -562,6 +562,23 @@ gh agile sync --adopt                   # and give what it adds the convention
   added 1, already present 10, across 2 repo(s)
 ```
 
+**`across 2 repo(s)` is the point, not a detail.** One team responsible for
+several repositories sees all of their work on one scrum board and one kanban
+board, and `sync` is the only way an issue gets onto a board at all — a project
+is a collection, not a filter. So with no `--repo`, it sweeps **every repository
+in the profile keys**, and the summary says how many it looked at.
+
+That is what the rest of the design already assumes. `keys` is an ordered *list*;
+`issue_key` puts the key on the repository rather than the project, because a
+project may span repositories and `KEY-12` would be ambiguous the moment a second
+one joined; and a scrum board slices one team's work out of the shared board with
+`label:key:ZMBNI`. Watch the count: a profile listing two repositories that
+reports `across 1 repo(s)` is filling half a board.
+
+`--repo` narrows to one, and `--key ZMBNI` narrows to that key's repository —
+both more explicit than the clone you happen to be standing in, which is why
+neither is guessed for this command.
+
 ### `--adopt`: upgrading an issue created outside the tool
 
 Being on the board is not the same as following the convention. An issue opened
