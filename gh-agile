@@ -1006,6 +1006,21 @@ KEY_LABEL = "key:"
 #: because dates sort.
 SPRINT_LABEL = "sprint:"
 
+#: The initiative an issue belongs to, as `initiative:<slug>`.
+#:
+#: A colon, like every other label this tool writes -- `type:`, `key:`, `sprint:`
+#: -- because the parsers split on the first one and `initiative-large-new-feature`
+#: has no unambiguous boundary between the prefix and the slug.
+#:
+#: A readable slug rather than an issue reference. The sprint precedent argues the
+#: other way -- `sprint:2026-08-31` is dated because a title is editable and a date
+#: is identity -- but initiatives are few and long-lived, and a card reading
+#: `initiative:AGILE-91` tells a person nothing. The slug is minted from the
+#: initiative's title and carried on the initiative issue itself, so that issue
+#: stays the single authority for what the slug means and a collision is
+#: detectable rather than silent.
+INITIATIVE_LABEL = "initiative:"
+
 
 def key_problem(key: str) -> str | None:
     """Jira's own rules for a project key, and one of ours.
@@ -1219,6 +1234,7 @@ DEFAULT_SPEC = {
         {"name": "Status", "type": "SINGLE_SELECT", "options": list(STATUSES)},
     ],
     "labels": [
+        {"name": "type:initiative", "color": "1d76db"},
         {"name": "type:epic", "color": "6f42c1"},
         {"name": "type:story", "color": "0e8a16"},
         {"name": "type:bug", "color": "d73a4a"},
@@ -1658,7 +1674,7 @@ def title_prefix_mode(config: dict) -> str:
 
 #: The three values a `type:` label may carry. One list, because
 #: `strip_title_prefix` has to recognise exactly what `prefixed_title` writes.
-ISSUE_TYPES = ("epic", "story", "bug")
+ISSUE_TYPES = ("initiative", "epic", "story", "bug")
 
 
 def prefixed_title(mode: str, key: str, number: int, kind: str, title: str) -> str:
@@ -1933,6 +1949,119 @@ def require_key_for_prefix(config: dict, key) -> None:
         )
 
 
+def initiative_slug(title: str) -> str:
+    """`Large new feature` -> `large-new-feature`. The label's readable half.
+
+    Deliberately the same shape as `slug()`, which names export files, but kept
+    separate: a filename may be regenerated at will and this one goes onto every
+    issue in a tree. Changing how it is derived would orphan every label already
+    written, so it is a decision rather than a convenience.
+    """
+    kept = [c.lower() if c.isalnum() else "-" for c in title]
+    return "-".join(part for part in "".join(kept).split("-") if part) or "initiative"
+
+
+def find_initiative(config: dict, slug: str) -> tuple[str, int] | None:
+    """The issue that owns `slug`, or `None`. Searched across the profile's repos.
+
+    An initiative may span repositories -- that is the case it exists for -- so
+    this cannot be scoped to the one clone the caller happens to be standing in.
+    """
+    for repo in sorted({e["repo"] for e in profile_keys(config) if e.get("repo")}):
+        found = json.loads(gh([
+            "issue", "list", "--repo", repo, "--state", "all", "--limit", "200",
+            "--label", f"{INITIATIVE_LABEL}{slug}", "--label", "type:initiative",
+            "--json", "number",
+        ]))
+        if found:
+            return repo, found[0]["number"]
+    return None
+
+
+def cmd_initiative(args) -> int:
+    """Create an initiative: the plan and WBS for a large new feature.
+
+    **A level above epic, which Jira charges for.** Its standard hierarchy tops
+    out at Epic; levels above come from Advanced Roadmaps. GitHub's sub-issues
+    nest -- measured three deep, and across repositories, with roll-up counting
+    the children in both -- so the level costs nothing here but a label and a
+    command.
+
+    The issue is the authority. It carries the plan in `## Intent` and what
+    finished looks like in `## Acceptance`, it can be closed, and it rolls up --
+    which is the part a label alone cannot do, and the reason free-tier Jira
+    teams emulating this with a label have nowhere to write the plan down.
+    """
+    require_sprint_config(args._config, "creating an initiative")
+    require_key_for_prefix(args._config, getattr(args, "key", None))
+    slug = args.slug or initiative_slug(args.title)
+    # Refused rather than shared. Two initiatives answering to one slug would put
+    # both trees behind one board filter and look entirely correct -- the same
+    # failure an unreadable filter term is refused to avoid.
+    existing = find_initiative(args._config, slug)
+    if existing:
+        sys.exit(
+            f"initiative slug {slug!r} is already taken by {existing[0]}#{existing[1]}.\n"
+            f"  Two initiatives answering to one slug put both trees behind one board "
+            f"filter.\n"
+            f"  Pass --slug to choose another."
+        )
+    labels = ["type:initiative", f"{INITIATIVE_LABEL}{slug}"] + (
+        [f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
+    ensure_labels(args.repo, labels)
+    number, _node = create_issue(
+        args.repo, args.title,
+        BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
+        labels,
+    )
+    title = apply_title_prefix(
+        args._config, args.repo, number, getattr(args, "key", None), "initiative", args.title
+    )
+    url = f"https://github.com/{args.repo}/issues/{number}"
+    # Named before the board is touched, for the same reason as `epic`: the
+    # project write is a separate grant and the issue already exists.
+    print(f"  initiative #{number}: {title}")
+    print(f"  {INITIATIVE_LABEL}{slug}")
+    print(f"  {url}")
+    with board_write_reported(number, url, args.project):
+        item = add_to_project(args.owner, args.project, url)
+        set_field(args.owner, args.project, item, "Status", "Todo")
+    return 0
+
+
+def attach_to_initiative(args, repo: str, number: int, node: str) -> None:
+    """Make this issue a sub-issue of the named initiative, and take its label.
+
+    Both, because they answer different questions. The **edge** is the truth and
+    rolls up; the **label** is what a board filter can see, since a filter cannot
+    traverse the hierarchy -- `FILTER_TERMS` evaluates one item at a time and
+    GitHub's own view filters reach at most one level.
+    """
+    ref = args.initiative
+    found = find_initiative(args._config, ref)
+    if found:
+        parent_repo, parent_number = found
+    else:
+        parent_repo, parent_number = parse_issue_ref(ref, args._config, repo)
+    parent = json.loads(gh(["issue", "view", str(parent_number), "--repo", parent_repo,
+                            "--json", "id,labels"]))
+    slug = next((lb["name"][len(INITIATIVE_LABEL):] for lb in parent["labels"]
+                 if lb["name"].startswith(INITIATIVE_LABEL)), None)
+    if not slug:
+        sys.exit(f"{parent_repo}#{parent_number} carries no {INITIATIVE_LABEL} label, so it "
+                 f"is not an initiative.\n  Create one with `gh agile initiative`.")
+    graphql(
+        "mutation($parent: ID!, $child: ID!) { addSubIssue(input: "
+        "{issueId: $parent, subIssueId: $child}) { subIssue { number } } }",
+        parent=parent["id"], child=node,
+    )
+    ensure_labels(repo, [f"{INITIATIVE_LABEL}{slug}"])
+    gh(["issue", "edit", str(number), "--repo", repo,
+        "--add-label", f"{INITIATIVE_LABEL}{slug}"])
+    print(f"  #{number} under initiative {parent_repo}#{parent_number}  "
+          f"({INITIATIVE_LABEL}{slug})")
+
+
 def cmd_epic(args) -> int:
     require_sprint_config(args._config, "creating an epic")
     require_key_for_prefix(args._config, getattr(args, "key", None))
@@ -1954,6 +2083,8 @@ def cmd_epic(args) -> int:
     # permanent orphan nobody knew to close.
     print(f"  epic #{number}: {title}")
     print(f"  {url}")
+    if getattr(args, "initiative", None):
+        attach_to_initiative(args, args.repo, number, _node)
     with board_write_reported(number, url, args.project):
         item = add_to_project(args.owner, args.project, url)
         set_field(args.owner, args.project, item, "Status", "Todo")
@@ -4764,12 +4895,47 @@ def main() -> int:
     setup.add_argument("--repo", help="repository to create the type: labels in")
     setup.set_defaults(func=cmd_setup)
 
+    initiative = sub.add_parser(
+        "initiative", help="create an initiative: the plan and WBS for a large feature",
+        epilog=field_help([
+            ("title", "text", "required", "the initiative; positional"),
+            ("--slug", "text", "optional", "the label's readable half; default is the title, "
+                                           "slugified"),
+            ("--repo", "owner/name", "optional", "where the issue is filed"),
+            ("--key", "KEY", "optional", "which key to label it with"),
+            ("--intent", "text", "optional", "the plan: what changes for whom, and why"),
+            ("--acceptance", "text", "optional", "what finished looks like"),
+        ]) + """
+
+what an initiative is:
+  A level above epic -- the set of epics a large new feature requires, with
+  somewhere to write the plan and the WBS down. Jira's standard hierarchy stops
+  at Epic and charges for the levels above it; GitHub's sub-issues nest, and
+  across repositories, so the level costs a label and a command here.
+
+  The issue is the authority: it holds the plan, it closes, and it rolls up.
+  Epics join it with `gh agile epic ... --initiative <slug|KEY-n>`, which makes
+  the sub-issue edge *and* applies `initiative:<slug>` -- both, because a board
+  filter cannot traverse the hierarchy and the label is what it can see.
+
+  Optional, always. An epic under no initiative is ordinary, not a finding.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    initiative.add_argument("title")
+    initiative.add_argument("--slug", help="override the slug derived from the title")
+    initiative.add_argument("--repo")
+    initiative.add_argument("--key", help="which key to label the issue with")
+    initiative.add_argument("--intent")
+    initiative.add_argument("--acceptance")
+    initiative.set_defaults(func=cmd_initiative)
+
     epic = sub.add_parser("epic", help="create an epic issue on the board",
         epilog=field_help(EPIC_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     epic.add_argument("title")
     epic.add_argument("--repo")
     epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
+    epic.add_argument("--initiative",
+                      help="attach to an initiative, by its slug or a KEY-NUMBER reference")
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
     epic.set_defaults(func=cmd_epic)
@@ -5174,7 +5340,8 @@ def apply_defaults(args) -> None:
     # it declares a --repo flag. `set --issue 26` had none to attach to, so the
     # attribute never existed and a bare issue number could not be resolved even
     # from inside the repository it belongs to.
-    NEEDS_REPO = {"epic", "story", "set", "move", "sync", "key", "project", "fix"}
+    NEEDS_REPO = {"initiative", "epic", "story", "set", "move", "sync", "key",
+                  "project", "fix"}
     if repo is None and args.command in NEEDS_REPO:
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)
@@ -5209,7 +5376,7 @@ def apply_defaults(args) -> None:
         args.repo = repo
 
     # The key an issue is created with: explicit, else the first for this repo.
-    if hasattr(args, "key") and args.command in ("epic", "story"):
+    if hasattr(args, "key") and args.command in ("initiative", "epic", "story"):
         available = keys_for_repo(config, args.repo) if args.repo else []
         if key:
             if available and key not in available:
