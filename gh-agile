@@ -5732,6 +5732,67 @@ def resolve_owner(args, config: dict) -> None:
         )
 
 
+#: The commands that legitimately run with no project number, and why each one
+#: does. Everything else is refused rather than allowed to carry a `None` into a
+#: GraphQL variable -- including commands added later, which is why this is the
+#: exemption list and not a requirement list.
+#:
+#:   project     the bootstrap. `project create` is what *writes* `project.number`
+#:               to the profile, and `title-prefix`, `owner` and `sprint-template`
+#:               only ever touch the profile. Demanding a number here would mean
+#:               needing a board before you could record the board.
+#:   key         lists or records a key in the profile. It reaches the project
+#:               only to write `shortDescription`, already guarded by `if
+#:               args.project`.
+#:   self-test   stands up its own scratch project, and is exempt from the
+#:               `--project` defaulting above for the same reason.
+PROJECTLESS = {"project", "key", "self-test"}
+
+
+def missing_project_message(explicit: str | None) -> str:
+    """No board to act on: say which of the two reasons it is.
+
+    These were one sentence, and it was about the wrong thing entirely:
+
+        no project None found for 'paulcaron16k' as either a user or an organization
+
+    It named a project the caller never named, blamed the lookup when the profile
+    was what was missing, and leaked a Python `None` into user-facing output --
+    the tell that nothing had checked. Measured 2026-09-14; see #111.
+
+    The sibling case in this same function already did it properly -- *"not inside
+    a GitHub repository, and no --repo given"* -- so this is that shape: what is
+    missing, and the ways out.
+    """
+    found = find_config(explicit)
+    if found is not None:
+        return (
+            f"{found} names no project.number, and no --project was given.\n"
+            f"  Create the board and record it in one step:\n\n"
+            f"    gh agile project create --title \"Your board\"\n\n"
+            f"  Or name an existing one outright:  --project <n> --owner <login>"
+        )
+    searched = "\n".join(f"      {c}" for c in CONFIG_PATHS)
+    return (
+        f"no profile found, and no --project was given, so there is no board to act "
+        f"on.\n\n"
+        f"  Searched, relative to the working directory:\n{searched}\n"
+        f"  in {pathlib.Path.cwd()}\n\n"
+        f"  The profile supplies --project, --owner and the repositories to sync, and it "
+        f"is\n  found relative to the working directory, not next to the installed "
+        f"extension.\n  `gh extension install` clones this repository, profile included, "
+        f"into gh's\n  extension directory, and that copy is deliberately not read: it "
+        f"configures\n  whichever repository was installed, so reading it would aim these "
+        f"commands at\n  somebody else's board.\n\n"
+        f"  Any one of:\n"
+        f"    cd into a clone whose {CONFIG_PATH} names your project, or one carrying a\n"
+        f"      config_from pointer to it\n"
+        f"    pass --config path/to/agile.json\n"
+        f"    name the board outright: --project <n> --owner <login>\n"
+        f"    or, for a repository that has no board yet: gh agile project create"
+    )
+
+
 def apply_defaults(args) -> None:
     """Fill --project, --repo and --key from the profile and the working directory.
 
@@ -5767,6 +5828,13 @@ def apply_defaults(args) -> None:
             f"  To work on #{args.project}, change to that project's main repository "
             f"(or a supporting repo carrying its config_from pointer)."
         )
+
+    # Refused here rather than carried into a GraphQL variable. `--project` has no
+    # argparse default, so "not given and not in the profile" left `args.project`
+    # as None all the way to the query, where it surfaced as a project that could
+    # not be found -- see `missing_project_message`.
+    if args.project is None and args.command not in PROJECTLESS:
+        sys.exit(missing_project_message(getattr(args, "config", None)))
 
     key = getattr(args, "key", None)
     repo = getattr(args, "repo", None)
