@@ -3125,6 +3125,32 @@ def item_matches(item: dict, terms: list[tuple[bool, str, str]],
     return True
 
 
+def resolve_filter_initiatives(config: dict, text: str | None, repo: str | None) -> str | None:
+    """Rewrite `initiative:<ref>` to `initiative:<slug>` in a filter the caller typed.
+
+    `--initiative` on `epic` takes an issue number, a keyed reference or a slug,
+    and the filter term took only the slug -- so `--filter initiative:35` matched
+    the *label* `initiative:35`, which nothing carries, and rendered an empty
+    board. **Silently**: a board showing nothing looks exactly like an initiative
+    with nothing in it, which is the shape of wrong answer this tool refuses
+    unknown filter terms to avoid.
+
+    Only a reference is resolved, so a slug costs no API call. `looks_like_issue_ref`
+    is what tells them apart, and it requires the key to be one the profile knows.
+    """
+    if not text:
+        return text
+    out = []
+    for token in text.split():
+        negated = token.startswith("-")
+        bare = token[1:] if negated else token
+        key, sep, value = bare.partition(":")
+        if sep and key.casefold() == "initiative" and looks_like_issue_ref(value, config):
+            bare = f"{key}:{initiative_target(config, value, repo)['slug']}"
+        out.append(f"-{bare}" if negated else bare)
+    return " ".join(out)
+
+
 def github_filter(text: str) -> str:
     """A filter GitHub's own view can evaluate, from one this tool understands.
 
@@ -3713,7 +3739,10 @@ def cmd_board_show(args) -> int:
     view = find_view(args.owner, args.project, args.name)
     kind = board_kind(view, args._config)
     own = view.get("filter") or ""
-    combined = " ".join(c for c in (own, args.filter) if c)
+    # Only what the caller typed: the view's own filter already carries the
+    # expanded `label:initiative:<slug>` form, written by `board create`.
+    extra = resolve_filter_initiatives(args._config, args.filter, current_repo())
+    combined = " ".join(c for c in (own, extra) if c)
     terms = parse_filter(combined)
 
     if not terms:
@@ -3857,7 +3886,8 @@ def cmd_board(args) -> int:
     if args.board_command == "show":
         return cmd_board_show(args)
 
-    result = make_board(args.owner, args.project, args.name, args.type, args.filter)
+    result = make_board(args.owner, args.project, args.name, args.type,
+                        resolve_filter_initiatives(args._config, args.filter, current_repo()))
     print(f"  {result['action']} #{result['number']}: {result['name']} "
           f"[{result['type']}]  filter: {result['filter']}")
 

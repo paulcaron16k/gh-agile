@@ -650,3 +650,60 @@ class TestGithubFilter:
         monkeypatch.setattr(tool, "graphql", fake_graphql)
         tool.make_board("o", 4, "Big thing", "scrum", "initiative:big-thing")
         assert written["filter"] == "sprint:@current label:initiative:big-thing"
+
+
+class TestResolvingReferencesInAFilter:
+    """`--filter initiative:35` and `--filter initiative:TEST-35`, not just the slug.
+
+    `--initiative` on `epic` takes all three forms; the filter term took only the
+    slug, so `initiative:35` matched the *label* `initiative:35`, which nothing
+    carries. Measured before the fix: `2 of 10 items` for the slug and `0 of 10`
+    for either reference -- **silently**, because a board showing nothing looks
+    exactly like an initiative with nothing in it. That is the shape of wrong
+    answer this tool refuses unknown filter terms to avoid.
+    """
+
+    @pytest.fixture
+    def resolve(self, monkeypatch, tool):
+        looked_up = []
+
+        def fake_target(config, ref, repo):
+            looked_up.append(ref)
+            return {"repo": "o/r", "number": 35, "id": "I_35", "slug": "big-thing"}
+
+        monkeypatch.setattr(tool, "initiative_target", fake_target)
+        config = {"keys": [{"key": "TEST", "repo": "o/r"}]}
+
+        def go(text):
+            looked_up.clear()
+            return tool.resolve_filter_initiatives(config, text, "o/r"), looked_up
+        return go
+
+    def test_a_bare_number_resolves_to_the_slug(self, tool, resolve):
+        assert resolve("initiative:35")[0] == "initiative:big-thing"
+
+    def test_a_keyed_reference_resolves_too(self, tool, resolve):
+        assert resolve("initiative:TEST-35")[0] == "initiative:big-thing"
+
+    def test_a_slug_is_left_alone_and_costs_no_lookup(self, tool, resolve):
+        text, looked_up = resolve("initiative:big-thing")
+        assert text == "initiative:big-thing" and looked_up == []
+
+    def test_negation_survives(self, tool, resolve):
+        assert resolve("-initiative:35")[0] == "-initiative:big-thing"
+
+    def test_other_terms_are_untouched(self, tool, resolve):
+        text, looked_up = resolve("-status:Done label:key:AGILE no:sprint")
+        assert text == "-status:Done label:key:AGILE no:sprint" and looked_up == []
+
+    def test_it_resolves_only_the_initiative_term(self, tool, resolve):
+        assert resolve("sprint:@current initiative:35")[0] == \
+            "sprint:@current initiative:big-thing"
+
+    def test_an_empty_filter_stays_empty(self, tool, resolve):
+        assert resolve(None)[0] is None and resolve("")[0] == ""
+
+    def test_a_slug_that_looks_keyed_is_still_a_slug(self, tool, resolve):
+        """`pyiceberg-0-12` parses as key `pyiceberg-0`, which no profile knows."""
+        text, looked_up = resolve("initiative:pyiceberg-0-12")
+        assert text == "initiative:pyiceberg-0-12" and looked_up == []

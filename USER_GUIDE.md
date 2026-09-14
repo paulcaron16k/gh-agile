@@ -1413,6 +1413,20 @@ gh agile board show "Engineering: all work" --filter initiative:large-new-featur
 gh agile board create --name "Large new feature" --type scrum --filter initiative:large-new-feature --save
 ```
 
+**It takes the same three forms `--initiative` does** — the slug, the issue
+number, or a keyed reference:
+
+```bash
+gh agile board show "Engineering: all work" --filter initiative:large-new-feature
+gh agile board show "Engineering: all work" --filter initiative:91
+gh agile board show "Engineering: all work" --filter initiative:AGILE-91
+```
+
+A reference is resolved to its slug before the filter is evaluated, and the
+board's `filter:` line shows the **resolved** form, so it says what it actually
+filtered on rather than what you typed. Only a reference costs a lookup; a slug
+costs none.
+
 It works **because** `initiative reconcile` puts the label on every issue in the
 tree. A filter cannot traverse the hierarchy — it judges one item at a time, and
 GitHub's own view filters reach at most one level — so the label is the only thing
