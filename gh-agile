@@ -3368,6 +3368,38 @@ def sprint_covering(spans: list[tuple], when):
 ABANDONED = "NOT_PLANNED"
 
 
+#: The levels that span sprints and must never be placed in one.
+#:
+#: A story belongs to the sprint it is worked in. An epic does not: it is the
+#: container for work that runs across several, and an initiative sits a level
+#: above that. The `Sprint` field holds exactly one value, so putting either in a
+#: sprint does not say "started here" -- it says "committed to this iteration",
+#: which is false the moment the next one begins.
+SPANNING_TYPES = ("initiative", "epic")
+
+
+def spans_sprints(labels) -> str | None:
+    """The level's name if this issue is one that spans sprints, else None.
+
+    Initiative first: an issue carrying both labels is the higher of the two, and
+    the name is only used to say why the sprint was skipped.
+    """
+    return next((name for name in SPANNING_TYPES if f"type:{name}" in set(labels)), None)
+
+
+def issue_labels(repo: str, issue: int) -> list[str]:
+    """The issue's label names.
+
+    Its own call because the board read is deliberately lean:
+    `LEAN_ITEM_SELECTION` carries an item's id, number, repository and type and
+    no labels, and widening it would charge every board-wide read for something
+    two transitions need. Asked only where it is needed -- see `cmd_move`.
+    """
+    data = json.loads(gh(["issue", "view", str(issue), "--repo", repo,
+                          "--json", "labels"]))
+    return [node["name"] for node in data.get("labels") or []]
+
+
 def record_sprint_label(args, repo: str, issue_number: int, item_id: str,
                         *, not_planned: bool = False) -> str | None:
     """Stamp the issue with the sprint it is in, as `sprint:YYYY-MM-DD`.
@@ -4452,12 +4484,34 @@ def cmd_move(args) -> int:
     set_field(args.owner, args.project, item["id"], "Status", args.status)
     print(f"  #{args.issue} Status = {args.status}")
 
+    # **An epic or an initiative is never put in a sprint.** The two blocks below
+    # keyed off the status alone, so starting an epic assigned it the current
+    # sprint and stamped a `sprint:` label exactly as if it were a story. Both
+    # are wrong for a level that spans sprints, and wrong in the way that is
+    # hardest to notice: the `Sprint` field is filled only when empty, so the
+    # epic stays pinned to the iteration it happened to start in -- on the scrum
+    # board for one sprint, silently gone the next while the work continues. It
+    # also writes a false record, since a `sprint:` label asserts the sprint the
+    # work was *worked in* and one label cannot say "all of them".
+    #
+    # Looked up only on the two transitions that touch the sprint, so every other
+    # status change costs nothing. Status and the assignee claim are unaffected:
+    # an epic still starts, it simply does not join an iteration.
+    spanning = None
+    if same_status(args.status, CYCLE_START) or same_status(args.status, CYCLE_END):
+        spanning = spans_sprints(issue_labels(repo, args.issue))
+        if spanning:
+            # Said out loud rather than skipped quietly: an epic that starts with
+            # no sprint line looks like the sprint write failed.
+            print(f"  #{args.issue} is an {spanning}, which spans sprints; "
+                  f"leaving Sprint and {SPRINT_LABEL} labels alone")
+
     # Starting work puts the item in the current sprint, if it is not already in
     # one. Anything else means a board where in-progress work sits outside every
     # sprint, and a sprint report that quietly omits it. A warning rather than a
     # refusal when no sprint is active: declining to start work because nobody
     # created a sprint would be the tool making a process decision.
-    if same_status(args.status, CYCLE_START):
+    if same_status(args.status, CYCLE_START) and not spanning:
         # Same reason: item-list carries no custom field values, so the sprint
         # has to come from the GraphQL side.
         assigned = sprint_assignments(args.owner, args.project)
@@ -4505,7 +4559,7 @@ def cmd_move(args) -> int:
         # the output has to carry both facts.
         print(claim_issue(repo, args.issue, wanted, explicit=given))
 
-    if same_status(args.status, CYCLE_END):
+    if same_status(args.status, CYCLE_END) and not spanning:
         # Again at the end: an item carried across a boundary finishes in a
         # different sprint than it started, and the closing one is what a
         # velocity figure is built from. Both labels survive; the latest date is
