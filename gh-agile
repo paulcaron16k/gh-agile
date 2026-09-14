@@ -253,7 +253,14 @@ FULL_ITEM_SELECTION = """
               labels(first: 20) { nodes { name } }
               assignees(first: 10) { nodes { login } }
               milestone { title }
-              parent { number title }
+              # Repository and labels as well as the number: a parent's number
+              # alone is ambiguous the moment a board spans repositories, and its
+              # labels are the only way to know which *level* the parent is.
+              parent {
+                number title
+                repository { nameWithOwner }
+                labels(first: 20) { nodes { name } }
+              }
               subIssuesSummary { total completed }
               closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
                 nodes { number createdAt merged author { login } }
@@ -1120,6 +1127,48 @@ def write_state(path: str, key: str, watermark: str, exported: int) -> None:
     pathlib.Path(path).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
+def parent_columns(parent: dict | None, keys: dict) -> dict:
+    """The parent edge, named for what it is at every level -- and the epic, at the
+    level where "epic" is true.
+
+    **`epic_number` was the parent's number whatever the parent was.** That was
+    harmless while the hierarchy had one edge, and wrong the moment an epic could
+    sit under an initiative: an epic's `epic_number` would have held an
+    initiative, with nothing saying so. `parent_*` is the edge; `epic_*` is
+    populated only when the parent really is an epic, so the column means what its
+    name says.
+
+    **`parent_key` and `epic_key` are strings, and that is the point.** GitHub
+    numbers issues per repository, so a board spanning repositories has two `#12`
+    and `github_issues` is keyed on `(repository, number)` for exactly that
+    reason -- then the old `epic_number` handed out a parent reference with no
+    repository beside it, and a consumer joining it back to `number` could match
+    the wrong repository's issue silently. A key is unambiguous, matches
+    `issue_key` exactly so the self-join is one column, and absorbs the
+    `owner/repo#93` form `issue_key` already falls back to, which an integer
+    cannot hold at all.
+
+    `epic_number` is kept, meaning what its name says. No row changes today: every
+    parent on the board is an epic, because until now nothing else could be one.
+    """
+    if not parent:
+        return {"parent_key": "", "parent_title": "", "parent_type": "",
+                "epic_number": None, "epic_title": "", "epic_key": ""}
+    labels = [n["name"] for n in (parent.get("labels") or {}).get("nodes") or []]
+    kind = next((lb[len("type:"):] for lb in labels if lb.startswith("type:")), "")
+    key = key_for_issue(parent["number"],
+                        (parent.get("repository") or {}).get("nameWithOwner"), labels, keys)
+    is_epic = kind == "epic"
+    return {
+        "parent_key": key,
+        "parent_title": parent.get("title") or "",
+        "parent_type": kind,
+        "epic_number": parent["number"] if is_epic else None,
+        "epic_title": (parent.get("title") or "") if is_epic else "",
+        "epic_key": key if is_epic else "",
+    }
+
+
 def rows(login: str, number: int, *, with_history: bool, since: str | None = None,
          events: list[dict] | None = None) -> list[dict]:
     config = read_config()
@@ -1159,8 +1208,15 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             # an integer column makes the column's type a union of integer and
             # string, which a loader cannot turn into a DDL type -- and CSV is
             # unchanged either way, since `csv.DictWriter` writes both as empty.
-            "epic_number": (content.get("parent") or {}).get("number"),
-            "epic_title": (content.get("parent") or {}).get("title") or "",
+            **parent_columns(content.get("parent"), keys),
+            # The initiative this issue belongs to, read from its own
+            # `initiative:` label rather than by walking up the tree -- which is
+            # what that label is for, and what `initiative reconcile` maintains.
+            # Join it to the `github_issues` row whose `type:` is initiative and
+            # whose slug matches.
+            "initiative_slug": next(
+                (lb[len(INITIATIVE_LABEL):] for lb in labels
+                 if lb.startswith(INITIATIVE_LABEL)), ""),
             "sub_issues_total": (content.get("subIssuesSummary") or {}).get("total") or 0,
             "sub_issues_done": (content.get("subIssuesSummary") or {}).get("completed") or 0,
             # GitHub's `author` is who opened the issue and cannot be changed
