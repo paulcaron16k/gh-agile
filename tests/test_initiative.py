@@ -123,7 +123,7 @@ class TestCreating:
                                       _config=CONFIG)
             for name, value in flags.items():
                 setattr(args, name, value)
-            tool.cmd_initiative(args)
+            tool.create_initiative(args)
             return capsys.readouterr().out
         return go
 
@@ -286,3 +286,104 @@ class TestNothingIsCreatedBeforeTheInitiativeResolves:
         calls.state["view"] = {"id": "I_p", "labels": [
             {"name": "type:initiative"}, {"name": "initiative:big-thing"}]}
         assert len(epic("A-3")) == 1
+
+
+def node(number, repo="o/one", labels=(), children=()):
+    return {"number": number, "repository": {"nameWithOwner": repo},
+            "labels": {"nodes": [{"name": n} for n in labels]},
+            "subIssues": {"nodes": list(children)}}
+
+
+class TestTheTree:
+    @pytest.fixture
+    def tree(self, monkeypatch, tool):
+        def go(root):
+            monkeypatch.setattr(tool, "graphql", lambda q, **v: {
+                "data": {"repository": {"issue": root}}})
+            return tool.initiative_tree({"repo": "o/one", "number": 1, "slug": "big"})
+        return go
+
+    def test_it_walks_three_levels(self, tool, tree):
+        found = tree(node(1, children=[node(2, children=[node(3)])]))
+        assert [i["number"] for i in found] == [1, 2, 3]
+
+    def test_the_initiative_carries_its_own_label(self, tool, tree):
+        """So it appears in a board filtered to itself, rather than being the one
+        thing missing from its own view."""
+        assert tree(node(1))[0]["number"] == 1
+
+    def test_it_crosses_repositories(self, tool, tree):
+        found = tree(node(1, children=[node(9, repo="o/two")]))
+        assert {i["repo"] for i in found} == {"o/one", "o/two"}
+
+    def test_an_empty_initiative_is_just_itself(self, tool, tree):
+        assert len(tree(node(1))) == 1
+
+    def test_a_missing_issue_is_no_tree(self, tool, tree):
+        assert tree(None) == []
+
+
+class TestReconcile:
+    @pytest.fixture
+    def reconcile(self, monkeypatch, tool, calls, capsys):
+        def go(root, *, labelled=(), dry_run=False):
+            import argparse
+            monkeypatch.setattr(tool, "graphql", lambda q, **v: {
+                "data": {"repository": {"issue": root}}})
+            for repo, number in labelled:
+                key = (repo, "initiative:big")
+                calls.state["listed"].setdefault(key, []).append({"number": number})
+            args = argparse.Namespace(_config=CONFIG, dry_run=dry_run)
+            calls.clear()
+            tool.reconcile_initiative(args, {"repo": "o/one", "number": 1, "slug": "big"})
+            return calls, capsys.readouterr().out
+        return go
+
+    def edits(self, calls):
+        return [(c[2], c[c.index("--repo") + 1],
+                 "add" if "--add-label" in c else "remove")
+                for c in calls if c[:2] == ["issue", "edit"]]
+
+    def test_it_labels_what_the_tree_holds(self, tool, reconcile):
+        calls, out = reconcile(node(1, children=[node(2, children=[node(3)])]))
+        assert self.edits(calls) == [("1", "o/one", "add"), ("2", "o/one", "add"),
+                                     ("3", "o/one", "add")]
+        assert "changed 3" in out
+
+    def test_it_labels_across_repositories(self, tool, reconcile):
+        """An initiative in one repository with epics in another must label both,
+        which is why this cannot lean on anything repository-scoped."""
+        calls, _ = reconcile(node(1, children=[node(9, repo="o/two")]))
+        assert ("9", "o/two", "add") in self.edits(calls)
+
+    def test_a_second_run_changes_nothing(self, tool, reconcile):
+        calls, out = reconcile(node(1, children=[node(2)]),
+                               labelled=[("o/one", 1), ("o/one", 2)])
+        assert self.edits(calls) == []
+        assert "changed 0, already correct 2" in out
+
+    def test_a_detached_subtree_loses_the_label(self, tool, reconcile):
+        """The half that is easy to forget. A stale label is worse than a missing
+        one: the board shows work no longer in the initiative, and it looks
+        correct."""
+        calls, out = reconcile(node(1), labelled=[("o/one", 1), ("o/one", 2),
+                                                  ("o/one", 3)])
+        assert sorted(self.edits(calls)) == [("2", "o/one", "remove"),
+                                             ("3", "o/one", "remove")]
+        assert "no longer in the tree" in out
+
+    def test_it_removes_across_repositories_too(self, tool, reconcile):
+        calls, _ = reconcile(node(1), labelled=[("o/one", 1), ("o/two", 9)])
+        assert ("9", "o/two", "remove") in self.edits(calls)
+
+    def test_a_dry_run_writes_nothing(self, tool, reconcile):
+        calls, out = reconcile(node(1, children=[node(2)]), dry_run=True)
+        assert self.edits(calls) == []
+        assert "would label" in out and "would change 2" in out
+
+    def test_the_search_covers_every_repository(self, tool, reconcile):
+        """A detached subtree may sit in a repository the tree no longer reaches,
+        so the search cannot be scoped to the tree's own repositories."""
+        calls, _ = reconcile(node(1))
+        searched = [c[c.index("--repo") + 1] for c in calls if c[:2] == ["issue", "list"]]
+        assert sorted(searched) == ["o/one", "o/two"]

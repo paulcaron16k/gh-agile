@@ -1304,7 +1304,7 @@ then have nowhere to put the plan. GitHub's sub-issues nest, and **across
 repositories**, so the level costs a label and a command here.
 
 ```bash
-gh agile initiative "Large new feature" --intent "..." --acceptance "..."
+gh agile initiative create "Large new feature" --intent "..." --acceptance "..."
 #   initiative #91: AGILE-91 Large new feature
 #   initiative:large-new-feature
 
@@ -1355,6 +1355,41 @@ initiative slug 'large-new-feature' is already taken by paulcaron16k/gh-agile#91
   Two initiatives answering to one slug put both trees behind one board filter.
   Pass --slug to choose another.
 ```
+
+#### Carrying the label down the tree: `initiative reconcile`
+
+`--initiative` labels the epic it attaches. It cannot label that epic's **stories**
+— they may not exist yet, and they arrive through `story --epic`, which knows
+nothing about initiatives. So the label is carried down separately, and
+re-derived whenever the tree changes:
+
+```bash
+gh agile initiative reconcile large-new-feature --dry-run
+gh agile initiative reconcile large-new-feature
+```
+```
+    labelled paulcaron16k/agile-test#44  +initiative:reconcile-probe
+  initiative:reconcile-probe: changed 1, already correct 2, across 3 issue(s) in the tree
+```
+
+**The label is derived, never authored.** It is a copy of something the hierarchy
+already records, and a copy drifts — so nothing but this writes it, re-running is
+idempotent, and a second run reports `changed 0`.
+
+**Both directions, and the removal is the half that is easy to forget.** Detach an
+epic from an initiative and it keeps the label unless something takes it away —
+along with every story beneath it. A stale label is worse than a missing one: the
+board shows work that is no longer part of the initiative, and it looks correct.
+
+```
+    unlabelled paulcaron16k/agile-test#43  -initiative:reconcile-probe  (no longer in the tree)
+    unlabelled paulcaron16k/agile-test#44  -initiative:reconcile-probe  (no longer in the tree)
+```
+
+The hierarchy is the authority and the label follows it. The search that finds
+what has fallen out covers **every repository in the profile**, not just the ones
+the tree still reaches — a detached subtree may sit somewhere the tree no longer
+goes.
 
 **Optional, always.** An epic under no initiative is ordinary, not a finding.
 
