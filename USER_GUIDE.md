@@ -737,8 +737,15 @@ matters. Instead, in order of preference:
    **`cd` into the repository first, and it is not optional.** The profile is
    found relative to the working directory — `.github/agile.json` — and it is
    what supplies `--project` and the repositories to sync. Run from anywhere
-   else and the tool exits saying it is not inside a GitHub repository, which is
-   the right failure but a daily one.
+   else and the tool exits saying `no profile found, and no --project was
+   given`, listing the paths it searched and the directory it searched them in.
+   That is the right failure, but a daily one if the `cd` is missing.
+
+   **The copy inside gh's extension directory is not the one being read.** `gh
+   extension install` clones this repository, profile and all, and `find_config`
+   never looks there — that profile configures whichever repository was
+   installed, so reading it would aim your commands at somebody else's board.
+   The working directory decides, every time.
 
    Three things that bite in cron and not in a shell:
 
