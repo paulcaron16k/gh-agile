@@ -31,6 +31,7 @@ language a person reads before creating an issue.
 
 | Agile concept | GitHub representation | Why this and not something else |
 |---|---|---|
+| **Initiative** | An issue labelled `type:initiative`, holding epics as **sub-issues**, and carrying `initiative:<slug>` | **Optional.** The plan and WBS for a large feature — the set of epics it requires, with somewhere to write down why. Jira charges for the levels above Epic; sub-issues nest here, and across repositories. An epic under no initiative is ordinary |
 | **Epic** | An issue labelled `type:epic`, holding stories as **sub-issues** | Sub-issues give a real parent/child edge the API can traverse and roll up. Issue *types* would be better but are an organization-only feature |
 | **Story** | An issue labelled `type:story`, attached as a sub-issue of exactly one epic | One parent, always. An orphan story is a validation failure, not a style choice |
 | **Task** | A markdown checklist inside the story | Tasks below story level are working notes. Promoting them to issues buys ceremony and costs signal |
@@ -62,7 +63,7 @@ column by hand, that is a bug in the tooling.
 | Attach a story to its epic | **Machine** | Part of creation. Doing it after the fact is how orphans happen |
 | Move an item across the board | Person | The board is the interface; dragging is fine |
 | Set status from a merged pull request | **Machine** | `Fixes #N` closes the issue; a workflow sets `Done` |
-| Check every story has an epic, statuses are legal, closed items are dated, an epic and its children agree | **Machine** | `gh agile validate`, in CI |
+| Check every story has an epic, statuses are legal, closed items are dated, a parent and its children agree at every level | **Machine** | `gh agile validate`, in CI |
 | Export the backlog with history for analysis | **Machine** | `gh agile export` |
 | Decide what the export means | Person | See §6 |
 
