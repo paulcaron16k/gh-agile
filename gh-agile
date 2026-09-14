@@ -1949,6 +1949,22 @@ def require_key_for_prefix(config: dict, key) -> None:
         )
 
 
+#: Why `initiative reconcile` exists, for its `--help`.
+RECONCILE_WHY = """
+
+why this exists:
+  A board filter cannot traverse the hierarchy, so seeing an initiative's whole
+  tree needs `initiative:<slug>` on every issue in it. That label is derived and
+  never authored: this walks initiative -> epics -> stories and applies it.
+
+  Both directions. An epic detached from an initiative keeps the label unless
+  something takes it away, and a stale label is worse than a missing one -- the
+  board shows work that is no longer part of the initiative, and it looks
+  correct. The hierarchy is the authority; the label follows it.
+
+  Idempotent: a second run changes nothing."""
+
+
 def initiative_slug(title: str) -> str:
     """`Large new feature` -> `large-new-feature`. The label's readable half.
 
@@ -2019,7 +2035,117 @@ def find_initiative(config: dict, slug: str) -> tuple[str, int] | None:
     return None
 
 
+#: An initiative's tree: its epics, and their stories, in whatever repository each
+#: lives in. Two levels below the root, because that is the hierarchy this tool
+#: defines -- initiative, epic, story -- and a query that recursed further would
+#: be describing a shape nothing here creates.
+#:
+#: Measured before this was designed: sub-issues nest at least three deep and a
+#: child may live in another repository, with roll-up counting the children in
+#: both. Roll-up is **not** transitive, which is why the label exists at all.
+INITIATIVE_TREE_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      number repository { nameWithOwner } labels(first: 30) { nodes { name } }
+      subIssues(first: 100) {
+        nodes {
+          number repository { nameWithOwner } labels(first: 30) { nodes { name } }
+          subIssues(first: 100) {
+            nodes { number repository { nameWithOwner } labels(first: 30) { nodes { name } } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def initiative_tree(target: dict) -> list[dict]:
+    """Every issue under the initiative, the initiative itself included.
+
+    It carries its own label, so that it appears in a board filtered to the
+    initiative rather than being the one thing missing from its own view.
+    """
+    owner, name = target["repo"].split("/", 1)
+    data = (graphql(INITIATIVE_TREE_QUERY, owner=owner, repo=name,
+                    number=target["number"]).get("data") or {})
+    root = (data.get("repository") or {}).get("issue")
+    out: list[dict] = []
+
+    def visit(node):
+        if not node:
+            return
+        out.append({
+            "repo": (node.get("repository") or {}).get("nameWithOwner") or "",
+            "number": node["number"],
+            "labels": [n["name"] for n in (node.get("labels") or {}).get("nodes") or []],
+        })
+        for child in (node.get("subIssues") or {}).get("nodes") or []:
+            visit(child)
+
+    visit(root)
+    return out
+
+
+def reconcile_initiative(args, target: dict) -> int:
+    """Bring `initiative:<slug>` into line with the hierarchy, both ways.
+
+    **The label is derived, never authored.** A board filter cannot traverse the
+    hierarchy, so seeing an initiative's whole tree needs the label on every item
+    in it -- and a copy of something already recorded is a copy that drifts. The
+    mitigations are that nothing but this writes it, re-running is idempotent,
+    and the disagreement is visible rather than silent.
+
+    **Both directions, and the removal is the half that is easy to forget.** An
+    epic detached from an initiative keeps the label unless something takes it
+    away, and a stale label is worse than a missing one: the board shows work
+    that is no longer part of the initiative, and it looks right. So the tree is
+    the authority and the search across every repository in the profile is what
+    finds what has fallen out of it.
+    """
+    label = f"{INITIATIVE_LABEL}{target['slug']}"
+    tree = initiative_tree(target)
+    wanted = {(node["repo"], node["number"]) for node in tree if node["repo"]}
+
+    carrying = set()
+    for repo in sorted({e["repo"] for e in profile_keys(args._config) if e.get("repo")}):
+        for issue in json.loads(gh(["issue", "list", "--repo", repo, "--state", "all",
+                                    "--limit", "200", "--label", label,
+                                    "--json", "number"])):
+            carrying.add((repo, issue["number"]))
+
+    add = sorted(wanted - carrying)
+    drop = sorted(carrying - wanted)
+    for repo, number in add:
+        if args.dry_run:
+            print(f"    would label {repo}#{number}  +{label}")
+        else:
+            ensure_labels(repo, [label])
+            gh(["issue", "edit", str(number), "--repo", repo, "--add-label", label])
+            print(f"    labelled {repo}#{number}  +{label}")
+    for repo, number in drop:
+        if args.dry_run:
+            print(f"    would unlabel {repo}#{number}  -{label}  (no longer in the tree)")
+        else:
+            gh(["issue", "edit", str(number), "--repo", repo, "--remove-label", label])
+            print(f"    unlabelled {repo}#{number}  -{label}  (no longer in the tree)")
+
+    verb = "would change" if args.dry_run else "changed"
+    print(f"  {label}: {verb} {len(add) + len(drop)}, already correct "
+          f"{len(wanted & carrying)}, across {len(tree)} issue(s) in the tree")
+    return 0
+
+
 def cmd_initiative(args) -> int:
+    if args.initiative_command == "reconcile":
+        target = initiative_target(args._config, args.ref, getattr(args, "repo", None))
+        return reconcile_initiative(args, target)
+    return create_initiative(args)
+
+
+def create_initiative(args) -> int:
     """Create an initiative: the plan and WBS for a large new feature.
 
     **A level above epic, which Jira charges for.** Its standard hierarchy tops
@@ -4973,12 +5099,25 @@ what an initiative is:
 
   Optional, always. An epic under no initiative is ordinary, not a finding.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    initiative.add_argument("title")
-    initiative.add_argument("--slug", help="override the slug derived from the title")
-    initiative.add_argument("--repo")
-    initiative.add_argument("--key", help="which key to label the issue with")
-    initiative.add_argument("--intent")
-    initiative.add_argument("--acceptance")
+    initiative_sub = initiative.add_subparsers(dest="initiative_command", required=True)
+    initiative_new = initiative_sub.add_parser(
+        "create", help="file the initiative issue, board it, and mint its slug")
+    initiative_new.add_argument("title")
+    initiative_new.add_argument("--slug", help="override the slug derived from the title")
+    initiative_new.add_argument("--repo")
+    initiative_new.add_argument("--key", help="which key to label the issue with")
+    initiative_new.add_argument("--intent")
+    initiative_new.add_argument("--acceptance")
+    initiative_fix = initiative_sub.add_parser(
+        "reconcile", help="bring initiative:<slug> into line with the hierarchy",
+        epilog=field_help([
+            ("ref", "number|KEY-n|slug", "required", "the initiative; positional"),
+            ("--dry-run", "flag", "optional", "list what would change and change nothing"),
+        ]) + RECONCILE_WHY,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    initiative_fix.add_argument("ref")
+    initiative_fix.add_argument("--dry-run", action="store_true")
+    initiative_fix.add_argument("--repo")
     initiative.set_defaults(func=cmd_initiative)
 
     epic = sub.add_parser("epic", help="create an epic issue on the board",
