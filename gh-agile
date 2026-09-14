@@ -173,6 +173,59 @@ def same_status(a: str | None, b: str | None) -> bool:
     return status_key(a) == status_key(b)
 
 
+#: GitHub's answer when the token lacks a scope, as `gh` relays it on stderr.
+#: Matched on the sentence and not on the `INSUFFICIENT_SCOPES` error type,
+#: because `gh` prints the human message and drops the type.
+SCOPE_REFUSAL = "has not been granted the required scopes"
+
+
+class MissingScope(Exception):
+    """A `gh` call refused because the token is missing a scope.
+
+    **Deliberately not a `SystemExit`, and that is the whole point of the
+    class.** Several places catch `SystemExit` from a `gh` call in order to try
+    something else -- `project_node` asks the `user` root and falls back to
+    `organization`, and a GraphQL error is the only way the wrong root announces
+    itself. That catch is correct and has to stay. But it swallowed this too: a
+    token with no `read:project` fails *both* roots, the loop falls out of the
+    bottom, and the caller reports the only thing it can still see --
+
+        no project 4 found for 'paulcaron16k' as either a user or an organization
+
+    -- about a project that was there all along, sending the reader off to check
+    a number that was never wrong. Measured 2026-09-14; see #110.
+
+    A distinct exception passes through every one of those handlers untouched.
+    So the diagnosis survives to `main`, no caller has to learn anything about
+    scopes, and the second root is not asked a question already known to fail.
+    """
+
+
+def scope_message(stderr: str) -> str:
+    """What is missing, and the one command that grants it.
+
+    GitHub's own sentence is quoted rather than summarised, because it names the
+    scopes the token *does* carry -- which is what tells someone whether they are
+    looking at the account they think they are.
+    """
+    _, found, rest = stderr.partition("requires one of the following scopes: [")
+    wanted = rest.partition("]")[0].replace("'", "") if found else "read:project"
+    quoted = "\n".join(f"    {line}" for line in stderr.splitlines())
+    return (
+        f"GitHub refused the call: this token is missing the {wanted} scope.\n\n"
+        f"{quoted}\n\n"
+        f"  Nothing was looked up, so this says nothing about whether the project or\n"
+        f"  its owner exists -- the refusal came before the lookup.\n"
+        f"  Grant the scope:\n\n"
+        f"    gh auth refresh --hostname github.com --scopes project\n\n"
+        f"  `project` rather than `read:project`, because the read tier is where this is\n"
+        f"  noticed and the write commands need the wider grant next. `--hostname` because\n"
+        f"  `gh auth refresh` requires one when stdin is not a terminal, which is how it is\n"
+        f"  reached from a script. It opens a device-code flow and prints a one-time code to\n"
+        f"  paste at github.com/login/device, so run it in a real terminal."
+    )
+
+
 def gh(args: list[str], **kwargs) -> str:
     """Run `gh` and return stdout, failing loudly.
 
@@ -190,7 +243,13 @@ def gh(args: list[str], **kwargs) -> str:
             "  In cron, set PATH= at the top of the crontab or use absolute paths."
         )
     if result.returncode != 0:
-        sys.exit(f"gh {' '.join(args[:2])} failed: {result.stderr.strip()}")
+        stderr = result.stderr.strip()
+        # Raised, not exited: the fallback handlers that catch `SystemExit` from
+        # here are trying a *different* root, and no root has a scope the token
+        # does not. See `MissingScope`.
+        if SCOPE_REFUSAL in stderr:
+            raise MissingScope(scope_message(stderr))
+        sys.exit(f"gh {' '.join(args[:2])} failed: {stderr}")
     return result.stdout
 
 
@@ -4518,8 +4577,14 @@ def master_rows(login: str, project: int, config: dict, stamp: str) -> dict[str,
     sprint_rows = []
     try:
         active, completed = iterations(login, project)
-    except SystemExit:
+    except SystemExit as exc:
+        # An empty sprints table and an unreadable one render identically, and
+        # one of them is a lie -- a board with four sprints reported as having
+        # none reads as a configuration fact. Say which this is. Deliberately
+        # not fatal: the project and board tables are already built and are
+        # worth handing over.
         active, completed = [], []
+        print(f"  sprints could not be read, so none are reported: {exc}", file=sys.stderr)
     import datetime as dt
 
     today = today_utc()
@@ -5608,8 +5673,14 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
     fix.set_defaults(func=cmd_fix)
 
     args = parser.parse_args()
-    apply_defaults(args)
-    return args.func(args)
+    # The one place a `MissingScope` is turned back into an exit. It travels
+    # from `gh` untouched precisely because nothing on the way catches it, so
+    # the conversion belongs here and nowhere else.
+    try:
+        apply_defaults(args)
+        return args.func(args)
+    except MissingScope as exc:
+        sys.exit(str(exc))
 
 
 def caller_login() -> str:
