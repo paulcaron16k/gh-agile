@@ -3027,6 +3027,8 @@ FILTER_TERMS = {
     "status": "an item's Status field, e.g. status:Done or -status:Done",
     "sprint": "the Sprint field: sprint:@current, or a sprint title",
     "label": "a label on the issue, e.g. label:type:epic",
+    "initiative": "everything in an initiative's tree, by slug: "
+                  "initiative:large-new-feature",
     "no": "a field that is empty: no:sprint, no:status, no:label",
     "is": "is:open, is:closed, is:issue",
 }
@@ -3096,6 +3098,15 @@ def item_matches(item: dict, terms: list[tuple[bool, str, str]],
                 hit = bool(sprint) and sprint.casefold() == wanted
         elif key == "label":
             hit = wanted in labels
+        elif key == "initiative":
+            # Exactly `label:initiative:<slug>`, and a term of its own because
+            # `label:initiative:large-new-feature` reads badly and because a term
+            # is where the meaning gets documented for `--help`.
+            #
+            # It works at all only because `initiative reconcile` puts the label
+            # on every issue in the tree: a filter cannot traverse the hierarchy,
+            # so the label is the only thing an item-at-a-time evaluator can see.
+            hit = f"{INITIATIVE_LABEL}{wanted}" in labels
         elif key == "is":
             state = (content.get("state") or "").casefold()
             kind = content.get("__typename", "")
@@ -3114,6 +3125,29 @@ def item_matches(item: dict, terms: list[tuple[bool, str, str]],
     return True
 
 
+def github_filter(text: str) -> str:
+    """A filter GitHub's own view can evaluate, from one this tool understands.
+
+    `initiative:<slug>` is exactly `label:initiative:<slug>`, and GitHub knows
+    `label:` and does not know `initiative:`. Saving the short form onto a view
+    would put the web UI and `board show` into disagreement about what the board
+    shows -- which is the one thing a reconstructed board must never do, since the
+    whole claim is that it renders *that* definition rather than something
+    retyped beside it.
+
+    Only the shorthand is expanded. A term this tool cannot evaluate is still
+    refused by `parse_filter` before it reaches here.
+    """
+    out = []
+    for token in text.split():
+        negated = token.startswith("-")
+        bare = token[1:] if negated else token
+        if bare.casefold().startswith(INITIATIVE_LABEL):
+            bare = f"label:{bare}"
+        out.append(f"-{bare}" if negated else bare)
+    return " ".join(out)
+
+
 def make_board(login: str, project: int, name: str, kind: str, extra: str | None) -> dict:
     """Create a board of the given type, or bring an existing one into line.
 
@@ -3122,7 +3156,9 @@ def make_board(login: str, project: int, name: str, kind: str, extra: str | None
     """
     spec = BOARD_TYPES[kind]
     clauses = [spec["filter"]] + ([extra] if extra else [])
-    combined = " ".join(c for c in clauses if c)
+    # Expanded before it is written, so the view carries a filter GitHub can
+    # evaluate and the web UI shows what `board show` shows.
+    combined = github_filter(" ".join(c for c in clauses if c))
 
     existing = next((v for v in views_of(login, project) if v["name"] == name), None)
     if existing is None:
@@ -5267,7 +5303,10 @@ why this is needed:
             ("--filter", "query", "optional", "extra terms, ANDed onto the board's own filter"),
             ("--out-dir", "path", "optional", "write board_<type>_<name>_<stamp>.<ext> here"),
         ]) + "\n\nfilter terms:\n" + "\n".join(
-            f"  {k:<8} {why}" for k, why in sorted(FILTER_TERMS.items())
+            # Width from the vocabulary rather than a constant, so adding a term
+            # cannot silently push the column out of line.
+            f"  {k:<{max(len(t) for t in FILTER_TERMS)}}  {why}"
+            for k, why in sorted(FILTER_TERMS.items())
         ) + "\n\nA term outside that list is refused, not ignored: a dropped term renders"
             "\na board that looks right and shows the wrong items.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

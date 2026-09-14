@@ -563,3 +563,90 @@ class TestTheUnfilteredWarning:
     def test_nor_does_one_the_caller_filtered(self, tool, show):
         """A filterless view shown with `--filter status:Todo` **is** filtered."""
         assert show("", extra="status:Todo").err == ""
+
+
+class TestTheInitiativeTerm:
+    """`initiative:<slug>` shows an initiative's whole tree.
+
+    It works at all only because `initiative reconcile` puts the label on every
+    issue in the tree. A filter cannot traverse the hierarchy -- `item_matches`
+    judges one item at a time, and GitHub's own view filters reach at most one
+    level -- so the label is the only thing an evaluator can see.
+
+    A term of its own rather than leaving people to write
+    `label:initiative:large-new-feature`, which reads badly, and because the term
+    is where the meaning gets documented for `--help`.
+    """
+
+    def test_it_matches_the_label(self, tool):
+        it = item(labels=["type:story", "initiative:big-thing"])
+        assert matches(tool, it, "initiative:big-thing")
+
+    def test_it_does_not_match_another_initiative(self, tool):
+        it = item(labels=["type:story", "initiative:other"])
+        assert not matches(tool, it, "initiative:big-thing")
+
+    def test_an_unlabelled_item_does_not_match(self, tool):
+        assert not matches(tool, item(labels=["type:story"]), "initiative:big-thing")
+
+    def test_negation(self, tool):
+        it = item(labels=["type:story", "initiative:big-thing"])
+        assert not matches(tool, it, "-initiative:big-thing")
+        assert matches(tool, item(labels=["type:story"]), "-initiative:big-thing")
+
+    def test_it_is_case_insensitive_like_label(self, tool):
+        it = item(labels=["initiative:Big-Thing"])
+        assert matches(tool, it, "initiative:big-thing")
+
+    def test_an_unknown_slug_matches_nothing_rather_than_erroring(self, tool):
+        """Consistent with an unmatched label: an empty board, not a failure."""
+        assert not matches(tool, item(labels=["type:story"]), "initiative:no-such-thing")
+
+    def test_it_is_in_the_documented_vocabulary(self, tool):
+        assert "initiative" in tool.FILTER_TERMS
+
+
+class TestGithubFilter:
+    """What gets written onto a view has to be what GitHub can evaluate.
+
+    `initiative:<slug>` is exactly `label:initiative:<slug>`; GitHub knows
+    `label:` and does not know `initiative:`. Saving the short form would put the
+    web UI and `board show` into disagreement about what a board shows -- the one
+    thing a reconstructed board must never do, since the whole claim is that it
+    renders *that* definition rather than something retyped beside it.
+    """
+
+    @pytest.mark.parametrize("given,want", [
+        ("sprint:@current initiative:big-thing",
+         "sprint:@current label:initiative:big-thing"),
+        ("-initiative:big-thing -status:Done", "-label:initiative:big-thing -status:Done"),
+        ("initiative:a initiative:b", "label:initiative:a label:initiative:b"),
+    ])
+    def test_the_shorthand_is_expanded(self, tool, given, want):
+        assert tool.github_filter(given) == want
+
+    @pytest.mark.parametrize("given", [
+        "label:key:AGILE", "-status:Done", "no:sprint -status:Done",
+        "sprint:@current label:key:ZMBNI", "",
+    ])
+    def test_everything_else_is_left_alone(self, tool, given):
+        assert tool.github_filter(given) == given
+
+    def test_an_already_expanded_term_is_not_expanded_twice(self, tool):
+        assert tool.github_filter("label:initiative:big") == "label:initiative:big"
+
+    def test_what_board_create_writes_is_expanded(self, tool, monkeypatch):
+        """The property that matters: the filter reaching GitHub, not the helper."""
+        written = {}
+        monkeypatch.setattr(tool, "views_of", lambda *a, **k: [])
+        monkeypatch.setattr(tool, "project_id", lambda *a, **k: "PVT_1")
+
+        def fake_graphql(query, **variables):
+            if "updateProjectV2View" in query:
+                written["filter"] = variables["f"]
+            return {"data": {"createProjectV2View": {
+                "projectV2View": {"id": "V_1", "number": 7}}}}
+
+        monkeypatch.setattr(tool, "graphql", fake_graphql)
+        tool.make_board("o", 4, "Big thing", "scrum", "initiative:big-thing")
+        assert written["filter"] == "sprint:@current label:initiative:big-thing"
