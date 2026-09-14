@@ -1313,6 +1313,27 @@ gh agile epic "Ingest side" --initiative large-new-feature --intent "..." --acce
 #   #92 under initiative paulcaron16k/gh-agile#91  (initiative:large-new-feature)
 ```
 
+**`--initiative` takes three forms**, whichever you have to hand:
+
+```bash
+gh agile epic "..." --initiative 91                  # the issue number
+gh agile epic "..." --initiative AGILE-91            # a keyed reference
+gh agile epic "..." --initiative large-new-feature   # the slug
+```
+
+A bare number means *in this repository*, as everywhere else in this tool; on a
+board spanning repositories, name the other one with `KEY-NUMBER` or with the
+slug, which is repository-independent by design. References are resolved without
+asking GitHub anything, so only the slug costs a search — and a slug that happens
+to look keyed, like `pyiceberg-0-12`, is still read as a slug, because `KEY-NUMBER`
+only counts when the key is one the profile knows.
+
+**It is resolved before the epic is created.** A mistyped `--initiative` costs
+nothing: the reference, the issue behind it, and whether that issue is actually an
+initiative are all checked before anything is written. Doing it afterwards left a
+real orphan — the epic was created, printed, and then the command exited, and
+issue numbers are never reused.
+
 **Two things happen, because they answer different questions.** The **sub-issue
 edge** is the truth: it rolls up, it crosses repositories, and it is what makes
 the initiative closable when its epics are. The **`initiative:<slug>` label** is

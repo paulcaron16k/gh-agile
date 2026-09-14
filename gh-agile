@@ -1961,6 +1961,47 @@ def initiative_slug(title: str) -> str:
     return "-".join(part for part in "".join(kept).split("-") if part) or "initiative"
 
 
+def looks_like_issue_ref(text: str, config: dict) -> bool:
+    """Whether `text` names an issue rather than an initiative slug.
+
+    `35` does. `TEST-35` does, **but only if `TEST` is a key in the profile** --
+    without that check the slug `pyiceberg-0-12` parses as key `pyiceberg-0`
+    and number `12`, and a perfectly good slug would be read as a reference to
+    an issue in no repository.
+    """
+    if text.isdigit():
+        return True
+    key, _, number = text.rpartition("-")
+    return bool(key and number.isdigit() and repo_for_key(config, key))
+
+
+def resolve_initiative(config: dict, ref: str, fallback_repo: str | None) -> tuple[str, int]:
+    """`--initiative` in any of its three forms: `35`, `TEST-35`, `large-new-feature`.
+
+    References are tried first, and not only for tidiness: the slug lookup is a
+    search per repository in the profile, and a number or a keyed reference can
+    be resolved without asking GitHub anything. It also settles the order
+    deliberately -- a slug that happened to be all digits would otherwise shadow
+    the issue of that number.
+
+    A bare number means *in this repository*, the same as everywhere else in this
+    tool. On a board spanning repositories, name the other one with `KEY-NUMBER`
+    or with the slug, which is repository-independent by design.
+    """
+    text = str(ref).strip()
+    if looks_like_issue_ref(text, config):
+        return parse_issue_ref(text, config, fallback_repo)
+    found = find_initiative(config, text)
+    if found:
+        return found
+    sys.exit(
+        f"no initiative matches {ref!r}.\n"
+        f"  --initiative takes an issue number (35), a keyed reference (TEST-35),\n"
+        f"  or an initiative's slug (large-new-feature). No issue carries "
+        f"`{INITIATIVE_LABEL}{text}`."
+    )
+
+
 def find_initiative(config: dict, slug: str) -> tuple[str, int] | None:
     """The issue that owns `slug`, or `None`. Searched across the profile's repos.
 
@@ -2029,20 +2070,17 @@ def cmd_initiative(args) -> int:
     return 0
 
 
-def attach_to_initiative(args, repo: str, number: int, node: str) -> None:
-    """Make this issue a sub-issue of the named initiative, and take its label.
+def initiative_target(config: dict, ref: str, repo: str | None) -> dict:
+    """Everything needed to attach to an initiative, resolved **before any write**.
 
-    Both, because they answer different questions. The **edge** is the truth and
-    rolls up; the **label** is what a board filter can see, since a filter cannot
-    traverse the hierarchy -- `FILTER_TERMS` evaluates one item at a time and
-    GitHub's own view filters reach at most one level.
+    Separate from the attaching on purpose. A mistyped `--initiative` is a
+    caller's error that costs nothing to detect, and every check here -- does the
+    reference resolve, does that issue exist, is it actually an initiative -- can
+    be made without creating anything. Doing it afterwards left a real orphan:
+    `epic "..." --initiative nope` created the issue, printed it, and then exited,
+    and issue numbers are never reused.
     """
-    ref = args.initiative
-    found = find_initiative(args._config, ref)
-    if found:
-        parent_repo, parent_number = found
-    else:
-        parent_repo, parent_number = parse_issue_ref(ref, args._config, repo)
+    parent_repo, parent_number = resolve_initiative(config, ref, repo)
     parent = json.loads(gh(["issue", "view", str(parent_number), "--repo", parent_repo,
                             "--json", "id,labels"]))
     slug = next((lb["name"][len(INITIATIVE_LABEL):] for lb in parent["labels"]
@@ -2050,21 +2088,36 @@ def attach_to_initiative(args, repo: str, number: int, node: str) -> None:
     if not slug:
         sys.exit(f"{parent_repo}#{parent_number} carries no {INITIATIVE_LABEL} label, so it "
                  f"is not an initiative.\n  Create one with `gh agile initiative`.")
+    return {"repo": parent_repo, "number": parent_number, "id": parent["id"], "slug": slug}
+
+
+def attach_to_initiative(target: dict, repo: str, number: int, node: str) -> None:
+    """Make this issue a sub-issue of the initiative, and give it the same label.
+
+    Both, because they answer different questions. The **edge** is the truth and
+    rolls up; the **label** is what a board filter can see, since a filter cannot
+    traverse the hierarchy -- `FILTER_TERMS` evaluates one item at a time and
+    GitHub's own view filters reach at most one level.
+    """
     graphql(
         "mutation($parent: ID!, $child: ID!) { addSubIssue(input: "
         "{issueId: $parent, subIssueId: $child}) { subIssue { number } } }",
-        parent=parent["id"], child=node,
+        parent=target["id"], child=node,
     )
-    ensure_labels(repo, [f"{INITIATIVE_LABEL}{slug}"])
-    gh(["issue", "edit", str(number), "--repo", repo,
-        "--add-label", f"{INITIATIVE_LABEL}{slug}"])
-    print(f"  #{number} under initiative {parent_repo}#{parent_number}  "
-          f"({INITIATIVE_LABEL}{slug})")
+    label = f"{INITIATIVE_LABEL}{target['slug']}"
+    ensure_labels(repo, [label])
+    gh(["issue", "edit", str(number), "--repo", repo, "--add-label", label])
+    print(f"  #{number} under initiative {target['repo']}#{target['number']}  ({label})")
 
 
 def cmd_epic(args) -> int:
     require_sprint_config(args._config, "creating an epic")
     require_key_for_prefix(args._config, getattr(args, "key", None))
+    # Resolved first, so a mistyped `--initiative` costs nothing. It used to be
+    # resolved after the issue existed, which turned a typo into a permanent
+    # orphan -- the issue was created, printed, and then the command exited.
+    target = (initiative_target(args._config, args.initiative, args.repo)
+              if getattr(args, "initiative", None) else None)
     labels = ["type:epic"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, _node = create_issue(
@@ -2083,8 +2136,8 @@ def cmd_epic(args) -> int:
     # permanent orphan nobody knew to close.
     print(f"  epic #{number}: {title}")
     print(f"  {url}")
-    if getattr(args, "initiative", None):
-        attach_to_initiative(args, args.repo, number, _node)
+    if target:
+        attach_to_initiative(target, args.repo, number, _node)
     with board_write_reported(number, url, args.project):
         item = add_to_project(args.owner, args.project, url)
         set_field(args.owner, args.project, item, "Status", "Todo")
@@ -4935,7 +4988,8 @@ what an initiative is:
     epic.add_argument("--repo")
     epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     epic.add_argument("--initiative",
-                      help="attach to an initiative, by its slug or a KEY-NUMBER reference")
+                      help="attach to an initiative: its number (35), a keyed reference "
+                           "(TEST-35), or its slug (large-new-feature)")
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
     epic.set_defaults(func=cmd_epic)

@@ -155,6 +155,48 @@ class TestCreating:
         assert "already taken by o/one#3" in message and "--slug" in message
 
 
+class TestResolvingTheReference:
+    """`--initiative` takes three forms: `35`, `TEST-35`, `large-new-feature`."""
+
+    @pytest.mark.parametrize("text,want", [
+        ("35", True),
+        ("7", True),
+        ("A-3", True),              # A is a key in the profile
+        ("B-12", True),
+        ("large-new-feature", False),
+        ("pyiceberg-0-12", False),  # parses as key `pyiceberg-0`, which is not a key
+        ("Z-9", False),             # looks keyed, but Z is in no profile
+        ("big-thing", False),
+    ])
+    def test_what_reads_as_an_issue_reference(self, tool, text, want):
+        """The key has to resolve. Without that check the slug `pyiceberg-0-12`
+        parses as key `pyiceberg-0` and number `12`, and a perfectly good slug is
+        read as a reference to an issue in no repository."""
+        assert tool.looks_like_issue_ref(text, CONFIG) is want
+
+    def test_a_reference_costs_no_search(self, tool, calls):
+        """The slug lookup is a search per repository; a number or a keyed
+        reference is resolved without asking GitHub anything."""
+        tool.resolve_initiative(CONFIG, "35", "o/one")
+        assert [c for c in calls if c[:2] == ["issue", "list"]] == []
+
+    def test_a_slug_that_is_all_digits_does_not_shadow_the_issue(self, tool, calls):
+        """Settled deliberately rather than by accident of ordering."""
+        calls.state["listed"][("o/one", "initiative:35")] = [{"number": 99}]
+        assert tool.resolve_initiative(CONFIG, "35", "o/one") == ("o/one", 35)
+
+    def test_a_slug_resolves_through_the_search(self, tool, calls):
+        calls.state["listed"][("o/two", "initiative:big-thing")] = [{"number": 12}]
+        assert tool.resolve_initiative(CONFIG, "big-thing", "o/one") == ("o/two", 12)
+
+    def test_nothing_matching_names_all_three_forms(self, tool, calls):
+        with pytest.raises(SystemExit) as exit_info:
+            tool.resolve_initiative(CONFIG, "no-such-thing", "o/one")
+        message = str(exit_info.value)
+        assert "issue number" in message and "keyed reference" in message
+        assert "slug" in message and "initiative:no-such-thing" in message
+
+
 class TestAttaching:
     @pytest.fixture
     def attach(self, monkeypatch, tool, calls, capsys):
@@ -163,11 +205,10 @@ class TestAttaching:
                             lambda q, **v: linked.append(v) or {"data": {}})
 
         def go(ref, *, parent_labels=("type:initiative", "initiative:big-thing")):
-            import argparse
             calls.state["view"] = {"id": "I_parent",
                                    "labels": [{"name": n} for n in parent_labels]}
-            args = argparse.Namespace(initiative=ref, _config=CONFIG, repo="o/one")
-            tool.attach_to_initiative(args, "o/one", 7, "I_7")
+            target = tool.initiative_target(CONFIG, ref, "o/one")
+            tool.attach_to_initiative(target, "o/one", 7, "I_7")
             return linked, capsys.readouterr().out
         return go
 
@@ -184,11 +225,64 @@ class TestAttaching:
         assert edits and edits[0][-2:] == ["--add-label", "initiative:big-thing"]
 
     def test_a_key_reference_works_too(self, tool, attach, calls):
-        """`--initiative AGILE-91` as well as `--initiative big-thing`."""
+        """`--initiative A-3` as well as `--initiative big-thing`."""
         linked, out = attach("A-3")
+        assert linked and "initiative:big-thing" in out
+
+    def test_a_bare_number_works_too(self, tool, attach, calls):
+        """`--initiative 35` means issue 35 in this repository, the same as
+        everywhere else in this tool."""
+        linked, out = attach("35")
         assert linked and "initiative:big-thing" in out
 
     def test_an_issue_that_is_not_an_initiative_is_refused(self, tool, attach):
         with pytest.raises(SystemExit) as exit_info:
             attach("A-3", parent_labels=("type:epic",))
         assert "is not an initiative" in str(exit_info.value)
+
+
+class TestNothingIsCreatedBeforeTheInitiativeResolves:
+    """A mistyped `--initiative` used to cost a permanent orphan: the epic was
+    created, printed, and *then* the command exited. Issue numbers are never
+    reused, so that issue stays in the sequence for good. Every check the
+    attachment needs can be made before anything is written."""
+
+    @pytest.fixture
+    def epic(self, monkeypatch, tool, calls):
+        created = []
+        monkeypatch.setattr(tool, "require_sprint_config", lambda *a, **k: None)
+        monkeypatch.setattr(tool, "require_key_for_prefix", lambda *a, **k: None)
+        monkeypatch.setattr(tool, "create_issue",
+                            lambda *a, **k: created.append(a) or (7, "I_7"))
+        monkeypatch.setattr(tool, "apply_title_prefix", lambda *a, **k: a[-1])
+        monkeypatch.setattr(tool, "add_to_project", lambda *a, **k: "PVTI_7")
+        monkeypatch.setattr(tool, "set_field", lambda *a, **k: None)
+        monkeypatch.setattr(tool, "graphql", lambda q, **v: {"data": {}})
+
+        def go(initiative):
+            import argparse
+            args = argparse.Namespace(title="an epic", repo="o/one", key="A",
+                                      initiative=initiative, intent=None,
+                                      acceptance=None, owner="o", project=1,
+                                      _config=CONFIG)
+            tool.cmd_epic(args)
+            return created
+        go.created = created
+        return go
+
+    def test_an_unresolvable_initiative_creates_nothing(self, tool, epic):
+        with pytest.raises(SystemExit) as exit_info:
+            epic("no-such-thing")
+        assert "no initiative matches" in str(exit_info.value)
+        assert epic.created == []
+
+    def test_nor_does_one_that_is_not_an_initiative(self, tool, epic, calls):
+        calls.state["view"] = {"id": "I_p", "labels": [{"name": "type:epic"}]}
+        with pytest.raises(SystemExit):
+            epic("A-3")
+        assert epic.created == []
+
+    def test_a_good_one_still_creates_the_epic(self, tool, epic, calls):
+        calls.state["view"] = {"id": "I_p", "labels": [
+            {"name": "type:initiative"}, {"name": "initiative:big-thing"}]}
+        assert len(epic("A-3")) == 1
