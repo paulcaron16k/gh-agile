@@ -1292,6 +1292,72 @@ complains.
 
 ---
 
+### Initiatives: a level above epic
+
+An **initiative** is the plan and WBS for a large new feature — the set of epics
+it requires, with somewhere to write down why it is being done and what would make
+it finished.
+
+Jira's standard hierarchy stops at Epic and charges for the levels above it, so
+free-tier teams emulate this with a label, a component or a custom field — and
+then have nowhere to put the plan. GitHub's sub-issues nest, and **across
+repositories**, so the level costs a label and a command here.
+
+```bash
+gh agile initiative "Large new feature" --intent "..." --acceptance "..."
+#   initiative #91: AGILE-91 Large new feature
+#   initiative:large-new-feature
+
+gh agile epic "Ingest side" --initiative large-new-feature --intent "..." --acceptance "..."
+#   epic #92: AGILE-92 Ingest side
+#   #92 under initiative paulcaron16k/gh-agile#91  (initiative:large-new-feature)
+```
+
+**`--initiative` takes three forms**, whichever you have to hand:
+
+```bash
+gh agile epic "..." --initiative 91                  # the issue number
+gh agile epic "..." --initiative AGILE-91            # a keyed reference
+gh agile epic "..." --initiative large-new-feature   # the slug
+```
+
+A bare number means *in this repository*, as everywhere else in this tool; on a
+board spanning repositories, name the other one with `KEY-NUMBER` or with the
+slug, which is repository-independent by design. References are resolved without
+asking GitHub anything, so only the slug costs a search — and a slug that happens
+to look keyed, like `pyiceberg-0-12`, is still read as a slug, because `KEY-NUMBER`
+only counts when the key is one the profile knows.
+
+**It is resolved before the epic is created.** A mistyped `--initiative` costs
+nothing: the reference, the issue behind it, and whether that issue is actually an
+initiative are all checked before anything is written. Doing it afterwards left a
+real orphan — the epic was created, printed, and then the command exited, and
+issue numbers are never reused.
+
+**Two things happen, because they answer different questions.** The **sub-issue
+edge** is the truth: it rolls up, it crosses repositories, and it is what makes
+the initiative closable when its epics are. The **`initiative:<slug>` label** is
+what a board filter can see, because a filter cannot traverse the hierarchy — it
+evaluates one item at a time, and GitHub's own view filters reach at most one
+level. The hierarchy is the truth; the label is the index. That is the split
+already made for sprints.
+
+**A colon, and a readable slug.** Every label this tool writes is `prefix:value`,
+and the parsers split on the first colon — `initiative-large-new-feature` has no
+unambiguous boundary. The slug is readable rather than an issue reference, because
+initiatives are few and long-lived and a card reading `initiative:AGILE-91` tells
+you nothing. It is minted from the title and carried on the initiative issue, so
+that issue is the single authority for what the slug means:
+
+```
+$ gh agile initiative "Large New Feature"
+initiative slug 'large-new-feature' is already taken by paulcaron16k/gh-agile#91.
+  Two initiatives answering to one slug put both trees behind one board filter.
+  Pass --slug to choose another.
+```
+
+**Optional, always.** An epic under no initiative is ordinary, not a finding.
+
 ## 6. Issue titles: making the key and number visible
 
 GitHub calls the issue above `#31`. Nobody in the standup can say "thirty-one"
