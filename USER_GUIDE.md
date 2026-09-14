@@ -1228,7 +1228,7 @@ are web-UI toggles.
 find an item that lost its sprint, a story with no epic, or a closed issue whose
 status never reached Done.
 
-**It also checks that an epic and its children agree, in both directions.** An
+**It also checks that a parent and its children agree, in both directions** — an epic over its stories, and an initiative over its epics. An
 epic finished while a sub-issue is still open is the obvious one. The other is
 the one nobody sees:
 
@@ -1245,7 +1245,20 @@ single source of stale board state on the first team to report it.
 
 An epic with no children at all is not reported by either rule — that is `epic has
 no stories`, and one issue under two headings is noise rather than a second
-finding.
+finding. An initiative with no epics gets the same treatment one level up.
+
+**Roll-up is per level, not transitive.** Closing a story takes its epic to `1/1`
+and leaves the initiative at `0/1`, because GitHub counts direct children. So an
+initiative's tally is *epics closed*, not stories — a number you can reconcile
+with the board rather than one that claims to reach the whole tree.
+
+**An epic with no initiative is not a finding**, because initiatives are optional
+and most epics will never belong to one. What *is* reported is a slug two
+initiatives both claim, and an `initiative:` label naming no initiative the board
+knows about — a detached subtree whose label was never cleaned up. Both point at
+`initiative reconcile`, which is the authoritative drift check: it compares the
+labels against the hierarchy in both directions and `--dry-run` reports without
+changing anything.
 
 `--id` narrows the report to one issue, for when you already have a suspect:
 

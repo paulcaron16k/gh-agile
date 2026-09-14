@@ -4745,6 +4745,15 @@ def cmd_validate(args) -> int:
             problems["story has no epic"].append(ident)
         if "type:epic" in labels and not row["sub_issues_total"]:
             problems["epic has no stories"].append(ident)
+        # The same shape one level up. An initiative is a list of the epics a
+        # large feature requires, so one with none is a plan with nothing in it.
+        #
+        # Deliberately **not** checked: an epic with no initiative. Initiatives
+        # are optional and most epics will never belong to one -- reporting that
+        # would make the common case a finding, which is how a validator gets
+        # ignored.
+        if "type:initiative" in labels and not row["sub_issues_total"]:
+            problems["initiative has no epics"].append(ident)
 
         # The roll-up, both ways. Ported from the Zamboni markdown suite's
         # `test_an_epic_is_only_done_when_all_its_stories_are`, which was the one
@@ -4759,12 +4768,21 @@ def cmd_validate(args) -> int:
         # which reported 6 of 7 with six children closed, one of those as
         # `NOT_PLANNED`. That is the count this wants: an epic is waiting on what
         # is still open, whatever reason the rest were closed for.
-        if "type:epic" in labels and row["sub_issues_total"]:
+        #
+        # An initiative sits a level above an epic and the arithmetic is the
+        # same, so the check is the same -- but **per level, not transitively**.
+        # Measured: closing a story took its epic to 1/1 while the initiative
+        # stayed 0/1, because `subIssuesSummary` counts direct children. An
+        # initiative's tally is therefore epics closed, not stories, and writing
+        # this as if it reached the whole tree would report a number nobody could
+        # reconcile with the board.
+        if labels & {"type:epic", "type:initiative"} and row["sub_issues_total"]:
+            parent = "initiative" if "type:initiative" in labels else "epic"
             total, closed = row["sub_issues_total"], row["sub_issues_done"]
             finished = row["state"] == "CLOSED" or same_status(status, CYCLE_END)
             tally = f"{ident}: {closed}/{total} sub-issue(s) closed"
             if finished and closed < total:
-                problems["epic is finished with a sub-issue still open"].append(tally)
+                problems[f"{parent} is finished with a sub-issue still open"].append(tally)
             # The direction that goes unnoticed. An epic marked finished over open
             # children is a claim visibly too strong -- the open children are right
             # there under it. An epic left open with every child closed looks like
@@ -4772,7 +4790,7 @@ def cmd_validate(args) -> int:
             # it simply persists. Reported by the Zamboni team as the single
             # largest source of stale board state, three epics at once. See #72.
             if not finished and closed == total:
-                problems["every sub-issue is closed but the epic is not"].append(tally)
+                problems[f"every sub-issue is closed but the {parent} is not"].append(tally)
         if row["state"] == "CLOSED" and status and not same_status(status, CYCLE_END):
             problems[f"closed but status is not {CYCLE_END}"].append(f"{ident}: {status!r}")
         if row["state"] == "OPEN" and same_status(status, CYCLE_END):
@@ -4806,9 +4824,36 @@ def cmd_validate(args) -> int:
                 )
 
     # Sprint overlap is a property of the iteration series, not of any issue, so
-    # it is skipped under `--id`: reporting "sprints overlap" from a command the
-    # user aimed at one issue reads as a finding about that issue.
+    # Board-wide, so skipped under `--id` for the same reason as the sprint
+    # overlap below: these are properties of the set rather than of any issue.
     if only is None:
+        claimed: dict[str, list[str]] = defaultdict(list)
+        wearing: dict[str, list[str]] = defaultdict(list)
+        for row in data:
+            labels = set(row["labels"].split(";")) if row["labels"] else set()
+            ident = f"#{row['number']} {row['title'][:48]}"
+            for slug in (lb[len(INITIATIVE_LABEL):] for lb in labels
+                         if lb.startswith(INITIATIVE_LABEL)):
+                wearing[slug].append(ident)
+                if "type:initiative" in labels:
+                    claimed[slug].append(ident)
+        for slug, owners in sorted(claimed.items()):
+            if len(owners) > 1:
+                # Two trees behind one board filter, looking entirely correct --
+                # the failure `initiative create` refuses a taken slug to avoid,
+                # and which a hand-applied label can still produce.
+                problems[f"two initiatives claim {INITIATIVE_LABEL}{slug}"].extend(owners)
+        for slug, wearers in sorted(wearing.items()):
+            if slug not in claimed:
+                # A label naming no initiative on this board: a detached subtree
+                # whose label was never cleaned up, or an initiative that is not
+                # on the board at all. The board filter shows these as part of an
+                # initiative that, as far as the board knows, does not exist.
+                problems[
+                    f"{INITIATIVE_LABEL}{slug} names no initiative on this board -- "
+                    f"run `initiative reconcile`"
+                ].extend(wearers)
+
         overlaps_found = []
         spans = iteration_spans(sprint_config)
         for index, (start, end) in enumerate(spans):
