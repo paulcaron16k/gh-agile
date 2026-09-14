@@ -1625,6 +1625,34 @@ To place it in a different sprint, say so:
 gh agile set --issue ZMBNI-32 --field Sprint --value "Sprint 2"
 ```
 
+**A story may stand alone, if you say so.** `--epic none` files one with no
+parent:
+
+```bash
+gh agile story "Bump the pinned ruff" --epic none --intent "..." --acceptance "..."
+#   story #58 standing alone: ZMBNI-58 Bump the pinned ruff
+```
+
+Omitting `--epic` altogether still refuses, and that asymmetry is deliberate: an
+orphan story is far more often an accident than an intention, so the opt-out is
+explicit rather than silent. `validate` then **notes** it rather than failing —
+
+```
+notes -- reported, not failures:
+
+story has no epic (1):
+  #50 Story: Probe: a story standing alone
+```
+
+— because a finding that is somebody's deliberate choice cannot be fatal without
+the validator arguing with the person using it, and a check that fails forever is
+a check people stop running. It stays visible, because the same state arrives by
+accident far more often than on purpose and nothing marks which is which.
+
+Not great project management, and not this tool's decision to enforce: refusing
+one-off work outright pushes it outside the tool, where it is neither tracked nor
+exported. POLICY.md §2 says the same.
+
 No evidence is required to start. Requiring it here would be ceremony; requiring
 it to finish is the point.
 
