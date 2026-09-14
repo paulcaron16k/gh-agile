@@ -1404,6 +1404,42 @@ what has fallen out covers **every repository in the profile**, not just the one
 the tree still reaches — a detached subtree may sit somewhere the tree no longer
 goes.
 
+#### Seeing one initiative on a board
+
+`initiative:<slug>` is a filter term of its own:
+
+```bash
+gh agile board show "Engineering: all work" --filter initiative:large-new-feature
+gh agile board create --name "Large new feature" --type scrum --filter initiative:large-new-feature --save
+```
+
+**It takes the same three forms `--initiative` does** — the slug, the issue
+number, or a keyed reference:
+
+```bash
+gh agile board show "Engineering: all work" --filter initiative:large-new-feature
+gh agile board show "Engineering: all work" --filter initiative:91
+gh agile board show "Engineering: all work" --filter initiative:AGILE-91
+```
+
+A reference is resolved to its slug before the filter is evaluated, and the
+board's `filter:` line shows the **resolved** form, so it says what it actually
+filtered on rather than what you typed. Only a reference costs a lookup; a slug
+costs none.
+
+It works **because** `initiative reconcile` puts the label on every issue in the
+tree. A filter cannot traverse the hierarchy — it judges one item at a time, and
+GitHub's own view filters reach at most one level — so the label is the only thing
+an evaluator can see. Negation works, and an unknown slug renders an empty board
+rather than failing, the same as an unmatched label.
+
+**A saved board is written as `label:initiative:<slug>`.** GitHub knows `label:`
+and does not know `initiative:`, so saving the short form would leave the web UI
+and `board show` disagreeing about what the board contains — the one thing a
+reconstructed board must never do, since the whole claim is that it renders *that*
+definition rather than something retyped beside it. The shorthand is expanded on
+the way in; you can write either.
+
 **Optional, always.** An epic under no initiative is ordinary, not a finding.
 
 ## 6. Issue titles: making the key and number visible
