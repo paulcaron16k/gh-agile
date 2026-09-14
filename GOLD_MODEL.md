@@ -187,6 +187,40 @@ maintained by hand alone.
 repository, and it describes the `agile_*` tables. The `github_` prefix is the reminder that everything
 here is silver.
 
+## Initiatives: an attribute in Gold, not a level
+
+Silver gained a level above epic — `type:initiative`, with epics as sub-issues.
+The question this forces is whether **Gold** gains one too, and the recommendation
+here is **no**: an initiative should arrive as an *attribute of the issues beneath
+it*, not as a fourth hierarchy level.
+
+Three reasons, and the first is decisive:
+
+1. **The Gold model is owned elsewhere.** `agile_catalog.json` and
+   `agile_data_model.md` live outside this repository, and a new hierarchy level
+   is a schema change every consumer of `agile_issues` would have to absorb. An
+   attribute is additive.
+2. **It answers the questions anyway.** `initiative_slug` on every issue in the
+   tree — maintained by `initiative reconcile` — is what a burndown, a
+   cycle-time distribution or a scope report actually needs. None of them
+   traverses a hierarchy; they group.
+3. **Nothing is lost.** The initiative issue is exported as an ordinary
+   `github_issues` row with `type:initiative`, so if Gold later wants the level,
+   the rows are already there and `parent_key` already records the edge.
+
+| silver | gold | note |
+|---|---|---|
+| `initiative_slug` | an attribute on the issue | The join key. Group by it |
+| `parent_key` | the parent edge, any level | A key, so it joins to `issue_key` in one column |
+| `parent_type` | which level the parent is | `initiative` above an epic, `epic` above a story |
+| `epic_key` | the epic a story belongs to | Empty when the parent is not an epic |
+| `epic_number` | — | **Prefer `epic_key`.** A number alone is ambiguous on a board spanning repositories, and there is no `epic_repository` beside it |
+
+That last row is the one to carry back. `agile_issues` inherits the same weakness
+if it references a parent by number: GitHub numbers issues per repository, so two
+repositories on one board both have a `#12`. **The Partner Gold model likely needs
+the same revisit**, and that decision is not this repository's to make.
+
 ## Consequences for the exporter
 
 1. **Two queries, joined on the issue node ID.** Current state from the project,

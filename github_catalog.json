@@ -47,7 +47,10 @@
     {
       "tap_stream_id": "github_issues",
       "stream": "github_issues",
-      "key_properties": ["repository", "number"],
+      "key_properties": [
+        "repository",
+        "number"
+      ],
       "metadata": [
         {
           "breadcrumb": [],
@@ -68,48 +71,218 @@
           "arrives as an extra column, which is why this schema is open."
         ],
         "properties": {
-          "issue_key": {"type": "string", "description": "Jira-style, from the key: label or the profile, e.g. AGILE-93. Falls back to owner/repo#93 when no key applies."},
-          "repository": {"type": "string"},
-          "number": {"type": "integer", "description": "Per repository, shared with pull requests, never reused."},
-          "title": {"type": "string"},
-          "url": {"type": "string"},
-          "state": {"type": "string", "enum": ["OPEN", "CLOSED"]},
-          "state_reason": {"type": "string", "description": "COMPLETED, NOT_PLANNED, REOPENED, or empty. Finished and abandoned are not the same thing.", "enum": ["COMPLETED", "NOT_PLANNED", "REOPENED", ""]},
-          "labels": {"type": "string", "description": "Semicolon-joined. Carries type:, key: and sprint:."},
-          "assignees": {"type": "string", "description": "Semicolon-joined logins. Point-in-time: who has it now, not who did the work."},
-          "milestone": {"type": "string"},
-          "epic_number": {"type": ["null", "integer"], "description": "The parent issue. Null when the issue has no parent."},
-          "epic_title": {"type": "string"},
-          "sub_issues_total": {"type": "integer"},
-          "sub_issues_done": {"type": "integer", "description": "GitHub's name is `completed`; it counts CLOSED children whatever reason they closed for."},
-          "reported_by": {"type": "string", "description": "Who opened it. GitHub's author cannot be changed afterwards, so it is a stronger reporter than Jira's."},
-          "created_at": {"type": "string", "format": "date-time"},
-          "updated_at": {"type": "string", "format": "date-time"},
-          "closed_at": {"type": ["null", "string"], "format": "date-time"},
-          "archived": {"type": "boolean"},
-          "sprint_starts": {"type": "string", "description": "Semicolon-joined YYYY-MM-DD, oldest first: every sprint the issue was worked in. From the sprint: labels, which survive an iteration write; field_sprint does not."},
-          "sprint_closed_in": {"type": "string", "description": "The last of sprint_starts."},
-          "added_to_board_at": {"type": ["null", "string"], "format": "date-time"},
-          "started_at": {"type": ["null", "string"], "format": "date-time", "description": "First arrival at In Progress, from the issue timeline. Not derivable from project item state."},
-          "done_at": {"type": ["null", "string"], "format": "date-time"},
-          "cycle_time": {"type": ["null", "integer"], "description": "SECONDS from started_at to done_at. Null when either end is missing."},
-          "lead_time": {"type": ["null", "integer"], "description": "SECONDS from added_to_board_at to done_at."},
-          "worked_by": {"type": "string", "description": "The closing pull request's author, else whoever moved it to review or done."},
-          "closing_pr": {"type": ["null", "integer"]},
-          "field_status": {"type": "string", "description": "Project single-select: Todo, In Progress, Blocked, In Review, Done."},
-          "field_sprint": {"type": "string", "description": "The iteration's title as the project holds it NOW. Cleared board-wide by any iteration write -- believe sprint_starts where they disagree."},
-          "field_story_points": {"type": ["null", "number"], "description": "Number, not integer: half points are a real convention."},
-          "field_priority": {"type": "string", "enum": ["lowest", "low", "medium", "high", "highest", ""]},
-          "field_fr": {"type": "string", "description": "Requirement traceability, free text."},
-          "field_title": {"type": "string", "description": "GitHub's built-in Title field on the project item."},
-          "exported_at": {"type": "string", "format": "date-time"}
+          "issue_key": {
+            "type": "string",
+            "description": "Jira-style, from the key: label or the profile, e.g. AGILE-93. Falls back to owner/repo#93 when no key applies."
+          },
+          "repository": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "description": "Per repository, shared with pull requests, never reused."
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED"
+            ]
+          },
+          "state_reason": {
+            "type": "string",
+            "description": "COMPLETED, NOT_PLANNED, REOPENED, or empty. Finished and abandoned are not the same thing.",
+            "enum": [
+              "COMPLETED",
+              "NOT_PLANNED",
+              "REOPENED",
+              ""
+            ]
+          },
+          "labels": {
+            "type": "string",
+            "description": "Semicolon-joined. Carries type:, key: and sprint:."
+          },
+          "assignees": {
+            "type": "string",
+            "description": "Semicolon-joined logins. Point-in-time: who has it now, not who did the work."
+          },
+          "milestone": {
+            "type": "string"
+          },
+          "epic_number": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "The epic this issue belongs to, null when its parent is not an epic. Unjoinable on its own across repositories -- prefer epic_key."
+          },
+          "epic_title": {
+            "type": "string",
+            "description": "Empty when the parent is not an epic."
+          },
+          "epic_key": {
+            "type": "string",
+            "description": "The epic this issue belongs to, as a key: AGILE-9. Joins to issue_key in one column. Empty when the parent is not an epic."
+          },
+          "parent_key": {
+            "type": "string",
+            "description": "The parent issue at whatever level, as a key. GitHub numbers issues per repository, so a number alone is ambiguous on a board spanning them -- this is not."
+          },
+          "parent_title": {
+            "type": "string"
+          },
+          "parent_type": {
+            "type": "string",
+            "description": "The parent's type: initiative above an epic, epic above a story. Empty when the issue has no parent.",
+            "enum": [
+              "initiative",
+              "epic",
+              "story",
+              "bug",
+              ""
+            ]
+          },
+          "initiative_slug": {
+            "type": "string",
+            "description": "The initiative this issue belongs to, from its own initiative: label, which `initiative reconcile` maintains down the whole tree. Join to the github_issues row whose type is initiative and whose slug matches."
+          },
+          "sub_issues_total": {
+            "type": "integer"
+          },
+          "sub_issues_done": {
+            "type": "integer",
+            "description": "GitHub's name is `completed`; it counts CLOSED children whatever reason they closed for."
+          },
+          "reported_by": {
+            "type": "string",
+            "description": "Who opened it. GitHub's author cannot be changed afterwards, so it is a stronger reporter than Jira's."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "closed_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "sprint_starts": {
+            "type": "string",
+            "description": "Semicolon-joined YYYY-MM-DD, oldest first: every sprint the issue was worked in. From the sprint: labels, which survive an iteration write; field_sprint does not."
+          },
+          "sprint_closed_in": {
+            "type": "string",
+            "description": "The last of sprint_starts."
+          },
+          "added_to_board_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time",
+            "description": "First arrival at In Progress, from the issue timeline. Not derivable from project item state."
+          },
+          "done_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "cycle_time": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "SECONDS from started_at to done_at. Null when either end is missing."
+          },
+          "lead_time": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "SECONDS from added_to_board_at to done_at."
+          },
+          "worked_by": {
+            "type": "string",
+            "description": "The closing pull request's author, else whoever moved it to review or done."
+          },
+          "closing_pr": {
+            "type": [
+              "null",
+              "integer"
+            ]
+          },
+          "field_status": {
+            "type": "string",
+            "description": "Project single-select: Todo, In Progress, Blocked, In Review, Done."
+          },
+          "field_sprint": {
+            "type": "string",
+            "description": "The iteration's title as the project holds it NOW. Cleared board-wide by any iteration write -- believe sprint_starts where they disagree."
+          },
+          "field_story_points": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "description": "Number, not integer: half points are a real convention."
+          },
+          "field_priority": {
+            "type": "string",
+            "enum": [
+              "lowest",
+              "low",
+              "medium",
+              "high",
+              "highest",
+              ""
+            ]
+          },
+          "field_fr": {
+            "type": "string",
+            "description": "Requirement traceability, free text."
+          },
+          "field_title": {
+            "type": "string",
+            "description": "GitHub's built-in Title field on the project item."
+          },
+          "exported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     },
     {
       "tap_stream_id": "github_events",
       "stream": "github_events",
-      "key_properties": ["event_hash"],
+      "key_properties": [
+        "event_hash"
+      ],
       "metadata": [
         {
           "breadcrumb": [],
@@ -123,31 +296,91 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "event_hash": {"type": "string", "description": "sha256 over issue|kind|occurred|actor|previousStatus|status|detail, or over the pull request's node ids. Stable across exports so an overlapping run overwrites rather than duplicates. Timestamps are per-second and two changes in one second are ordinary, which is why it is not issue|kind|occurred alone."},
-          "function_code": {"type": "string", "enum": ["github"]},
-          "process_type": {"type": "string", "enum": ["issues", "pull-requests"], "description": "Which object the row is about. change-request-opened appears under BOTH: once scoped to the issue a pull request closes, once to the pull request itself."},
-          "process_id": {"type": "integer", "description": "Issue or pull request number."},
-          "issue_key": {"type": "string", "description": "Empty for a pull request closing no issue."},
-          "ext_process_id": {"type": "string", "description": "GitHub node id."},
-          "project_id": {"type": "string"},
-          "event_category": {"type": "string"},
-          "event_name": {"type": "string", "description": "Named for the action, not GitHub's object, so a transform maps it without knowing what a pull request is."},
-          "occurred_at": {"type": "string", "format": "date-time"},
-          "actor_name": {"type": "string", "description": "Who did it. On a review this is the REVIEWER, which no issue event distinguishes."},
-          "ext_actor_id": {"type": "string"},
-          "state": {"type": "string", "description": "The status moved to, or a review's APPROVED / CHANGES_REQUESTED / COMMENTED / DISMISSED."},
-          "prior_state": {"type": "string"},
-          "state_changed": {"type": "boolean"},
-          "was_automated": {"type": ["null", "boolean"], "description": "Status changes only; null on every other event."},
-          "detail": {"type": "string"},
-          "exported_at": {"type": "string", "format": "date-time"}
+          "event_hash": {
+            "type": "string",
+            "description": "sha256 over issue|kind|occurred|actor|previousStatus|status|detail, or over the pull request's node ids. Stable across exports so an overlapping run overwrites rather than duplicates. Timestamps are per-second and two changes in one second are ordinary, which is why it is not issue|kind|occurred alone."
+          },
+          "function_code": {
+            "type": "string",
+            "enum": [
+              "github"
+            ]
+          },
+          "process_type": {
+            "type": "string",
+            "enum": [
+              "issues",
+              "pull-requests"
+            ],
+            "description": "Which object the row is about. change-request-opened appears under BOTH: once scoped to the issue a pull request closes, once to the pull request itself."
+          },
+          "process_id": {
+            "type": "integer",
+            "description": "Issue or pull request number."
+          },
+          "issue_key": {
+            "type": "string",
+            "description": "Empty for a pull request closing no issue."
+          },
+          "ext_process_id": {
+            "type": "string",
+            "description": "GitHub node id."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "event_category": {
+            "type": "string"
+          },
+          "event_name": {
+            "type": "string",
+            "description": "Named for the action, not GitHub's object, so a transform maps it without knowing what a pull request is."
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor_name": {
+            "type": "string",
+            "description": "Who did it. On a review this is the REVIEWER, which no issue event distinguishes."
+          },
+          "ext_actor_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The status moved to, or a review's APPROVED / CHANGES_REQUESTED / COMMENTED / DISMISSED."
+          },
+          "prior_state": {
+            "type": "string"
+          },
+          "state_changed": {
+            "type": "boolean"
+          },
+          "was_automated": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "Status changes only; null on every other event."
+          },
+          "detail": {
+            "type": "string"
+          },
+          "exported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     },
     {
       "tap_stream_id": "github_prs",
       "stream": "github_prs",
-      "key_properties": ["repository", "number"],
+      "key_properties": [
+        "repository",
+        "number"
+      ],
       "metadata": [
         {
           "breadcrumb": [],
@@ -163,44 +396,153 @@
         "additionalProperties": false,
         "_content_comment": "No diff hunk, no patch, no review or comment body. These rows make events and metrics, not code analysis.",
         "properties": {
-          "repository": {"type": "string"},
-          "number": {"type": "integer"},
-          "ext_pr_id": {"type": "string"},
-          "title": {"type": "string"},
-          "url": {"type": "string"},
-          "state": {"type": "string", "enum": ["OPEN", "CLOSED", "MERGED"]},
-          "is_draft": {"type": "boolean"},
-          "authored_by": {"type": "string"},
-          "base_ref": {"type": "string"},
-          "head_ref": {"type": "string"},
-          "additions": {"type": "integer"},
-          "deletions": {"type": "integer"},
-          "changed_files": {"type": "integer"},
-          "commits": {"type": "integer"},
-          "review_decision": {"type": "string", "enum": ["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""]},
-          "reviews_total": {"type": "integer"},
-          "changes_requested_total": {"type": "integer", "description": "Review round-trips: how often it came back."},
-          "reviewers": {"type": "string", "description": "Semicolon-joined distinct logins."},
-          "reviewer_count": {"type": "integer"},
-          "closes_issues": {"type": "string", "description": "Semicolon-joined issue keys."},
-          "created_at": {"type": "string", "format": "date-time"},
-          "updated_at": {"type": "string", "format": "date-time"},
-          "closed_at": {"type": ["null", "string"], "format": "date-time"},
-          "merged_at": {"type": ["null", "string"], "format": "date-time"},
-          "merged_by": {"type": "string"},
-          "first_review_at": {"type": ["null", "string"], "format": "date-time"},
-          "last_review_at": {"type": ["null", "string"], "format": "date-time"},
-          "time_to_first_review": {"type": ["null", "integer"], "description": "SECONDS, created to first review. Null when never reviewed -- NOT zero."},
-          "review_latency": {"type": ["null", "integer"], "description": "SECONDS, last review to merge."},
-          "time_to_merge": {"type": ["null", "integer"], "description": "SECONDS, created to merged. Null when not merged."},
-          "exported_at": {"type": "string", "format": "date-time"}
+          "repository": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "ext_pr_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED",
+              "MERGED"
+            ]
+          },
+          "is_draft": {
+            "type": "boolean"
+          },
+          "authored_by": {
+            "type": "string"
+          },
+          "base_ref": {
+            "type": "string"
+          },
+          "head_ref": {
+            "type": "string"
+          },
+          "additions": {
+            "type": "integer"
+          },
+          "deletions": {
+            "type": "integer"
+          },
+          "changed_files": {
+            "type": "integer"
+          },
+          "commits": {
+            "type": "integer"
+          },
+          "review_decision": {
+            "type": "string",
+            "enum": [
+              "APPROVED",
+              "CHANGES_REQUESTED",
+              "REVIEW_REQUIRED",
+              ""
+            ]
+          },
+          "reviews_total": {
+            "type": "integer"
+          },
+          "changes_requested_total": {
+            "type": "integer",
+            "description": "Review round-trips: how often it came back."
+          },
+          "reviewers": {
+            "type": "string",
+            "description": "Semicolon-joined distinct logins."
+          },
+          "reviewer_count": {
+            "type": "integer"
+          },
+          "closes_issues": {
+            "type": "string",
+            "description": "Semicolon-joined issue keys."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "closed_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "merged_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "merged_by": {
+            "type": "string"
+          },
+          "first_review_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "last_review_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "time_to_first_review": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "SECONDS, created to first review. Null when never reviewed -- NOT zero."
+          },
+          "review_latency": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "SECONDS, last review to merge."
+          },
+          "time_to_merge": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "description": "SECONDS, created to merged. Null when not merged."
+          },
+          "exported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     },
     {
       "tap_stream_id": "github_project",
       "stream": "github_project",
-      "key_properties": ["project_id"],
+      "key_properties": [
+        "project_id"
+      ],
       "metadata": [
         {
           "breadcrumb": [],
@@ -214,40 +556,102 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "project_id": {"type": "integer"},
-          "project_name": {"type": "string"},
-          "project_key": {"type": "string"},
-          "keys": {"type": "string", "description": "Semicolon-joined."},
-          "repos": {"type": "string", "description": "Semicolon-joined. A board may span repositories."},
-          "sprint_cadence": {"type": "integer", "description": "The profile's hand-authored cadence_days -- a person writes 14. The one place a day count survives, and the suffix stops at the file's edge."},
-          "sprint_start_day": {"type": "string"},
-          "exported_at": {"type": "string", "format": "date-time"}
+          "project_id": {
+            "type": "integer"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "project_key": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "string",
+            "description": "Semicolon-joined."
+          },
+          "repos": {
+            "type": "string",
+            "description": "Semicolon-joined. A board may span repositories."
+          },
+          "sprint_cadence": {
+            "type": "integer",
+            "description": "The profile's hand-authored cadence_days -- a person writes 14. The one place a day count survives, and the suffix stops at the file's edge."
+          },
+          "sprint_start_day": {
+            "type": "string"
+          },
+          "exported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     },
     {
       "tap_stream_id": "github_boards",
       "stream": "github_boards",
-      "key_properties": ["project_id", "board_id"],
-      "metadata": [{"breadcrumb": [], "metadata": {"replication-method": "FULL_TABLE"}}],
+      "key_properties": [
+        "project_id",
+        "board_id"
+      ],
+      "metadata": [
+        {
+          "breadcrumb": [],
+          "metadata": {
+            "replication-method": "FULL_TABLE"
+          }
+        }
+      ],
       "schema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "project_id": {"type": "integer"},
-          "board_id": {"type": "integer", "description": "The view number, as `board list` prints it."},
-          "board_name": {"type": "string"},
-          "board_type": {"type": "string", "enum": ["scrum", "kanban", "backlog", "roadmap", "custom"]},
-          "layout": {"type": "string", "enum": ["BOARD_LAYOUT", "TABLE_LAYOUT", "ROADMAP_LAYOUT"]},
-          "filter": {"type": "string", "description": "The view's own filter, verbatim. Empty means the board excludes nothing."},
-          "exported_at": {"type": "string", "format": "date-time"}
+          "project_id": {
+            "type": "integer"
+          },
+          "board_id": {
+            "type": "integer",
+            "description": "The view number, as `board list` prints it."
+          },
+          "board_name": {
+            "type": "string"
+          },
+          "board_type": {
+            "type": "string",
+            "enum": [
+              "scrum",
+              "kanban",
+              "backlog",
+              "roadmap",
+              "custom"
+            ]
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "BOARD_LAYOUT",
+              "TABLE_LAYOUT",
+              "ROADMAP_LAYOUT"
+            ]
+          },
+          "filter": {
+            "type": "string",
+            "description": "The view's own filter, verbatim. Empty means the board excludes nothing."
+          },
+          "exported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     },
     {
       "tap_stream_id": "github_sprints",
       "stream": "github_sprints",
-      "key_properties": ["project_id", "sprint_name"],
+      "key_properties": [
+        "project_id",
+        "sprint_name"
+      ],
       "metadata": [
         {
           "breadcrumb": [],
@@ -261,13 +665,35 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "project_id": {"type": "integer"},
-          "sprint_name": {"type": "string"},
-          "start_date": {"type": "string", "format": "date"},
-          "end_date": {"type": "string", "format": "date"},
-          "duration": {"type": "integer", "description": "DAYS, and the exception that proves the rule: it is GitHub's own field on the iteration, reproduced verbatim rather than converted."},
-          "state": {"type": "string", "enum": ["active", "completed"]},
-          "exported_at": {"type": "string", "format": "date-time"}
+          "project_id": {
+            "type": "integer"
+          },
+          "sprint_name": {
+            "type": "string"
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "duration": {
+            "type": "integer",
+            "description": "DAYS, and the exception that proves the rule: it is GitHub's own field on the iteration, reproduced verbatim rather than converted."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "completed"
+            ]
+          },
+          "exported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     }
