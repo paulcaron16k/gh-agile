@@ -2335,6 +2335,16 @@ def cmd_story(args) -> int:
     """
     require_sprint_config(args._config, "creating a story")
     require_key_for_prefix(args._config, getattr(args, "key", None))
+    # **`--epic none` is an explicit opt-out, and a bare omission still refuses.**
+    # Some teams file one-off and ad-hoc work, and refusing it pushes that work
+    # outside the tool entirely, where it is neither tracked nor exported -- not
+    # great project management, and not this tool's decision to enforce. But an
+    # orphan story is far more often an accident than an intention, so saying so
+    # is required. POLICY.md §2.
+    orphan = str(args.epic).strip().casefold() == "none"
+    if not orphan and not str(args.epic).strip().isdigit():
+        sys.exit(f"--epic {args.epic!r} is neither an epic's issue number nor `none`.\n"
+                 f"  `--epic none` files a story that stands alone.")
     labels = ["type:story"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, node = create_issue(
@@ -2349,15 +2359,18 @@ def cmd_story(args) -> int:
     # Announced as soon as it exists, for the same reason as `epic`: everything
     # after this point can be refused independently of the issue creation that
     # already succeeded, and a story has two such steps rather than one.
-    print(f"  story #{number} under epic #{args.epic}: {title}")
+    where = "standing alone" if orphan else f"under epic #{args.epic}"
+    print(f"  story #{number} {where}: {title}")
     print(f"  {url}")
 
-    parent = json.loads(gh(["issue", "view", str(args.epic), "--repo", args.repo, "--json", "id"]))
-    graphql(
-        "mutation($parent: ID!, $child: ID!) { addSubIssue(input: "
-        "{issueId: $parent, subIssueId: $child}) { subIssue { number } } }",
-        parent=parent["id"], child=node,
-    )
+    if not orphan:
+        parent = json.loads(gh(["issue", "view", str(args.epic), "--repo", args.repo,
+                                "--json", "id"]))
+        graphql(
+            "mutation($parent: ID!, $child: ID!) { addSubIssue(input: "
+            "{issueId: $parent, subIssueId: $child}) { subIssue { number } } }",
+            parent=parent["id"], child=node,
+        )
 
     with board_write_reported(number, url, args.project):
         item = add_to_project(args.owner, args.project, url)
@@ -4849,6 +4862,12 @@ def cmd_validate(args) -> int:
     if only is not None:
         data = select_by_ref(data, only, args._config)
     problems: dict[str, list[str]] = defaultdict(list)
+    # **Reported, but not a failure.** A finding that is somebody's deliberate
+    # choice cannot be fatal without making the validator argue with the person
+    # using it -- and a check that fails forever is a check people stop running.
+    # It still has to be *visible*, because the same state arrives by accident far
+    # more often than on purpose.
+    notes: dict[str, list[str]] = defaultdict(list)
 
     active, completed = iterations(args.owner, args.project)
     sprint_config = active + completed
@@ -4863,8 +4882,12 @@ def cmd_validate(args) -> int:
 
         if status and not any(same_status(status, s) for s in STATUSES):
             problems["status is not one of " + ", ".join(STATUSES)].append(f"{ident}: {status!r}")
+        # A note rather than a problem since `--epic none` made the orphan
+        # sayable. `validate` cannot tell an intended orphan from an accidental
+        # one -- nothing marks the difference -- so it says what it sees and
+        # leaves the judgement with the reader. POLICY.md §2.
         if "type:story" in labels and not row["epic_number"]:
-            problems["story has no epic"].append(ident)
+            notes["story has no epic"].append(ident)
         if "type:epic" in labels and not row["sub_issues_total"]:
             problems["epic has no stories"].append(ident)
         # The same shape one level up. An initiative is a list of the epics a
@@ -4985,14 +5008,28 @@ def cmd_validate(args) -> int:
         for line in overlaps_found:
             problems["sprints overlap -- `@current` is ambiguous"].append(line)
 
-    if not problems:
-        print(f"{len(data)} item(s): no problems found")
-        return 0
+    def report(findings: dict[str, list[str]]) -> int:
+        for rule, offenders in findings.items():
+            print(f"\n{rule} ({len(offenders)}):")
+            for offender in offenders:
+                print(f"  {offender}")
+        return sum(len(v) for v in findings.values())
+
     for rule, offenders in problems.items():
         print(f"\n{rule} ({len(offenders)}):")
         for offender in offenders:
             print(f"  {offender}")
-    print(f"\n{sum(len(v) for v in problems.values())} problem(s) across {len(data)} item(s)")
+    if notes:
+        print("\nnotes -- reported, not failures:")
+        noted = report(notes)
+    else:
+        noted = 0
+    tail = f", {noted} note(s)" if noted else ""
+    if not problems:
+        print(f"\n{len(data)} item(s): no problems found{tail}")
+        return 0
+    print(f"\n{sum(len(v) for v in problems.values())} problem(s) across "
+          f"{len(data)} item(s){tail}")
     return 1
 
 
@@ -5306,7 +5343,11 @@ what an initiative is:
     story.add_argument("title")
     story.add_argument("--repo")
     story.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
-    story.add_argument("--epic", type=int, required=True, help="epic issue number")
+    # Still required, and `none` is how you say it deliberately. A bare omission
+    # keeps refusing: an orphan story is usually an accident, and `story has no
+    # epic` has caught real ones. Not `type=int`, so `none` reaches the command.
+    story.add_argument("--epic", required=True,
+                       help="epic issue number, or `none` for a story that stands alone")
     story.add_argument("--points", type=float)
     story.add_argument("--priority")
     story.add_argument("--status", default="Todo")
