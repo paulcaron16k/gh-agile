@@ -2728,9 +2728,18 @@ def backfill_sprint_labels(args) -> int:
         return sprint_covering(spans, dt.date.fromisoformat(stamp[:10]))
 
     data = rows(args.owner, args.project, with_history=args.source == "timeline")
-    stamped = skipped = uncovered = 0
+    stamped = skipped = uncovered = spanning = 0
     for row in data:
         labels = set(row["labels"].split(";")) if row["labels"] else set()
+        # **The bulk write, and the one that matters.** An epic or initiative is
+        # deliberately in no sprint, so deriving one here would stamp every one
+        # on the board in a single run and undo that wholesale -- and `backfill`
+        # is precisely what someone runs *because* `validate` complained. Same
+        # reasoning as the abandoned issue below: a label asserts the sprint the
+        # work was worked in, and neither level was worked in one sprint.
+        if spans_sprints(labels):
+            spanning += 1
+            continue
         wanted = []
         if args.source == "field":
             match = next((sp for sp in spans if sp[2] == row.get("field_sprint")), None)
@@ -2772,6 +2781,11 @@ def backfill_sprint_labels(args) -> int:
 
     verb = "would stamp" if args.dry_run else "stamped"
     print(f"  {verb} {stamped}, already present {skipped}, across {len(data)} item(s)")
+    if spanning:
+        # Counted out loud. A silent skip on a repair pass reads as a pass that
+        # found nothing to do, which is the one thing it must not be confused with.
+        print(f"  {spanning} epic(s)/initiative(s) skipped; a level that spans "
+              f"sprints is never stamped")
     if uncovered:
         print(f"  {uncovered} transition(s) fell outside every sprint and were skipped; "
               f"no sprint covers those dates", file=sys.stderr)
@@ -5068,14 +5082,28 @@ def cmd_validate(args) -> int:
         # cleared by an ordinary iteration write while the labels stayed right.
         stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels
                         if lb.startswith(SPRINT_LABEL))
-        if same_status(status, CYCLE_START) and not row.get("field_sprint"):
+        # **A level that spans sprints is never asked for one.** `move` stopped
+        # giving an epic or initiative a Sprint value or a `sprint:` label
+        # deliberately, and a validator still demanding both reports the tool's
+        # own correct behaviour as a failure -- which exits 1 for as long as any
+        # epic is in progress, and a check that fails forever is a check people
+        # stop running. Same predicate as `move` uses, so the next level added is
+        # covered by one list.
+        spanning = spans_sprints(labels)
+        if (same_status(status, CYCLE_START) and not row.get("field_sprint")
+                and not spanning):
             problems[f"{CYCLE_START} but in no sprint"].append(ident)
         # Not asked of an abandoned issue. The label means *the sprint this was
         # worked in*, and work closed as not planned was worked in none -- so
         # demanding one here is what put a false `sprint:2026-08-31` on #72,
         # a duplicate closed on sight, via the `sprint backfill` this very
         # message recommends.
+        # `spanning` for the same reason, and it matters more here than it
+        # reads: this message recommends `sprint backfill`, so leaving it in
+        # place would have the tool recommend a repair that writes the very
+        # label it has just stopped writing -- the #72 shape exactly.
         if (row["state"] == "CLOSED" and same_status(status, CYCLE_END) and not stamps
+                and not spanning
                 and (row.get("state_reason") or "").upper() != ABANDONED):
             problems["closed with no sprint: label -- run `sprint backfill`"].append(ident)
         if stamps and row.get("field_sprint"):
