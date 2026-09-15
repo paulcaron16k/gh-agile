@@ -2792,6 +2792,71 @@ def backfill_sprint_labels(args) -> int:
     return 0
 
 
+def unstamp_spanning(args) -> int:
+    """Remove `sprint:` labels from the levels that span sprints.
+
+    The one-off repair for labels written before the rule existed, and the only
+    place in this tool that *removes* a `sprint:` label.
+
+    **Removing one is not done lightly and this is the stated exception.** The
+    label is the immutable record -- `sprint reconcile` exists because the field
+    is lossy and the labels are not -- so deleting one destroys history that
+    nothing else holds. What makes these different is what the label asserts:
+    *the sprint this work was worked in*. Each was stamped at close, so it
+    records the sprint the issue was **closed** in. For a story those are the
+    same fact. For an epic spanning four sprints they are not, and the label is
+    a claim the work never supported.
+
+    They are not inert, either, which is why this is a command rather than a
+    note in the guide. `reconcile_sprints` reads labels and writes the field,
+    and `heal_sprint_fields` runs it automatically after every destructive
+    iteration write -- the routine fortnightly append. Measured on the live
+    board: five closed epics stamped before the rule existed, every one of them
+    proposed for Sprint 2 by a plain `reconcile --dry-run`. The guard in
+    `reconcile_sprints` stops the field being written; this clears the labels
+    that keep asking for it.
+
+    Deliberately narrow. Only `sprint:` labels, only on `type:epic` and
+    `type:initiative`, and a story is never touched whatever else is true of it.
+    """
+    _title, items = fetch_items(args.owner, args.project)
+    cleared = scanned = 0
+    for item in items:
+        content = item.get("content") or {}
+        if content.get("__typename") != "Issue":
+            continue
+        labels = [n["name"] for n in content["labels"]["nodes"]]
+        level = spans_sprints(labels)
+        if not level:
+            continue
+        scanned += 1
+        stamps = [lb for lb in labels if lb.startswith(SPRINT_LABEL)]
+        if not stamps:
+            continue
+        repo = (content.get("repository") or {}).get("nameWithOwner")
+        ident = f"{repo}#{content['number']}"
+        for label in sorted(stamps):
+            if args.dry_run:
+                print(f"  would clear {ident}  -{label}  ({level})")
+            else:
+                # `--remove-label` for the same reason `--add-label` is used to
+                # write them: it is additive's mirror and needs no
+                # read-modify-write, so two runs cannot race a label off an
+                # issue somebody else just added.
+                gh(["issue", "edit", str(content["number"]), "--repo", repo,
+                    "--remove-label", label])
+                print(f"  cleared {ident}  -{label}  ({level})")
+            cleared += 1
+
+    verb = "would clear" if args.dry_run else "cleared"
+    print(f"  {verb} {cleared} label(s) across {scanned} epic(s)/initiative(s)")
+    if not cleared:
+        # Said plainly: a repair pass that prints nothing is indistinguishable
+        # from one that failed to look.
+        print("  no stray labels; every epic and initiative is already clean")
+    return 0
+
+
 def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
                       overwrite: bool = False, quiet: bool = False) -> int:
     """Set each item's `Sprint` field from its `sprint:` labels; return how many.
@@ -2826,12 +2891,23 @@ def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
         return 0
 
     _title, items = fetch_items(login, project)
-    changed = agreed = unknown = disagreed = 0
+    changed = agreed = unknown = disagreed = spanning = 0
     for item in items:
         content = item.get("content") or {}
         if content.get("__typename") != "Issue":
             continue
         labels = [n["name"] for n in content["labels"]["nodes"]]
+        # **The guard that matters, because nobody runs this on purpose.**
+        # `heal_sprint_fields` calls it after every destructive iteration write
+        # -- the routine fortnightly append -- so a stray `sprint:` label on an
+        # epic puts that epic into a sprint without anyone aiming a command at
+        # it. Measured on the live board: five closed epics stamped before the
+        # rule existed, all five proposed for Sprint 2 by a plain `reconcile
+        # --dry-run`. Skipped rather than repaired, because the field this
+        # would write is the one a level spanning sprints must not have.
+        if spans_sprints(labels):
+            spanning += 1
+            continue
         stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels
                         if lb.startswith(SPRINT_LABEL))
         if not stamps:
@@ -2868,6 +2944,10 @@ def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
     if not quiet or changed:
         verb = "would set" if dry_run else "set"
         tail = f", disagreeing {disagreed}" if disagreed else ""
+        # Named, because a stray label on an epic is something to clear rather
+        # than something to live with: `sprint unstamp` is what clears it.
+        tail += (f", spanning {spanning} (see `gh agile sprint unstamp`)"
+                 if spanning else "")
         print(f"  {verb} {changed}, already correct {agreed}, "
               f"unresolvable {unknown}{tail}")
     return changed
@@ -2897,6 +2977,9 @@ def cmd_sprint(args) -> int:
 
     if args.sprint_command == "backfill":
         return backfill_sprint_labels(args)
+
+    if args.sprint_command == "unstamp":
+        return unstamp_spanning(args)
 
     if args.sprint_command == "ensure":
         require_sprint_config(args._config, "`sprint ensure`")
@@ -4918,6 +5001,18 @@ def cmd_fix(args) -> int:
     if not by_start:
         sys.exit("no sprints exist on this project; nothing to reconcile to")
 
+    # The per-issue form of the same rule `reconcile_sprints` follows: a level
+    # that spans sprints is not given a Sprint field, so there is nothing here to
+    # repair toward. Reported rather than refused -- being asked is reasonable,
+    # and the answer is that the label is the stray thing, not the empty field.
+    if level := spans_sprints(labels):
+        print(f"  {repo}#{issue} is an {level}, which spans sprints; it has no Sprint "
+              f"field to repair")
+        if any(lb.startswith(SPRINT_LABEL) for lb in labels):
+            print(f"  it does carry a {SPRINT_LABEL} label, which is a stray: "
+                  f"`gh agile sprint unstamp` clears those")
+        return 0
+
     stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels if lb.startswith(SPRINT_LABEL))
     if not stamps:
         print(f"  {repo}#{issue} carries no {SPRINT_LABEL} label; nothing to reconcile from")
@@ -5701,6 +5796,30 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
     )
     sprint_fill.add_argument("--source", choices=["timeline", "field"], default="timeline")
     sprint_fill.add_argument("--dry-run", action="store_true")
+
+    sprint_clear = sprint_sub.add_parser(
+        "unstamp", help="clear sprint: labels from epics and initiatives",
+        epilog=field_help([
+            ("--dry-run", "flag", "optional", "list what would be cleared and change nothing"),
+        ]) + """
+
+why this exists:
+  An epic or initiative spans sprints, so it is given no Sprint value and no
+  `sprint:` label. Labels written before that rule are strays, and they are not
+  inert: `sprint reconcile` sets the field from the labels, and the automatic
+  heal runs it after every iteration write -- so a stray label puts its epic
+  into a sprint with nobody aiming a command at it.
+
+  The only place this tool removes a `sprint:` label, and the exception is
+  deliberate. A label asserts the sprint the work was *worked in*; stamped at
+  close, it records the sprint the issue was closed in, which for a story is
+  the same fact and for an epic spanning four sprints is not.
+
+  Narrow on purpose: only `sprint:` labels, only on epics and initiatives. A
+  story is never touched.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sprint_clear.add_argument("--dry-run", action="store_true")
 
     sprint_new = sprint_sub.add_parser("create", help="append a sprint iteration")
     sprint_new.add_argument("--start", help="ISO date; defaults to the day after the last ends")
