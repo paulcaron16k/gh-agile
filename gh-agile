@@ -5188,6 +5188,38 @@ def cmd_validate(args) -> int:
         if (same_status(status, CYCLE_START) and not row.get("field_sprint")
                 and not spanning):
             problems[f"{CYCLE_START} but in no sprint"].append(ident)
+        # **The other half of starting work.** Status, sprint and assignee are set
+        # together by `move --status "In Progress"`, and only two of the three were
+        # ever checked -- so the sprint half got caught and the assignee half never
+        # did. Reported by the Zamboni team; see #125.
+        #
+        # **`spanning` is deliberately not consulted here.** An epic is exempt from
+        # the *sprint* because one field cannot say "all of them" for a level that
+        # runs across several -- but `move` claims it like anything else, on the
+        # reasoning that an epic still starts even though it joins no iteration.
+        # A spanning level in progress with nobody on it is as worth saying as any
+        # other, and exempting it would report less than the tool already does.
+        if same_status(status, CYCLE_START) and not row["assignees"]:
+            problems[f"{CYCLE_START} but unassigned"].append(ident)
+        # **There is deliberately no check for a *closed* issue with no assignee**,
+        # and the reasoning is worth keeping. Two attempts were measured and both
+        # were wrong:
+        #
+        #   `closed with no assignee` reports 23 of 47 on this board, including
+        #   six epics closed on the roll-up and two closed `NOT_PLANNED` -- all
+        #   correct states. A check that cries wolf gets ignored.
+        #
+        #   `closed, carries a sprint: label, no assignee` reports 16, every one a
+        #   true historical instance from before starting work claimed the issue.
+        #   All unfixable -- who did the work is not recoverable -- so it would be
+        #   16 permanent notes on every run forever.
+        #
+        # And it would buy nothing for the case it was proposed for. An issue
+        # closed by a `Closes #n` automation without ever being started has no
+        # `sprint:` label either, so `closed with no sprint: label` below already
+        # reports it. `started_at` is not available here in any case: `validate`
+        # reads with `with_history=False` on purpose, one timeline query per issue
+        # being the expensive part of an export.
         # Not asked of an abandoned issue. The label means *the sprint this was
         # worked in*, and work closed as not planned was worked in none -- so
         # demanding one here is what put a false `sprint:2026-08-31` on #72,

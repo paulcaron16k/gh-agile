@@ -47,6 +47,10 @@ def row(*, kind, number=9, state="OPEN", status="In Progress", labels_extra="",
         "field_status": status, "field_sprint": "", "epic_number": None,
         "sub_issues_total": 2, "sub_issues_done": 0,
         "started_at": "2026-09-01T00:00:00Z", "done_at": "",
+        # Assigned, so the assignee check stays out of tests that are
+        # not about it -- an In Progress row with nobody on it is now a
+        # finding of its own.
+        "assignees": "dev",
     }
 
 

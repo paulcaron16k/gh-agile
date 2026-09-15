@@ -31,6 +31,10 @@ def item(*, number=9, labels="type:initiative;key:AGILE", state="OPEN", status="
         "field_status": status, "field_sprint": "", "epic_number": None,
         "sub_issues_total": total, "sub_issues_done": closed,
         "started_at": "", "done_at": "",
+        # Assigned, so the assignee check stays out of tests that are
+        # not about it -- an In Progress row with nobody on it is now a
+        # finding of its own.
+        "assignees": "dev",
     }
 
 
