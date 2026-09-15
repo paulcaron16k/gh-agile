@@ -1231,6 +1231,21 @@ to project* workflow to set `Status` on anything added by any path, and the
 automations in `templates/` if you want the board to show who is on a card. Both
 are web-UI toggles.
 
+**Starting work sets three things, and `validate` checks all three.**
+`In Progress but in no sprint` and `In Progress but unassigned` are the same
+sentence about different thirds of it — an issue somebody is meant to have right
+now, that nobody does, is a state standup exists to fix.
+
+A spanning level is exempt from the sprint and **not** from the assignee: an epic
+still starts, it simply joins no iteration.
+
+There is deliberately **no check for a closed issue with nobody on it.** On a real
+board `closed with no assignee` reports 23 of 47, including six epics closed on
+the roll-up — all correct states — and the narrower `closed with a sprint: label
+and no assignee` reports 16, every one historical and unfixable. Neither is worth
+the noise, and an issue closed by automation without ever being started has no
+`sprint:` label either, so `closed with no sprint: label` already names it.
+
 **After a web-UI session, run `gh agile validate`.** It is the cheapest way to
 find an item that lost its sprint, a story with no epic, or a closed issue whose
 status never reached Done.
