@@ -369,6 +369,33 @@ four leave, so a wide window shows whole titles. Output to a pipe, a file or
 `--out-dir` is a fixed 80 columns instead: a record whose line lengths depend on
 the window that produced it is a file that changes when nothing changed.
 
+**The `who` column is what makes this a standup board.** It shows who has each
+item, and calls out work that has started with nobody on it:
+
+```
+  key        type   pts  sprint    who           title
+  ─────────  ─────  ───  ────────  ────────────  ──────────────────────────────
+In Progress (2)
+  AGILE-123  story    2  Sprint 3  paulcaron16k  Clear the sprint: labels left…
+  AGILE-131  story    3  Sprint 3  nobody        Something nobody picked up
+```
+
+`nobody` is a word rather than a symbol on purpose: `—` reads as *nothing here*
+and is exactly what a reader skims past, and this is the one cell worth stopping
+at. `validate` reports the same state as `In Progress but unassigned` — this is
+the fast path to the same finding, on the board a team reads aloud.
+
+**An unassigned `Todo` is not flagged.** That is the ordinary state of a backlog;
+marking it would mark nearly every row and teach people to ignore the column. An
+epic or initiative *is* flagged when it is in progress with nobody on it — it is
+exempt from the sprint, not from having somebody driving it.
+
+**And the column appears only when it has something to say.** A board where
+nobody holds anything would spend fourteen characters on a column of `—`, taken
+from the title — which at 80 columns is the difference between 26 and 40
+characters of it. One assignee, or one unassigned item in progress, brings the
+column back.
+
 **The filter comes from the view, not from you.** That is the point: the board
 was defined once, in the profile and on GitHub, and this renders *that*
 definition rather than something retyped beside it. `--filter` **adds** terms,

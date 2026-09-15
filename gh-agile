@@ -3853,6 +3853,37 @@ def display_width(stream=None) -> int:
     return shutil.get_terminal_size((BOARD_WIDTH, 24)).columns
 
 
+#: What the `who` column says when an issue is in progress and nobody has it.
+#:
+#: A word rather than a symbol. The empty marker is `—`, which reads as *nothing
+#: here* and is exactly what a reader skims past -- and this is the one cell on a
+#: standup board worth stopping at. `validate` reports the same state as
+#: `In Progress but unassigned`; this is the fast path to the same finding, on the
+#: board a team actually reads aloud.
+NOBODY = "nobody"
+
+#: Long enough for a login, short enough that the title keeps most of the row.
+#: Two people on one issue shows the first and a count, because a standup asks
+#: *who is driving this* and the second name does not change the answer.
+WHO_WIDTH = 12
+
+
+def render_who(row: dict) -> str:
+    """The `who` column: who has this, or that nobody does and it matters.
+
+    An unassigned `Todo` is the ordinary state of a backlog -- flagging it would
+    mark nearly every row and teach people to ignore the column. Only work that
+    has *started* with nobody on it is called out, which is the same rule
+    `validate` applies and the same one `move` maintains.
+    """
+    who = [name for name in (row.get("assignees") or []) if name]
+    if who:
+        first = who[0]
+        extra = f" +{len(who) - 1}" if len(who) > 1 else ""
+        return elide(first, max(WHO_WIDTH - len(extra), 1)) + extra
+    return NOBODY if same_status(row.get("status"), CYCLE_START) else "—"
+
+
 def board_columns(rows: list[dict], width: int) -> dict[str, int]:
     """Column widths for the text view: the widest value, and the heading it carries.
 
@@ -3867,16 +3898,32 @@ def board_columns(rows: list[dict], width: int) -> dict[str, int]:
     kind = widest("type", [r["type"] or "?" for r in rows])
     points = widest("pts", [render_points(r["story_points"]) for r in rows])
     sprint = widest("sprint", [r["sprint"] or "—" for r in rows])
-    spent = 2 + key + 2 + kind + 2 + points + 2 + sprint + 2
-    return {"key": key, "type": kind, "points": points, "sprint": sprint,
+    # **The `who` column appears only when it has something to say.** A backlog is
+    # all `Todo` and nobody holds any of it, so the column would be fourteen
+    # characters of `—` taken from the title -- and the title is what a person
+    # reads. A width of 0 is the signal, and `board_line` drops the column and its
+    # separator with it.
+    #
+    # Adaptive presence rather than adaptive *meaning*: the column says the same
+    # thing wherever it appears. Widths here are already measured from the data,
+    # so this is the same idea one step further.
+    shown = [render_who(r) for r in rows]
+    who = widest("who", shown) if any(w != "—" for w in shown) else 0
+    spent = 2 + key + 2 + kind + 2 + points + 2 + sprint + 2 + (who + 2 if who else 0)
+    return {"key": key, "type": kind, "points": points, "sprint": sprint, "who": who,
             "title": max(width - spent, MIN_TITLE_WIDTH)}
 
 
 def board_line(values: dict[str, str], columns: dict[str, int]) -> str:
-    """One row, or the heading: the same five columns either way."""
+    """One row, or the heading: the same columns either way.
+
+    `who` is dropped, separator and all, when its width is 0 -- see
+    `board_columns` for why a board that has nothing to say about it says nothing.
+    """
+    who = f"{values['who']:<{columns['who']}}  " if columns["who"] else ""
     return (f"  {values['key']:<{columns['key']}}  {values['type']:<{columns['type']}}  "
             f"{values['points']:>{columns['points']}}  "
-            f"{values['sprint']:<{columns['sprint']}}  {values['title']}")
+            f"{values['sprint']:<{columns['sprint']}}  {who}{values['title']}")
 
 
 def elide(text: str, width: int) -> str:
@@ -3906,9 +3953,11 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
         # A heading, because five unlabelled columns put `8` next to
         # `AGILE Sprint 4` and leave the reader to infer which is which.
         out.append(board_line({"key": "key", "type": "type", "points": "pts",
-                               "sprint": "sprint", "title": "title"}, columns))
+                               "sprint": "sprint", "who": "who", "title": "title"},
+                              columns))
         out.append("  " + "  ".join("─" * columns[c] for c in
-                                    ("key", "type", "points", "sprint", "title")))
+                                    ("key", "type", "points", "sprint", "who", "title")
+                                    if columns[c]))
     empty = []
     for name, items in sections:
         if not items:
@@ -3922,6 +3971,7 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
                 "key": row["key"], "type": row["type"] or "?",
                 "points": render_points(row["story_points"]),
                 "sprint": row["sprint"] or "—",
+                "who": render_who(row),
                 "title": elide(row["title"], columns["title"]),
             }, columns))
         out.append("")
