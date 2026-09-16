@@ -83,15 +83,35 @@ class TestInProgressButUnassigned:
         assert UNASSIGNED not in validate(row(status=status))[1]
 
 
-class TestSpanningLevelsAreNotExempt:
-    """An epic is exempt from the *sprint* -- one field cannot say "all of them"
-    for a level running across several -- but `move` claims it like anything
-    else, on the reasoning that an epic still starts even though it joins no
-    iteration. Exempting it here would report less than the tool already does."""
+class TestAContainerIsNotExpectedToHaveAHolder:
+    """**This reverses an earlier decision, on two things that changed.**
+
+    The earlier rule exempted these levels from the sprint check but not this
+    one, reasoning that "`move` claims it like anything else". Then `move` began
+    promoting a parent when a child starts (#117) -- setting a status without
+    claiming anything -- so the premise stopped being true. And the claim itself
+    was a guess: an epic holds stories worked by several people, so there is no
+    single *who has this*, and filling it from whoever started the first story is
+    only right at team size one.
+
+    So an empty assignee on a container is the normal state, not a gap. The rule
+    this validator runs on -- an unassigned issue is a gap, an assigned one is a
+    decision -- does not reach a level nobody is meant to hold, and reporting it
+    would be reporting the default. Setting one is still allowed and still
+    meaningful; it is simply never demanded."""
 
     @pytest.mark.parametrize("kind", ["epic", "initiative"])
-    def test_a_started_one_with_nobody_on_it_is_reported(self, tool, validate, kind):
-        assert UNASSIGNED in validate(row(kind=kind, sprint=""))[1]
+    def test_a_started_one_with_nobody_on_it_is_not_reported(self, tool, validate, kind):
+        assert UNASSIGNED not in validate(row(kind=kind, sprint=""))[1]
+
+    @pytest.mark.parametrize("kind", ["epic", "initiative"])
+    def test_an_explicit_assignee_is_still_honoured(self, tool, validate, kind):
+        """Never demanded is not the same as never allowed."""
+        assert UNASSIGNED not in validate(row(kind=kind, sprint="", assignees="dev"))[1]
+
+    def test_a_story_is_still_held_to_it(self, tool, validate):
+        """The check exists for work somebody is doing, and still does."""
+        assert UNASSIGNED in validate(row(kind="story"))[1]
 
     @pytest.mark.parametrize("kind", ["epic", "initiative"])
     def test_but_it_is_still_exempt_from_the_sprint(self, tool, validate, kind):

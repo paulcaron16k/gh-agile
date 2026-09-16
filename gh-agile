@@ -3916,6 +3916,11 @@ def render_who(row: dict) -> str:
     `validate` applies and the same one `move` maintains.
     """
     who = [name for name in (row.get("assignees") or []) if name]
+    if not who and row.get("type") in SPANNING_TYPES:
+        # `nobody` is a call to action -- it means *this should have someone*.
+        # An epic holds work done by several people and is not meant to have one
+        # holder, so the empty marker is the honest cell: nothing is missing.
+        return "—"
     if who:
         # A login, or the local part of one shaped like an address: the domain is
         # the same for everyone on the board and says nothing about who has this.
@@ -4689,6 +4694,103 @@ def abandoning(args) -> bool:
     return bool(getattr(args, "not_planned", False) and getattr(args, "close", False))
 
 
+#: An issue's parent and grandparent, with everything needed to decide whether to
+#: promote them: the level, from the labels, and the project item plus its Status.
+#:
+#: Two levels in one round trip rather than one query per hop. A story's chain is
+#: epic then initiative and stops there, so the depth is the hierarchy's, not a
+#: guess -- and walking it lazily would cost a second query on every start for a
+#: level that is usually absent.
+PARENT_CHAIN_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      parent { ...level parent { ...level } }
+    }
+  }
+}
+fragment level on Issue {
+  number
+  repository { nameWithOwner }
+  labels(first: 50) { nodes { name } }
+  projectItems(first: 20) {
+    nodes {
+      id
+      project { number }
+      fieldValueByName(name: "Status") {
+        ... on ProjectV2ItemFieldSingleSelectValue { name }
+      }
+    }
+  }
+}"""
+
+
+def promote_parents(args, repo: str, issue: int) -> None:
+    """Carry a start upward: an epic whose story has begun has begun.
+
+    Nothing moved an epic out of `Todo`. Its stories started, ran and closed
+    beneath it while it read as untouched, and the only thing that ever changed
+    it was somebody remembering to -- which is the bookkeeping this tool exists
+    to remove. On the backlog an epic in `Todo` with a child in flight is
+    indistinguishable from one nobody has touched.
+
+    **Promoted only from `Todo` or empty, and never demoted.** The rule is the
+    one the sprint heal already follows: *an empty field is damage, a set one is
+    a decision*. An epic left in `Todo` while work runs under it is a gap nobody
+    chose. An epic somebody deliberately put in `Blocked` or `In Review` is a
+    decision, and a tool that overwrites it argues with the person using it --
+    so every other status is left exactly alone, silently, because reporting a
+    non-event on every start is noise. Nor does it ever go back: a parent does
+    not return to `Todo` because its last in-flight child paused.
+
+    **Status only, never a sprint.** `set_field` is called directly rather than
+    routed back through `move`, so none of the sprint machinery runs -- which is
+    what #115 established for these levels and what a recursive call would have
+    quietly undone.
+
+    Both levels, because an initiative is as invisible as an epic was: starting a
+    story promotes the epic, and the epic's start promotes the initiative above
+    it. A parent that is not one of those levels is left alone -- a story's own
+    parent, once tasks exist, is not something a task starting should move.
+
+    Costs one query plus at most two field writes, and only on a start.
+    """
+    owner, _, name = repo.partition("/")
+    try:
+        data = graphql(PARENT_CHAIN_QUERY, owner=owner, name=name, number=issue)
+    except SystemExit as exc:
+        # Not fatal. The status write has already succeeded and the caller's work
+        # has started; failing here would report an error for an issue that moved
+        # correctly. Said on stderr so it is not mistaken for nothing to do.
+        print(f"  could not read the parents of {repo}#{issue}: {exc}", file=sys.stderr)
+        return
+
+    node = ((data.get("data") or {}).get("repository") or {}).get("issue") or {}
+    chain = []
+    parent = node.get("parent")
+    while parent:
+        chain.append(parent)
+        parent = parent.get("parent")
+
+    for level_node in chain:
+        labels = [n["name"] for n in (level_node.get("labels") or {}).get("nodes") or []]
+        level = spans_sprints(labels)
+        if not level:
+            continue
+        item = next((n for n in (level_node.get("projectItems") or {}).get("nodes") or []
+                     if (n.get("project") or {}).get("number") == args.project), None)
+        if not item:
+            # On the hierarchy but not on this board. `sync` is what puts it
+            # there; promoting something absent is not this command's business.
+            continue
+        status = (item.get("fieldValueByName") or {}).get("name")
+        if status and not same_status(status, "Todo"):
+            continue
+        set_field(args.owner, args.project, item["id"], "Status", CYCLE_START)
+        print(f"  #{level_node['number']} {level} follows its child: "
+              f"Status = {CYCLE_START}")
+
+
 def cmd_move(args) -> int:
     """Change an issue's status, requiring the evidence that status implies.
 
@@ -4842,6 +4944,12 @@ def cmd_move(args) -> int:
         if stamped:
             print(f"  #{args.issue} + {stamped}")
 
+    # Outside the sprint block above, deliberately: that one skips the levels
+    # that span sprints, and an epic's own start is exactly when the initiative
+    # above it should follow.
+    if same_status(args.status, CYCLE_START):
+        promote_parents(args, repo, args.issue)
+
     # Starting work claims the issue, for the same reason it assigns the sprint:
     # work in flight that reads unassigned is invisible to the one question a
     # board answers beside "what is in progress" -- who has it. Both are
@@ -4852,7 +4960,13 @@ def cmd_move(args) -> int:
     # no argparse default: `default=""` could not tell them apart.
     given = getattr(args, "add_assignee", None) is not None
     wanted = (getattr(args, "add_assignee", None) or "").strip()
-    if given or same_status(args.status, CYCLE_START):
+    # **A container is never claimed implicitly.** The implicit claim fills a gap
+    # -- work in flight that reads as nobody's -- and on an epic or initiative
+    # there is no gap to fill: it holds stories worked by several people, so
+    # there is no single "who has this", and the caller is merely whoever
+    # happened to start one of them. `--add-assignee` still assigns at any level,
+    # because given at all is somebody asking rather than the tool guessing.
+    if given or (same_status(args.status, CYCLE_START) and not spanning):
         # After the Status line and never before it. The status write has already
         # succeeded by here, and these are two grants -- the same split
         # `board_write_reported` exists for: if the assignee write is refused,
@@ -5288,10 +5402,14 @@ def cmd_validate(args) -> int:
     Anyone narrowing this to save budget should reach for `fix --id` instead,
     which never reads the board at all.
     """
-    data = rows(args.owner, args.project, with_history=False)
+    board = rows(args.owner, args.project, with_history=False)
     only = getattr(args, "id", None)
-    if only is not None:
-        data = select_by_ref(data, only, args._config)
+    data = select_by_ref(board, only, args._config) if only is not None else board
+    # From the whole board, never the filtered view: `--id` narrows what is
+    # *reported*, and a parent's status is needed to judge the child whether or
+    # not the parent is one of the issues asked about.
+    status_of = {r["issue_key"]: r.get("field_status")
+                 for r in board if r.get("issue_key")}
     problems: dict[str, list[str]] = defaultdict(list)
     # **Reported, but not a failure.** A finding that is somebody's deliberate
     # choice cannot be fatal without making the validator argue with the person
@@ -5299,6 +5417,10 @@ def cmd_validate(args) -> int:
     # It still has to be *visible*, because the same state arrives by accident far
     # more often than on purpose.
     notes: dict[str, list[str]] = defaultdict(list)
+    #: {(level, parent key): (the parent's status, the first child seen)}. Keyed
+    #: on the parent so an epic with four children in flight is one finding
+    #: rather than four -- the thing to fix is the parent, once.
+    stalled: dict[tuple[str, str], tuple[str, str]] = {}
 
     active, completed = iterations(args.owner, args.project)
     sprint_config = active + completed
@@ -5319,6 +5441,26 @@ def cmd_validate(args) -> int:
         # leaves the judgement with the reader. POLICY.md §2.
         if "type:story" in labels and not row["epic_number"]:
             notes["story has no epic"].append(ident)
+
+        # **The third direction, and the one that misreads a board daily rather
+        # than at the end.** The other two compare an epic's *closed* state with
+        # its children's; this compares a start. An epic left in `Todo` while
+        # work runs under it looks exactly like an epic nobody has touched --
+        # which is what #114 was raised for.
+        #
+        # `move` now carries a start upward, so this fires for a status set by
+        # hand, or work begun outside the tool. It stays a problem rather than a
+        # note because it is nobody's deliberate choice and one field write
+        # clears it -- unlike the orphan story above, which somebody may have
+        # meant.
+        if (same_status(status, CYCLE_START) and row.get("parent_key")
+                and row.get("parent_type") in SPANNING_TYPES):
+            parent_status = status_of.get(row["parent_key"])
+            if not parent_status or same_status(parent_status, "Todo"):
+                stalled.setdefault(
+                    (row["parent_type"], row["parent_key"]),
+                    (parent_status or "unset", ident),
+                )
         if "type:epic" in labels and not row["sub_issues_total"]:
             problems["epic has no stories"].append(ident)
         # The same shape one level up. An initiative is a list of the epics a
@@ -5396,13 +5538,22 @@ def cmd_validate(args) -> int:
         # ever checked -- so the sprint half got caught and the assignee half never
         # did. Reported by the Zamboni team; see #125.
         #
-        # **`spanning` is deliberately not consulted here.** An epic is exempt from
-        # the *sprint* because one field cannot say "all of them" for a level that
-        # runs across several -- but `move` claims it like anything else, on the
-        # reasoning that an epic still starts even though it joins no iteration.
-        # A spanning level in progress with nobody on it is as worth saying as any
-        # other, and exempting it would report less than the tool already does.
-        if same_status(status, CYCLE_START) and not row["assignees"]:
+        # **`spanning` is consulted here, and this reverses an earlier decision
+        # rather than overlooking it.** That decision exempted these levels from
+        # the sprint check but not this one, on the stated reasoning that "`move`
+        # claims it like anything else". Two things then changed. `move` now
+        # promotes a parent when a child starts (#117) and sets a status without
+        # claiming anything, so the premise stopped being true. And the claim
+        # itself was a guess: an epic holds stories worked by several people, so
+        # there is no single "who has this", and filling it from whoever started
+        # the first story is only ever right at team size one.
+        #
+        # So an empty assignee on a container is **the normal state, not a gap**,
+        # and the rule this file runs on -- an unassigned issue is a gap, an
+        # assigned one is a decision -- does not apply to a level nobody is meant
+        # to hold. Reporting it would be reporting the default. Setting one is
+        # still allowed and still meaningful; it is simply never demanded.
+        if same_status(status, CYCLE_START) and not row["assignees"] and not spanning:
             problems[f"{CYCLE_START} but unassigned"].append(ident)
         # **There is deliberately no check for a *closed* issue with no assignee**,
         # and the reasoning is worth keeping. Two attempts were measured and both
@@ -5444,6 +5595,11 @@ def cmd_validate(args) -> int:
                 problems["Sprint field disagrees with the sprint: label(s)"].append(
                     f"{ident}: field={row['field_sprint']!r} ({live}) labels={','.join(stamps)}"
                 )
+
+    for (level, parent_key), (parent_status, child) in sorted(stalled.items()):
+        problems[f"{level} is {'Todo' if parent_status == 'unset' else parent_status} "
+                 f"with a child {CYCLE_START}"].append(
+            f"{parent_key} ({parent_status}), e.g. {child}")
 
     # Sprint overlap is a property of the iteration series, not of any issue, so
     # Board-wide, so skipped under `--id` for the same reason as the sprint

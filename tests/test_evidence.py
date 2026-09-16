@@ -57,6 +57,8 @@ def run(monkeypatch, tool):
     monkeypatch.setattr(tool, "set_field", lambda *a, **k: None)
     monkeypatch.setattr(tool, "sprint_assignments", lambda *a, **k: {"PVTI_7": "s"})
     monkeypatch.setattr(tool, "record_sprint_label", lambda *a, **k: None)
+    # Its own story (#117); stubbed so these tests stay about the evidence.
+    monkeypatch.setattr(tool, "promote_parents", lambda *a, **k: None)
 
     def go(status, **flags):
         import argparse
