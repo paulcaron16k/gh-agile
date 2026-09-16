@@ -410,10 +410,22 @@ by. Jira's `<Board> Sprint <n>` spends seven characters on the word *Sprint* and
 cuts to `AGILE S…`, losing the one part anyone says out loud — so the cap and the
 default name are one decision, not two.
 
-`{n:04d} W{iso_week}-{year}` is the default `name_template` for a **new** project.
-An existing profile keeps whatever it names sprints, and existing sprints are
-never renamed: any write to the iteration configuration clears every item's
-`Sprint` value board-wide.
+`{n:04d} W{iso_week}-{year}` is the default `name_template` for a **new** project,
+and it is what this repository's own profile sets.
+
+**Adopting it renames nothing, and that is the point.** Changing `name_template`
+changes what the *next* sprint is called; every sprint that already exists keeps
+its name. Renaming one would clear every item's `Sprint` value board-wide —
+`ProjectV2Iteration` carries no id, so any write to the configuration replaces it
+wholesale and GitHub re-mints every iteration. The `sprint:` labels survive and
+`sprint reconcile` rebuilds the field from them, but that is a **reconstruction**,
+and anything predating the labels comes back only through
+`sprint backfill --source timeline`, which derives rather than reads.
+
+So a series acquires a seam whenever the naming changes — this board reads
+`AGILE Sprint 4`, `Sprint 1`, `Sprint 2`, `Sprint 3`, and next `0004 W38-2026`.
+That is the honest record: each name says what the sprint was called when it ran.
+Tidying it would cost a board-wide repair to buy nothing.
 
 **The filter comes from the view, not from you.** That is the point: the board
 was defined once, in the profile and on GitHub, and this renders *that*

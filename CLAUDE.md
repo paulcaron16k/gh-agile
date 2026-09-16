@@ -186,6 +186,34 @@ nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
   `owner/project` and written to `AGILE`; incremental file export never advanced and only appeared to work because
   stdout runs happened to move the read key.
 
+## Sprint naming, and why nothing is ever renamed
+
+**`{n:04d} W{iso_week}-{year}` — `0004 W38-2026`.** The default for a new project, and what this
+project's profile now sets.
+
+The number leads because it is the only part anyone says out loud. The ISO week is how a person places
+a sprint in the year. The year is there to sort by rather than to read. Four digits is ten thousand
+sprints, which at a fortnight each outlasts any board — and the leading zeros are the price of a column
+that lines up, which `board show` spends eight characters on. Measured before the cap was chosen:
+`0004 W38-2026` cuts to `0004 W38` and keeps the number and the week; Jira's `<Board> Sprint <n>` cuts
+to `AGILE S…` and keeps neither.
+
+**A sprint is never renamed. Not to adopt this, not for anything.** `ProjectV2Iteration` carries no id,
+so *any* write to the iteration configuration replaces it wholesale: GitHub re-mints every iteration id
+and every item's `Sprint` value points at one that no longer exists. Board-wide, retroactively, closed
+issues in completed sprints included. Measured — renaming one unused future sprint unassigned items
+across a completed, a current and a future one.
+
+What survives is the `sprint:YYYY-MM-DD` labels, which is the whole reason they exist, and
+`sprint reconcile` rebuilds the field from them. That is **reconstruction, not intact data**: anything
+predating the labels is recoverable only by `sprint backfill --source timeline`, which derives rather
+than reads. So a rename costs a board-wide repair to buy a cosmetic change.
+
+**The consequence is a naming seam, and the seam is correct.** This board reads `AGILE Sprint 4`,
+`Sprint 1`, `Sprint 2`, `Sprint 3`, and the next one created will read `0004 W38-2026`. Three spellings
+in one series looks untidy and is the honest record: each says what the sprint was called when it ran.
+Tidying it would clear every assignment on the board.
+
 ## Conventions
 
 - **Every duration is an integer count of seconds, and no column name carries a unit suffix.** No `_days`, no
