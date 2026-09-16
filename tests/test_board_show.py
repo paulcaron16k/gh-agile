@@ -335,10 +335,16 @@ class TestRenderPoints:
         assert tool.render_points(row["story_points"]) == "8"   # for a person
 
 
-def row(key="AGILE-9", kind="story", points=None, sprint=None, title="a title"):
-    """A `board_row` result, trimmed to what the text view reads."""
-    return {"key": key, "type": kind, "story_points": points,
-            "sprint": sprint, "title": title}
+def row(key="AGILE-9", kind="story", points=None, sprint=None, title="a title",
+        number=None):
+    """A `board_row` result, trimmed to what the text view reads.
+
+    `number` defaults from the key, since the footnote for a stale Status names
+    the command that fixes it and that takes an issue number.
+    """
+    return {"key": key, "type": kind, "story_points": points, "sprint": sprint,
+            "title": title,
+            "number": number if number is not None else int(key.rsplit("-", 1)[-1])}
 
 
 VIEW = {"name": "Engineering: all work", "layout": "BOARD_LAYOUT", "filter": "-status:Done"}
@@ -886,3 +892,82 @@ class TestTheDefaultSprintName:
         name = tool.SPRINT_DEFAULTS["name_template"].format(
             n=9999, key="A", start="", end="", year=2026, iso_week="01")
         assert name.startswith("9999") and len(name) == 13
+
+
+def stale_row(status="In Progress", state="CLOSED", **kw):
+    base = who_row(["dev"], status=status, **kw)
+    base["state"] = state
+    return base
+
+
+class TestAClosedIssueWithAStaleStatus:
+    """A board filter reads the `Status` **field** and never looks at the issue's
+    state, so a closed issue whose Status is still `In Progress` passes
+    `-status:Done` and lands in the In Progress column -- indistinguishable from
+    work somebody is doing. Not a missing row: a misleading one.
+
+    Observed on `#123`, which sat there for twenty-two hours after the work was
+    finished, with `validate` reporting it the whole time. The cause is a
+    `Closes #n` automation, which sets the issue's state and nothing else.
+    """
+
+    def test_a_closed_row_with_a_live_status_is_stale(self, tool):
+        assert tool.stale_status(stale_row())
+
+    def test_an_open_row_at_any_status_is_not(self, tool):
+        for status in ("Todo", "In Progress", "Blocked", "In Review"):
+            assert not tool.stale_status(stale_row(status=status, state="OPEN"))
+
+    def test_a_closed_row_that_reached_done_is_not(self, tool):
+        assert not tool.stale_status(stale_row(status="Done"))
+
+    def test_the_hyphen_spelling_counts_as_done(self, tool):
+        """`In-Review` and `In Progress` are the same transition everywhere else."""
+        assert not tool.stale_status(stale_row(status="done"))
+
+    def test_the_key_is_marked(self, tool):
+        rows = [stale_row(key="AGILE-123")]
+        text = rendered(tool, rows, sections=[("In Progress", rows)])
+        assert "AGILE-123*" in text
+
+    def test_a_healthy_row_is_not_marked(self, tool):
+        rows = [stale_row(key="AGILE-140", state="OPEN")]
+        text = rendered(tool, rows, sections=[("In Progress", rows)])
+        assert "AGILE-140*" not in text
+
+    def test_the_footnote_says_what_it_means_and_how_to_fix_it(self, tool):
+        rows = [stale_row(key="AGILE-123", number=123)]
+        text = rendered(tool, rows, sections=[("In Progress", rows)])
+        assert "closed, but Status is not Done" in text
+        assert "showing finished work as live" in text
+        assert "gh agile move 123 --status Done" in text
+
+    def test_a_board_in_order_says_nothing_at_all(self, tool):
+        """An explanation of a mark nothing carries is noise on every board that
+        is in order, which is most of them."""
+        rows = [stale_row(state="OPEN")]
+        text = rendered(tool, rows, sections=[("In Progress", rows)])
+        assert "*" not in text and "Status is not" not in text
+
+    def test_the_mark_is_paid_for_in_the_key_column(self, tool):
+        """So the mark cannot push a row past the width."""
+        rows = [stale_row(key="AGILE-123")]
+        assert tool.board_columns(rows, 80)["key"] == len("AGILE-123") + 1
+
+    def test_no_line_runs_past_the_width(self, tool):
+        rows = [stale_row(key="AGILE-100", number=100,
+                          title="Export pull requests, reviews and comments as events")]
+        for width in (80, 120):
+            text = rendered(tool, rows, width, sections=[("In Progress", rows)])
+            assert max(len(line) for line in text.splitlines()) <= width
+
+    def test_it_lists_every_stale_row(self, tool):
+        rows = [stale_row(key="AGILE-1", number=1), stale_row(key="AGILE-2", number=2)]
+        text = rendered(tool, rows, sections=[("In Progress", rows)])
+        assert "move 1 --status Done" in text and "move 2 --status Done" in text
+
+    def test_there_is_no_double_blank_before_the_footnote(self, tool):
+        rows = [stale_row(key="AGILE-123")]
+        lines = rendered(tool, rows, sections=[("In Progress", rows)]).splitlines()
+        at = next(i for i, line in enumerate(lines) if line.startswith("* closed"))
+        assert lines[at - 1] == "" and lines[at - 2] != ""

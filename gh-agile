@@ -3967,6 +3967,31 @@ def render_progress(row: dict) -> str:
     return render_points(row.get("story_points"))
 
 
+#: Marks a row whose issue is closed while its Status has not caught up.
+#:
+#: A footnote rather than a column. The condition is rare, and a column costs
+#: every board its width whether or not anything is stale -- the mistake the
+#: `who` column avoids by disappearing. One character beside the key is visible
+#: when scanning a column of keys, and the line under the board says what it
+#: means and how to fix it.
+STALE_MARK = "*"
+
+
+def stale_status(row: dict) -> bool:
+    """Whether this row is finished work still sitting in a live column.
+
+    A board filter reads the `Status` **field** and never looks at the issue's
+    state, so a closed issue whose Status is still `In Progress` passes
+    `-status:Done` and lands in the In Progress column -- **indistinguishable
+    from work somebody is doing**. Measured; and observed on `#123`, which sat
+    there for twenty-two hours after the work was finished.
+
+    The cause is a `Closes #n` automation, which sets the issue's state and
+    nothing else. `move --status Done --close` cannot produce it.
+    """
+    return row.get("state") == "CLOSED" and not same_status(row.get("status"), CYCLE_END)
+
+
 def board_columns(rows: list[dict], width: int) -> dict[str, int]:
     """Column widths for the text view: the widest value, and the heading it carries.
 
@@ -3977,7 +4002,8 @@ def board_columns(rows: list[dict], width: int) -> dict[str, int]:
     def widest(heading, values):
         return max([len(heading)] + [len(v) for v in values])
 
-    key = widest("key", [r["key"] for r in rows])
+    key = widest("key", [r["key"] + (STALE_MARK if stale_status(r) else "")
+                         for r in rows])
     kind = widest("type", [r["type"] or "?" for r in rows])
     # Measured from what is actually printed, not from the points alone: `3/6` is
     # wider than any estimate on most boards, and a cell rendered outside this
@@ -4068,7 +4094,8 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
         for row in items:
             title_lines = textwrap.wrap(row["title"], columns["title"]) or [""]
             out.append(board_line({
-                "key": row["key"], "type": row["type"] or "?",
+                "key": row["key"] + (STALE_MARK if stale_status(row) else ""),
+                "type": row["type"] or "?",
                 "points": render_progress(row),
                 # Cut, not elided. `elide` spends one of the eight characters on
                 # `…` to say there is more, which the cap already implies -- and
@@ -4092,6 +4119,17 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
         out.append("")
     if empty:
         out.append("empty: " + " · ".join(empty))
+    # Only when there is one. An explanation of a mark nothing carries is noise
+    # on every board that is in order, which is most of them.
+    stale = [r for r in rows if stale_status(r)]
+    if stale:
+        if out and out[-1]:
+            out.append("")
+        out.append(f"{STALE_MARK} closed, but Status is not {CYCLE_END} -- the board is "
+                   f"showing finished work as live.")
+        for row in stale:
+            out.append(f"    {row['key']}  Status: {row['status'] or '(none)'}  "
+                       f"->  gh agile move {row['number']} --status {CYCLE_END}")
     return "\n".join(out).rstrip() + "\n"
 
 
