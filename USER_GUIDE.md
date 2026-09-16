@@ -645,10 +645,64 @@ with this label on this board". GitHub does offer such a workflow, and it was
 That is the same pattern as Issue Types and Issue Fields, both of which turned
 out to be organization-only.
 
-And workflows cannot be automated from here in any case: the only mutation is
-`deleteProjectV2Workflow` — none creates, enables or configures one — and
-`ProjectV2Workflow` exposes no filter to read. So even where an auto-add exists,
-it is a web-UI setting that cannot be reproduced from the profile.
+**They can be read, and they cannot be written.** The two are worth keeping
+apart, because this guide used to say neither was possible:
+
+```
+query { user { projectV2(number: 4) { workflows(first: 20) {
+  nodes { number name enabled } } } } }
+```
+
+returns each workflow's `name` and whether it is `enabled`. What it does **not**
+return is the workflow's filter or action, and the only mutation in the schema is
+`deleteProjectV2Workflow` — nothing creates, enables or configures one. So the
+profile cannot carry these settings and `setup` cannot converge them: enabling a
+workflow is a web-UI step, once, per project.
+
+### Which ones to enable, and which to leave alone
+
+Measured on two live projects, which is where the recommendation comes from:
+
+| Workflow | Enable? | What its absence costs |
+|---|---|---|
+| **Auto-add sub-issues to project** | **yes** (on by default) | Every story created under a boarded epic would need a `sync` |
+| **Item closed** → Status = Done | **yes** | Status does not follow a close. An issue closed by a pull request's `Closes #n` keeps whatever Status it had, so finished work sits in the In Progress column looking live |
+| **Item added to project** → Status = Todo | **yes** | An item arriving by any other route has no Status, which puts it in no column of any board |
+| **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `move` can set the reason. That is how `--not-planned` lost its reason on the sandbox |
+| Pull request merged · Pull request linked to issue | not for a board of issues | They act on **pull-request items**. This board holds 65 items and every one is an issue, so both would do nothing |
+
+**Project → ⋯ (top right) → Workflows.** It is a setting on the **project**, not
+on a repository — see below.
+
+**`Item closed` is the one people miss**, and it is the one that matters most
+here: every issue in this repository is closed by a merged pull request saying
+`Closes #n`, and that automation sets the issue's state and *nothing else*.
+Without this workflow, `gh agile validate` reports `closed but status is not Done`
+and `board show` marks the row — both correct, both repairs for a state the board
+keeps producing.
+
+**`Auto-close issue` is the one to actively avoid.** It is the mirror image and it
+races this tool: `move --status Done --not-planned --close` sets Status first, the
+workflow closes the issue as *completed*, and the tool's own close then finds it
+already closed and changes nothing. Measured; `gh issue close --reason` on an
+already-closed issue exits 0 and does nothing, so the reason was silently lost.
+
+### A project belongs to an account, not to a repository
+
+Worth stating plainly, because the opposite is a natural assumption:
+
+- **Projects are owned by a User or an Organization.** Never by a repository.
+- **There is no default project for a repository.** A repository has no project
+  until somebody makes one, and projects are entirely optional.
+- **A repository does not even have to be linked.** Measured on this project:
+  owner type `User`, linked repositories *empty*, 65 items — every one an issue
+  added by URL.
+- **So these are project settings**, and a board spanning two repositories has one
+  set of them, not two.
+
+That is also why the pull-request workflows are beside the point here: a pull
+request is only subject to them if the pull request is an *item on the project*,
+and nothing in this tool puts one there.
 
 So:
 
@@ -1284,7 +1338,7 @@ Everything here was checked against the live API, not inferred. The README's
 | What | Consequence |
 |---|---|
 | **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit — see the note above. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
-| **Built-in project workflows cannot be enabled through the API** | The schema has `deleteProjectV2Workflow` and no create or update. `setup` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
+| **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `setup` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
 | **A user-owned project has no auto-add-issues workflow** | The six built-ins are: auto-add sub-issues to project, auto-close issue, item added to project, item closed, pull request linked to issue, pull request merged. Nothing puts a newly opened repository issue on the board — hence `sync` |
 | **The series anchor is write-only** | `ProjectV2IterationFieldConfigurationInput` takes `startDate`, `duration`, `iterations`; the readable `ProjectV2IterationFieldConfiguration` exposes `startDay`, `duration`, `iterations`, `completedIterations` — and no `startDate`. You cannot read back the anchor you sent |
 | **A sprint created in the web UI can be any length, on any day** | It may overlap what this tool would place. `ensure` then reports that it cannot place one without overlapping, and creates nothing |
