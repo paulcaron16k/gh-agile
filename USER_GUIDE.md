@@ -427,6 +427,30 @@ So a series acquires a seam whenever the naming changes — this board reads
 That is the honest record: each name says what the sprint was called when it ran.
 Tidying it would cost a board-wide repair to buy nothing.
 
+**A closed issue whose Status never caught up is marked.** A board filter reads
+the `Status` *field* and never looks at the issue's state, so a finished issue
+still sitting at `In Progress` passes `-status:Done` and lands in the In Progress
+column — indistinguishable from work somebody is doing. Not a missing row: a
+misleading one, and a standup reads it and asks for an update on something that
+shipped.
+
+```
+In Progress (2)
+  AGILE-123*  story    2  0004 W38  paulcaron…  Clear the sprint: labels left on epics
+  AGILE-140   story    2  0004 W38  bea         Something somebody is actually doing
+
+* closed, but Status is not Done -- the board is showing finished work as live.
+    AGILE-123  Status: In Progress  ->  gh agile move 123 --status Done
+```
+
+A footnote rather than a column: the condition is rare, and a column would cost
+every board its width whether or not anything is stale. A board in order says
+nothing at all.
+
+It happens when a pull request's `Closes #n` closes the issue — that automation
+sets the issue's state and **nothing else**, so Status stays where it was last
+put. Finishing with `gh agile move <n> --status Done --close` cannot produce it.
+
 **The filter comes from the view, not from you.** That is the point: the board
 was defined once, in the profile and on GitHub, and this renders *that*
 definition rather than something retyped beside it. `--filter` **adds** terms,
