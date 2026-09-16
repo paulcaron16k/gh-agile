@@ -76,9 +76,15 @@ for it on the strength of an older note.
 **Zamboni's markdown backlog is retired.** `~/checkout/iceberg/Zamboni/docs/tasks.md` no longer exists;
 that work is GitHub issues on project `23` now, which is what `#11`, `#20`, `#21` and `#22` were for.
 
-**The AGILE sprint series has a naming seam**: `AGILE Sprint 4` came before `Sprint 1`, `Sprint 2`,
-`Sprint 3`. Known and accepted, and left alone deliberately — renaming an iteration clears every
-assignment on the board, which is the defect this whole tool is built around.
+**The AGILE sprint series has two naming seams, and both are correct.** `AGILE Sprint 4` came before
+`Sprint 1`, `Sprint 2`, `Sprint 3`; and from 2026-09-16 the profile names new sprints
+`{n:04d} W{iso_week}-{year}`, so the next one created reads `0004 W38-2026`. Three spellings in one
+series looks untidy and is the honest record: each says what the sprint was called when it ran.
+
+Left alone deliberately, and this is not a preference. Renaming an iteration clears every item's
+`Sprint` value board-wide — the defect this whole tool is built around — and the repair is a
+reconstruction from the `sprint:` labels, not a restore of intact data. Tidying the names would cost
+that for cosmetics. See CLAUDE.md, *Sprint naming*.
 
 **Export** for AGILE goes to `exports/AGILE/` (gitignored), watermark in `.gh_agile_export.json`.
 
