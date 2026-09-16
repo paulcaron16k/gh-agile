@@ -442,10 +442,24 @@ class TestRenderBoard:
         long_title = "Export pull requests, reviews and comments as events"
         assert long_title in rendered(tool, [row(title=long_title)], width=200)
 
-    def test_a_title_too_long_for_the_width_is_elided(self, tool):
+    def test_a_title_too_long_for_the_width_is_wrapped_not_elided(self, tool):
+        """A window is as wide as the developer made it, and the tool renders to
+        that width -- the fixed 80 is for a pipe and a file. Where a title still
+        does not fit, `…` loses the half that usually says what the work is."""
         long_title = "Export pull requests, reviews and comments as events"
         text = rendered(tool, [row(title=long_title)], width=80)
-        assert long_title not in text and "…" in text
+        assert "…" not in text
+        # Every word survives, across however many lines it took.
+        assert set(long_title.split()) <= set(text.split())
+
+    def test_a_continuation_line_is_indented_to_the_title_column(self, tool):
+        long_title = "Export pull requests, reviews and comments as events, and more besides"
+        lines = rendered(tool, [row(key="AGILE-9", title=long_title)],
+                         width=60).splitlines()
+        first = next(line for line in lines if "AGILE-9" in line)
+        at = first.index("Export")
+        continuation = lines[lines.index(first) + 1]
+        assert continuation.startswith(" " * at) and continuation[at] != " "
 
     def test_no_line_runs_past_the_width(self, tool):
         """The old rendering elided at a hard 46 and still put the row at 88."""
@@ -707,3 +721,168 @@ class TestResolvingReferencesInAFilter:
         """`pyiceberg-0-12` parses as key `pyiceberg-0`, which no profile knows."""
         text, looked_up = resolve("initiative:pyiceberg-0-12")
         assert text == "initiative:pyiceberg-0-12" and looked_up == []
+
+
+def who_row(assignees=(), status="Todo", **kw):
+    base = row(**kw)
+    base["assignees"] = list(assignees)
+    base["status"] = status
+    return base
+
+
+class TestTheWhoColumn:
+    """The board a team reads in a standup could not say who has the work.
+
+    `README.md` already said `assignees[]` *answers "who has this now", which a
+    board needs and a report cannot use* -- and the board did not show it. The
+    data was already fetched; `board_row` carried it and only the rendering
+    dropped it, so this costs no extra call.
+    """
+
+    def test_it_shows_who_has_it(self, tool):
+        assert tool.render_who(who_row(["dev"])) == "dev"
+
+    def test_two_people_show_the_first_and_a_count(self, tool):
+        """A standup asks who is *driving* this; the second name does not change
+        the answer, and the column is not where a full list belongs."""
+        assert tool.render_who(who_row(["ann", "bea"])) == "ann +1"
+
+    def test_a_long_login_is_elided_not_wrapped(self, tool):
+        out = tool.render_who(who_row(["averyverylonggithublogin"]))
+        assert len(out) <= tool.WHO_WIDTH and out.endswith("…")
+
+    def test_an_unassigned_todo_is_just_empty(self, tool):
+        """The ordinary state of a backlog. Flagging it would mark nearly every
+        row and teach people to ignore the column."""
+        assert tool.render_who(who_row([], status="Todo")) == "—"
+
+    def test_unassigned_work_in_progress_is_called_out(self, tool):
+        """Somebody is meant to have this right now and nobody does -- the one
+        cell on a standup board worth stopping at."""
+        assert tool.render_who(who_row([], status="In Progress")) == tool.NOBODY
+
+    def test_the_flag_is_a_word_not_a_symbol(self, tool):
+        """`—` reads as *nothing here* and is exactly what a reader skims past."""
+        assert tool.NOBODY == "nobody" and tool.NOBODY != "—"
+
+    @pytest.mark.parametrize("status", ["Blocked", "In Review", "Done"])
+    def test_no_other_status_is_flagged(self, tool, status):
+        assert tool.render_who(who_row([], status=status)) == "—"
+
+    def test_a_spanning_level_is_not_exempt(self, tool):
+        """An epic is exempt from the *sprint*, not from having somebody on it:
+        `move` claims it, and `validate` reports it unassigned. The board says the
+        same thing."""
+        assert tool.render_who(who_row([], status="In Progress")) == tool.NOBODY
+
+
+class TestTheColumnEarnsItsPlace:
+    """Fourteen characters taken from the title, on a board with nothing to say
+    about who has anything, is fourteen characters of `—`. The title is what a
+    person reads."""
+
+    def test_a_board_where_nobody_holds_anything_omits_it(self, tool):
+        text = rendered(tool, [who_row([], status="Todo")],
+                        sections=[("Todo", [who_row([], status="Todo")])])
+        assert " who " not in text
+
+    def test_one_assignee_brings_it_back(self, tool):
+        rows = [who_row(["dev"], status="Todo")]
+        assert "who" in rendered(tool, rows, sections=[("Todo", rows)])
+
+    def test_so_does_one_unassigned_item_in_progress(self, tool):
+        """The case that matters most is the one with no assignees at all."""
+        rows = [who_row([], status="In Progress")]
+        text = rendered(tool, rows, sections=[("In Progress", rows)])
+        assert "who" in text and tool.NOBODY in text
+
+    def test_the_rule_under_the_heading_drops_it_too(self, tool):
+        """Five segments without the column, six with -- a rule with a stray
+        segment is how a dropped column announces itself."""
+        def segments(rows):
+            lines = rendered(tool, rows, sections=[("Todo", rows)]).splitlines()
+            at = next(i for i, line in enumerate(lines) if line.strip().startswith("key"))
+            return len([part for part in lines[at + 1].strip().split("  ") if part])
+
+        assert segments([who_row([], status="Todo")]) == 5
+        assert segments([who_row(["dev"], status="Todo")]) == 6
+
+    def test_the_title_gets_the_space_back(self, tool):
+        without = tool.board_columns([who_row([], status="Todo")], 80)
+        with_who = tool.board_columns([who_row(["dev"], status="Todo")], 80)
+        assert without["who"] == 0 and with_who["who"] > 0
+        assert without["title"] > with_who["title"]
+
+
+class TestTheRowStillFits:
+    def test_no_line_runs_past_the_width(self, tool):
+        rows = [who_row(["averyverylonglogin"], status="In Progress",
+                        key="AGILE-100", points=13.0, sprint="AGILE Sprint 4",
+                        title="Export pull requests, reviews and comments as events")]
+        for width in (80, 100, 200):
+            text = rendered(tool, rows, width, sections=[("In Progress", rows)])
+            assert max(len(line) for line in text.splitlines()) <= width
+
+    def test_the_heading_still_lines_up_with_the_rows(self, tool):
+        rows = [who_row(["dev"], key="AGILE-100", title="a title")]
+        lines = rendered(tool, rows, sections=[("Todo", rows)]).splitlines()
+        heading = next(line for line in lines if line.strip().startswith("key"))
+        item = next(line for line in lines if "AGILE-100" in line)
+        assert heading.index("title") == item.index("a title")
+        assert heading.index("who") == item.index("dev")
+
+
+class TestTheColumnsAreCapped:
+    """A column is paid for out of the title, which is the part a person reads."""
+
+    def test_a_mail_domain_is_dropped(self, tool):
+        """The domain is the same for everyone on the board and says nothing
+        about who has the work."""
+        assert tool.render_who(who_row(["paul@experienceflow.com"])) == "paul"
+
+    def test_a_login_is_capped(self, tool):
+        out = tool.render_who(who_row(["averylonggithublogin"]))
+        assert len(out) <= tool.WHO_WIDTH == 10
+
+    def test_ten_characters_is_enough_to_know_who(self, tool):
+        """Two people sharing a ten-character prefix is not a team anybody has."""
+        assert tool.render_who(who_row(["paulcaron16k"])).startswith("paulcaron")
+
+    def test_the_sprint_column_never_exceeds_its_cap(self, tool):
+        wide = tool.board_columns([row(sprint="0004 W38-2026")], 200)
+        assert wide["sprint"] == tool.SPRINT_WIDTH == 8
+
+    def test_a_short_sprint_name_does_not_pad_to_the_cap(self, tool):
+        assert tool.board_columns([row(sprint="0004")], 200)["sprint"] == len("sprint")
+
+    def test_the_cap_keeps_what_matters_in_the_new_naming(self, tool):
+        """`0004 W38-2026` cuts to `0004 W38` -- number and week both survive.
+        Cut rather than elided: `…` would spend one of the eight saying there is
+        more, which the cap already implies, and would cost the week a digit."""
+        rows = [row(sprint="0004 W38-2026")]
+        text = rendered(tool, rows, width=200, sections=[("Todo", rows)])
+        assert "0004 W38" in text and "0004 W3…" not in text
+
+
+class TestTheDefaultSprintName:
+    def test_it_leads_with_the_number(self, tool):
+        """The only part anyone says out loud, and the only part that survives an
+        eight-character column."""
+        name = tool.SPRINT_DEFAULTS["name_template"].format(
+            n=4, key="AGILE", start="", end="", year=2026, iso_week="38")
+        assert name == "0004 W38-2026"
+        assert name[:tool.SPRINT_WIDTH] == "0004 W38"
+
+    def test_it_sorts_lexicographically_by_sprint(self, tool):
+        tpl = tool.SPRINT_DEFAULTS["name_template"]
+        names = [tpl.format(n=n, key="A", start="", end="", year=2026, iso_week="01")
+                 for n in (2, 10, 1)]
+        assert sorted(names) == [
+            tpl.format(n=n, key="A", start="", end="", year=2026, iso_week="01")
+            for n in (1, 2, 10)]
+
+    def test_four_digits_is_ten_thousand_sprints(self, tool):
+        """At a fortnight each, longer than anyone is going to run this board."""
+        name = tool.SPRINT_DEFAULTS["name_template"].format(
+            n=9999, key="A", start="", end="", year=2026, iso_week="01")
+        assert name.startswith("9999") and len(name) == 13

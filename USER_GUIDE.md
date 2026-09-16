@@ -369,6 +369,52 @@ four leave, so a wide window shows whole titles. Output to a pipe, a file or
 `--out-dir` is a fixed 80 columns instead: a record whose line lengths depend on
 the window that produced it is a file that changes when nothing changed.
 
+**The `who` column is what makes this a standup board.** It shows who has each
+item, and calls out work that has started with nobody on it:
+
+```
+  key        type   pts  sprint    who           title
+  ─────────  ─────  ───  ────────  ────────────  ──────────────────────────────
+In Progress (2)
+  AGILE-123  story    2  Sprint 3  paulcaron16k  Clear the sprint: labels left…
+  AGILE-131  story    3  Sprint 3  nobody        Something nobody picked up
+```
+
+`nobody` is a word rather than a symbol on purpose: `—` reads as *nothing here*
+and is exactly what a reader skims past, and this is the one cell worth stopping
+at. `validate` reports the same state as `In Progress but unassigned` — this is
+the fast path to the same finding, on the board a team reads aloud.
+
+**An unassigned `Todo` is not flagged.** That is the ordinary state of a backlog;
+marking it would mark nearly every row and teach people to ignore the column. An
+epic or initiative *is* flagged when it is in progress with nobody on it — it is
+exempt from the sprint, not from having somebody driving it.
+
+**And the column appears only when it has something to say.** A board where
+nobody holds anything would spend twelve characters on a column of `—`, taken
+from the title. One assignee, or one unassigned item in progress, brings it back.
+
+`who` drops a mail domain if the login looks like an address — it is the same for
+everyone on the board — and is capped at ten characters. Two people sharing a
+ten-character prefix is not a team anybody has.
+
+**A long title wraps rather than losing its tail.** The board renders to the
+width of your window, so titles usually fit on one line; where one does not, the
+continuation is indented to the title column and every word survives. `…` would
+take the half that usually says what the work is.
+
+**The sprint column is eight characters, cut rather than elided** — and that is
+only safe because of how sprints are named. `0004 W38-2026` cuts to `0004 W38`:
+the number leads, the week places it in the year, and the year is there to sort
+by. Jira's `<Board> Sprint <n>` spends seven characters on the word *Sprint* and
+cuts to `AGILE S…`, losing the one part anyone says out loud — so the cap and the
+default name are one decision, not two.
+
+`{n:04d} W{iso_week}-{year}` is the default `name_template` for a **new** project.
+An existing profile keeps whatever it names sprints, and existing sprints are
+never renamed: any write to the iteration configuration clears every item's
+`Sprint` value board-wide.
+
 **The filter comes from the view, not from you.** That is the point: the board
 was defined once, in the profile and on GitHub, and this renders *that*
 definition rather than something retyped beside it. `--filter` **adds** terms,

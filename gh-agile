@@ -124,6 +124,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import textwrap
 from collections import defaultdict
 
 #: Statuses this tool considers legal. Mirrors POLICY.md §2; keep them in step.
@@ -3129,7 +3130,18 @@ SPRINT_DEFAULTS = {
     "start_day": "monday",
     "autocreate": True,
     "ahead": 2,
-    "name_template": "{key} Sprint {n}",
+    # `0004 W38-2026`: the sprint number first because it is the only part anyone
+    # says out loud, the ISO week because that is how a person places it in the
+    # year, and the year last because it is there to sort by. Thirteen characters
+    # of which the first eight carry the meaning, which is what lets the board's
+    # sprint column be eight wide -- Jira's `<Board> Sprint <n>` spends seven of
+    # those on the word "Sprint" and truncates to nothing useful.
+    #
+    # **A profile that already names sprints keeps its template**, and existing
+    # sprints are never renamed: any write to the iteration configuration clears
+    # every item's Sprint value board-wide. A new default changes what the next
+    # project does, not what an existing one is called.
+    "name_template": "{n:04d} W{iso_week}-{year}",
     "record_label": True,
 }
 
@@ -3853,6 +3865,53 @@ def display_width(stream=None) -> int:
     return shutil.get_terminal_size((BOARD_WIDTH, 24)).columns
 
 
+#: What the `who` column says when an issue is in progress and nobody has it.
+#:
+#: A word rather than a symbol. The empty marker is `—`, which reads as *nothing
+#: here* and is exactly what a reader skims past -- and this is the one cell on a
+#: standup board worth stopping at. `validate` reports the same state as
+#: `In Progress but unassigned`; this is the fast path to the same finding, on the
+#: board a team actually reads aloud.
+NOBODY = "nobody"
+
+#: Ten characters of a login is enough to know who. Two people sharing a
+#: ten-character prefix is not a team anybody has, and this column is paid for
+#: out of the title, which is the part a person actually reads.
+#:
+#: Two people on one issue shows the first and a count: a standup asks *who is
+#: driving this*, and the second name does not change the answer.
+WHO_WIDTH = 10
+
+#: The sprint column, capped hard. A sprint name is a label on a column, not a
+#: sentence.
+#:
+#: **This only works on a name whose distinguishing part comes first.**
+#: `AGILE Sprint 4` truncates to `AGILE S…` and loses the number, which is the
+#: one thing that matters -- so the cap and `SPRINT_DEFAULTS["name_template"]`
+#: are one decision, not two. `0004 W38-2026` truncates to `0004 W3…`: the
+#: number leads, the week is the human anchor, and the year is there to sort by
+#: rather than to read.
+SPRINT_WIDTH = 8
+
+
+def render_who(row: dict) -> str:
+    """The `who` column: who has this, or that nobody does and it matters.
+
+    An unassigned `Todo` is the ordinary state of a backlog -- flagging it would
+    mark nearly every row and teach people to ignore the column. Only work that
+    has *started* with nobody on it is called out, which is the same rule
+    `validate` applies and the same one `move` maintains.
+    """
+    who = [name for name in (row.get("assignees") or []) if name]
+    if who:
+        # A login, or the local part of one shaped like an address: the domain is
+        # the same for everyone on the board and says nothing about who has this.
+        first = who[0].split("@", 1)[0]
+        extra = f" +{len(who) - 1}" if len(who) > 1 else ""
+        return elide(first, max(WHO_WIDTH - len(extra), 1)) + extra
+    return NOBODY if same_status(row.get("status"), CYCLE_START) else "—"
+
+
 def board_columns(rows: list[dict], width: int) -> dict[str, int]:
     """Column widths for the text view: the widest value, and the heading it carries.
 
@@ -3866,17 +3925,33 @@ def board_columns(rows: list[dict], width: int) -> dict[str, int]:
     key = widest("key", [r["key"] for r in rows])
     kind = widest("type", [r["type"] or "?" for r in rows])
     points = widest("pts", [render_points(r["story_points"]) for r in rows])
-    sprint = widest("sprint", [r["sprint"] or "—" for r in rows])
-    spent = 2 + key + 2 + kind + 2 + points + 2 + sprint + 2
-    return {"key": key, "type": kind, "points": points, "sprint": sprint,
+    sprint = min(widest("sprint", [r["sprint"] or "—" for r in rows]), SPRINT_WIDTH)
+    # **The `who` column appears only when it has something to say.** A backlog is
+    # all `Todo` and nobody holds any of it, so the column would be fourteen
+    # characters of `—` taken from the title -- and the title is what a person
+    # reads. A width of 0 is the signal, and `board_line` drops the column and its
+    # separator with it.
+    #
+    # Adaptive presence rather than adaptive *meaning*: the column says the same
+    # thing wherever it appears. Widths here are already measured from the data,
+    # so this is the same idea one step further.
+    shown = [render_who(r) for r in rows]
+    who = widest("who", shown) if any(w != "—" for w in shown) else 0
+    spent = 2 + key + 2 + kind + 2 + points + 2 + sprint + 2 + (who + 2 if who else 0)
+    return {"key": key, "type": kind, "points": points, "sprint": sprint, "who": who,
             "title": max(width - spent, MIN_TITLE_WIDTH)}
 
 
 def board_line(values: dict[str, str], columns: dict[str, int]) -> str:
-    """One row, or the heading: the same five columns either way."""
+    """One row, or the heading: the same columns either way.
+
+    `who` is dropped, separator and all, when its width is 0 -- see
+    `board_columns` for why a board that has nothing to say about it says nothing.
+    """
+    who = f"{values['who']:<{columns['who']}}  " if columns["who"] else ""
     return (f"  {values['key']:<{columns['key']}}  {values['type']:<{columns['type']}}  "
             f"{values['points']:>{columns['points']}}  "
-            f"{values['sprint']:<{columns['sprint']}}  {values['title']}")
+            f"{values['sprint']:<{columns['sprint']}}  {who}{values['title']}")
 
 
 def elide(text: str, width: int) -> str:
@@ -3906,9 +3981,11 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
         # A heading, because five unlabelled columns put `8` next to
         # `AGILE Sprint 4` and leave the reader to infer which is which.
         out.append(board_line({"key": "key", "type": "type", "points": "pts",
-                               "sprint": "sprint", "title": "title"}, columns))
+                               "sprint": "sprint", "who": "who", "title": "title"},
+                              columns))
         out.append("  " + "  ".join("─" * columns[c] for c in
-                                    ("key", "type", "points", "sprint", "title")))
+                                    ("key", "type", "points", "sprint", "who", "title")
+                                    if columns[c]))
     empty = []
     for name, items in sections:
         if not items:
@@ -3918,12 +3995,29 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
         if name:
             out.append(f"{name} ({len(items)})")
         for row in items:
+            title_lines = textwrap.wrap(row["title"], columns["title"]) or [""]
             out.append(board_line({
                 "key": row["key"], "type": row["type"] or "?",
                 "points": render_points(row["story_points"]),
-                "sprint": row["sprint"] or "—",
-                "title": elide(row["title"], columns["title"]),
+                # Cut, not elided. `elide` spends one of the eight characters on
+                # `…` to say there is more, which the cap already implies -- and
+                # on the default naming those eight are exactly the number and
+                # the week (`0004 W38`), so the ellipsis would cost the week a
+                # digit. On a legacy `<Key> Sprint <n>` name neither spelling
+                # helps, which is the argument for the naming rather than for
+                # the ellipsis.
+                "sprint": (row["sprint"] or "—")[:columns["sprint"]],
+                "who": render_who(row),
+                "title": title_lines[0],
             }, columns))
+            # **Wrapped, not elided.** A window is as wide as the developer made
+            # it and the tool already renders to that width -- the fixed 80 is for
+            # a pipe and a file. Where a title still does not fit, losing its tail
+            # to `…` loses the half that usually says what the work is; the
+            # continuation lines are indented to the title column so the board
+            # still reads as a column.
+            for continuation in title_lines[1:]:
+                out.append(" " * (width - columns["title"]) + continuation)
         out.append("")
     if empty:
         out.append("empty: " + " · ".join(empty))
