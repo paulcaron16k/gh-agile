@@ -549,7 +549,7 @@ Everything below was checked against the live API, not inferred.
 | What | Consequence |
 |---|---|
 | **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
-| **Built-in project workflows cannot be enabled through the API** | The schema has `deleteProjectV2Workflow` and no create or update. `setup` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
+| **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `setup` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
 | **A user-owned project has no auto-add-issues workflow** | The six built-ins are: auto-add sub-issues to project, auto-close issue, item added to project, item closed, pull request linked to issue, pull request merged. Nothing puts a newly opened repository issue on the board — hence `sync` |
 | **The series anchor is write-only** | `ProjectV2IterationFieldConfigurationInput` takes `startDate`, `duration`, `iterations`; the readable `ProjectV2IterationFieldConfiguration` exposes `startDay`, `duration`, `iterations`, `completedIterations` — and no `startDate`. You cannot read back the anchor you sent |
 | **A sprint created in the web UI can be any length, on any day** | It may overlap what this tool would place. `ensure` then reports that it cannot place a sprint without overlapping, and creates nothing |
@@ -696,10 +696,11 @@ limits stay a web-UI setting.
 `board show` evaluates the view's filter locally rather than reading back what
 the web UI draws — see [above](#reading-a-board-from-the-terminal).
 
-**Project automations.** The schema has `deleteProjectV2Workflow` and nothing
-that creates, enables or configures one, so `setup` cannot converge a project's
-built-in workflows and every one of them stays a manual web-UI step — see
-[Sprint management](#sprint-management).
+**Project automations, as a write.** They can be *read* — `projectV2.workflows`
+gives each one's `name` and `enabled` — but the schema has
+`deleteProjectV2Workflow` and nothing that creates, enables or configures one, and
+a workflow's filter is not readable. So `setup` cannot converge them and every one
+stays a manual web-UI step — see [Sprint management](#sprint-management).
 
 **Issue types and issue fields.** Both organization-only —
 `/repos/{owner}/{repo}/issues/types` returns 404 on a user-owned repository and
@@ -780,12 +781,23 @@ gh auth status                  # verify: 'project' appears in Token scopes
 Project → ⋯ → *Workflows*. Enable **Item added to project** → set Status, so
 anything reaching the board by any route gets a Status instead of a blank.
 
-These cannot be enabled through the API — the GraphQL schema has
-`deleteProjectV2Workflow` and nothing that creates or updates one — so this step
-is manual, once, per project. And **auto-add repository issues is not among a
-user-owned project's built-in workflows at all**, which is exactly why `sync`
-exists: a project is a collection, not a filter, and an issue is not on the board
-until something puts it there.
+Also enable **Item closed** → set Status = `Done`. Every issue here is closed by a
+merged pull request saying `Closes #n`, and that automation sets the issue's state
+and *nothing else* — so without this workflow, finished work keeps its old Status
+and sits in the In Progress column looking live.
+
+**Do not enable `Auto-close issue`.** It closes the issue the moment Status
+becomes `Done`, which beats `gh agile move --not-planned --close` to the close and
+silently costs the reason.
+
+These **can be read and cannot be written**. `projectV2.workflows` returns each
+one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and nothing
+that creates, enables or updates one, and a workflow's filter is not readable
+either. So this step is manual, once, per project, and no file in this repository
+can carry it. And **auto-add repository issues is not among a user-owned project's
+built-in workflows at all**, which is exactly why `sync` exists: a project is a
+collection, not a filter, and an issue is not on the board until something puts it
+there.
 
 **5. Collaborators, if any.**
 Project → Settings → *Manage access* → invite, with Read / Write / Admin.

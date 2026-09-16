@@ -14,6 +14,25 @@ behaviour, the six built-in workflows, the write-only series anchor, the `503`s 
 name `ProjectV2Iteration` implies an identified object; it carries `startDate`, `duration` and `title` and
 no id, which is the whole defect this tool is built around.
 
+**A project's built-in workflows can be read, and reading them explains defects that look unrelated.**
+Measured 2026-09-16 — `projectV2.workflows` returns each one's `name` and `enabled`:
+
+```
+project 4 (AGILE)            project 19 (sandbox)
+  [off] Auto-close issue       [on ] Auto-close issue
+  [off] Item closed            [on ] Item closed
+```
+
+Two defects chased from opposite ends all session turned out to be **one setting seen from two sides**.
+The sandbox has everything on, so setting `Status = Done` there closed the issue before the tool could,
+and `--not-planned` lost its reason. This board has almost everything off, so `Closes #n` left Status
+behind and finished work sat in the In Progress column — twenty-two hours on one issue.
+
+Neither investigation named the cause, because the documentation here said workflows could not be read
+at all. **A wrong "you cannot look at that" is worse than no note**: it does not merely fail to help, it
+stops the next person looking. What is genuinely impossible is *writing* them — the schema has
+`deleteProjectV2Workflow` and no create or update — and reading a workflow's *filter*.
+
 **A project workflow can close your issue before you do, and GitHub attributes it to you.** Measured
 2026-09-13 on project `#19`: setting `Status` to `Done` and issuing **no close at all** left the issue
 CLOSED as `COMPLETED` one second later. The `ClosedEvent` names the *project owner*, not
