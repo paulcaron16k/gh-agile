@@ -91,6 +91,8 @@ def move(monkeypatch, tool, capsys):
                             lambda repo, issue, wanted, *, explicit:
                                 record.claims.append((wanted, explicit)) or "  claimed")
         monkeypatch.setattr(tool, "close_issue", lambda *a, **k: None)
+        # Its own story (#117); stubbed so these tests stay about `move`.
+        monkeypatch.setattr(tool, "promote_parents", lambda *a, **k: None)
 
         tool.cmd_move(argparse_namespace(tool, status=status, **overrides))
         record.out = capsys.readouterr().out
@@ -132,8 +134,12 @@ class TestTheSpanningLevels:
         """It still starts. Only the sprint half is skipped."""
         assert move(labels=[f"type:{level}"]).status_writes == ["In Progress"]
 
-    def test_it_is_still_claimed(self, tool, move, level):
-        assert move(labels=[f"type:{level}"]).claims == [("", False)]
+    def test_it_is_not_claimed_implicitly(self, tool, move, level):
+        """The implicit claim fills a gap -- work in flight that reads as
+        nobody's. A container has no gap to fill: it holds stories worked by
+        several people, so there is no single holder, and the caller is merely
+        whoever happened to start one of them."""
+        assert move(labels=[f"type:{level}"]).claims == []
 
     def test_the_skip_is_said_out_loud(self, tool, move, level):
         """Silence here reads as a failed write."""
