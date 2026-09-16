@@ -3477,6 +3477,13 @@ def sprint_covering(spans: list[tuple], when):
 ABANDONED = "NOT_PLANNED"
 
 
+#: The levels above a story: an initiative holds epics, an epic holds stories.
+#:
+#: One tuple for two rules, because both follow from the same fact -- these
+#: levels *contain* work rather than being it. They must never be placed in a
+#: sprint (below), and their `pts` cell carries a child tally rather than an
+#: estimate (`shows_progress`). A second list with the same contents would drift.
+#:
 #: The levels that span sprints and must never be placed in one.
 #:
 #: A story belongs to the sprint it is worked in. An epic does not: it is the
@@ -3766,6 +3773,12 @@ def board_row(item: dict, keys: dict[str, str]) -> dict:
         "labels": labels,
         "assignees": [n["login"] for n in (content.get("assignees") or {}).get("nodes", [])],
         "epic_number": (content.get("parent") or {}).get("number"),
+        # Already fetched by `FULL_ITEM_SELECTION`, and simply never carried
+        # through -- so the tally in the `pts` column costs no extra call. Both
+        # land in the JSONL rendering too, which splats this row, so a reader
+        # gets the numbers rather than having to parse "3/6".
+        "sub_issues_total": (content.get("subIssuesSummary") or {}).get("total") or 0,
+        "sub_issues_done": (content.get("subIssuesSummary") or {}).get("completed") or 0,
         "state": content.get("state"),
     }
 
@@ -3912,6 +3925,48 @@ def render_who(row: dict) -> str:
     return NOBODY if same_status(row.get("status"), CYCLE_START) else "—"
 
 
+def shows_progress(row: dict) -> bool:
+    """Whether this row's `pts` cell should carry a child tally instead.
+
+    **The two levels above a story, and only those.** GitHub's sub-issues nest
+    anywhere, so a story may carry a task list -- and this tool has never used
+    that concept: `story` creates no children, nothing counts them, and the Gold
+    model has no grain for them. Tallying one here would put a progress figure on
+    a row whose children the rest of the tool ignores, and it would contradict
+    the legend, which says *for epics and initiatives* because that is what a
+    reader can act on.
+
+    `SPANNING_TYPES` rather than a second list. The same two levels span sprints
+    and carry a tally, and they do so for one underlying reason -- they contain
+    work rather than being it. Two lists with the same contents drift; this one
+    does not.
+
+    A tally needs children to count, so a parent with none keeps its em dash:
+    `0/0` asserts a denominator that does not exist.
+    """
+    return row.get("type") in SPANNING_TYPES and bool(row.get("sub_issues_total"))
+
+
+def render_progress(row: dict) -> str:
+    """The `pts` cell: story points, or `closed/total` children where there are none.
+
+    **`closed`, never `done`.** `subIssuesSummary.completed` is GitHub's name for
+    the count of *closed* children and includes those closed as `NOT_PLANNED` --
+    measured on `#9`, six of seven with one abandoned. Abandoned is not
+    completed, so reading this as "done" asserts something false about that row.
+    What is true, and what a parent is actually waiting on, is how many are still
+    open.
+
+    **Per level, not transitively.** `subIssuesSummary` counts direct children,
+    so an initiative tallies its epics and an epic tallies its stories. Measured:
+    closing a story took its epic to 1/1 while the initiative stayed 0/1. A
+    number reaching the whole tree is one nobody could reconcile with the board.
+    """
+    if shows_progress(row):
+        return f"{row.get('sub_issues_done') or 0}/{row['sub_issues_total']}"
+    return render_points(row.get("story_points"))
+
+
 def board_columns(rows: list[dict], width: int) -> dict[str, int]:
     """Column widths for the text view: the widest value, and the heading it carries.
 
@@ -3924,7 +3979,10 @@ def board_columns(rows: list[dict], width: int) -> dict[str, int]:
 
     key = widest("key", [r["key"] for r in rows])
     kind = widest("type", [r["type"] or "?" for r in rows])
-    points = widest("pts", [render_points(r["story_points"]) for r in rows])
+    # Measured from what is actually printed, not from the points alone: `3/6` is
+    # wider than any estimate on most boards, and a cell rendered outside this
+    # measurement pushes every row past the width the layout was chosen to fit.
+    points = widest("pts", [render_progress(r) for r in rows])
     sprint = min(widest("sprint", [r["sprint"] or "—" for r in rows]), SPRINT_WIDTH)
     # **The `who` column appears only when it has something to say.** A backlog is
     # all `Todo` and nobody holds any of it, so the column would be fourteen
@@ -3975,7 +4033,20 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
     """
     out = [view["name"],
            f"{kind} · {owner}/projects/{project} · {len(rows)} of {total} items",
-           f"filter: {shown_filter or '(none) -- this board excludes nothing'}", ""]
+           f"filter: {shown_filter or '(none) -- this board excludes nothing'}"]
+    # **Said, not inferred.** The `pts` column holds two kinds of value once a
+    # parent is on the board, and a heading naming only one of them leaves the
+    # reader to work out which rows are which -- the defect the `who` heading was
+    # added to avoid. The heading itself cannot say it: it sets the column's
+    # minimum width, and `pts closed/total` would take ten characters from the
+    # title on every board. So it is said once, here, and only where it is true.
+    #
+    # `closed`, never `done`: a child closed as NOT_PLANNED counts, and abandoned
+    # is not completed. See `render_progress`.
+    if any(shows_progress(row) for row in rows):
+        out.append("pts: story points, or closed/total sub-issues for epics "
+                   "and initiatives")
+    out.append("")
     columns = board_columns(rows, width)
     if rows:
         # A heading, because five unlabelled columns put `8` next to
@@ -3998,7 +4069,7 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
             title_lines = textwrap.wrap(row["title"], columns["title"]) or [""]
             out.append(board_line({
                 "key": row["key"], "type": row["type"] or "?",
-                "points": render_points(row["story_points"]),
+                "points": render_progress(row),
                 # Cut, not elided. `elide` spends one of the eight characters on
                 # `…` to say there is more, which the cap already implies -- and
                 # on the default naming those eight are exactly the number and
