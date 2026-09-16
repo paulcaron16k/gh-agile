@@ -442,10 +442,24 @@ class TestRenderBoard:
         long_title = "Export pull requests, reviews and comments as events"
         assert long_title in rendered(tool, [row(title=long_title)], width=200)
 
-    def test_a_title_too_long_for_the_width_is_elided(self, tool):
+    def test_a_title_too_long_for_the_width_is_wrapped_not_elided(self, tool):
+        """A window is as wide as the developer made it, and the tool renders to
+        that width -- the fixed 80 is for a pipe and a file. Where a title still
+        does not fit, `…` loses the half that usually says what the work is."""
         long_title = "Export pull requests, reviews and comments as events"
         text = rendered(tool, [row(title=long_title)], width=80)
-        assert long_title not in text and "…" in text
+        assert "…" not in text
+        # Every word survives, across however many lines it took.
+        assert set(long_title.split()) <= set(text.split())
+
+    def test_a_continuation_line_is_indented_to_the_title_column(self, tool):
+        long_title = "Export pull requests, reviews and comments as events, and more besides"
+        lines = rendered(tool, [row(key="AGILE-9", title=long_title)],
+                         width=60).splitlines()
+        first = next(line for line in lines if "AGILE-9" in line)
+        at = first.index("Export")
+        continuation = lines[lines.index(first) + 1]
+        assert continuation.startswith(" " * at) and continuation[at] != " "
 
     def test_no_line_runs_past_the_width(self, tool):
         """The old rendering elided at a hard 46 and still put the row at 88."""
@@ -816,3 +830,59 @@ class TestTheRowStillFits:
         item = next(line for line in lines if "AGILE-100" in line)
         assert heading.index("title") == item.index("a title")
         assert heading.index("who") == item.index("dev")
+
+
+class TestTheColumnsAreCapped:
+    """A column is paid for out of the title, which is the part a person reads."""
+
+    def test_a_mail_domain_is_dropped(self, tool):
+        """The domain is the same for everyone on the board and says nothing
+        about who has the work."""
+        assert tool.render_who(who_row(["paul@experienceflow.com"])) == "paul"
+
+    def test_a_login_is_capped(self, tool):
+        out = tool.render_who(who_row(["averylonggithublogin"]))
+        assert len(out) <= tool.WHO_WIDTH == 10
+
+    def test_ten_characters_is_enough_to_know_who(self, tool):
+        """Two people sharing a ten-character prefix is not a team anybody has."""
+        assert tool.render_who(who_row(["paulcaron16k"])).startswith("paulcaron")
+
+    def test_the_sprint_column_never_exceeds_its_cap(self, tool):
+        wide = tool.board_columns([row(sprint="0004 W38-2026")], 200)
+        assert wide["sprint"] == tool.SPRINT_WIDTH == 8
+
+    def test_a_short_sprint_name_does_not_pad_to_the_cap(self, tool):
+        assert tool.board_columns([row(sprint="0004")], 200)["sprint"] == len("sprint")
+
+    def test_the_cap_keeps_what_matters_in_the_new_naming(self, tool):
+        """`0004 W38-2026` cuts to `0004 W38` -- number and week both survive.
+        Cut rather than elided: `…` would spend one of the eight saying there is
+        more, which the cap already implies, and would cost the week a digit."""
+        rows = [row(sprint="0004 W38-2026")]
+        text = rendered(tool, rows, width=200, sections=[("Todo", rows)])
+        assert "0004 W38" in text and "0004 W3…" not in text
+
+
+class TestTheDefaultSprintName:
+    def test_it_leads_with_the_number(self, tool):
+        """The only part anyone says out loud, and the only part that survives an
+        eight-character column."""
+        name = tool.SPRINT_DEFAULTS["name_template"].format(
+            n=4, key="AGILE", start="", end="", year=2026, iso_week="38")
+        assert name == "0004 W38-2026"
+        assert name[:tool.SPRINT_WIDTH] == "0004 W38"
+
+    def test_it_sorts_lexicographically_by_sprint(self, tool):
+        tpl = tool.SPRINT_DEFAULTS["name_template"]
+        names = [tpl.format(n=n, key="A", start="", end="", year=2026, iso_week="01")
+                 for n in (2, 10, 1)]
+        assert sorted(names) == [
+            tpl.format(n=n, key="A", start="", end="", year=2026, iso_week="01")
+            for n in (1, 2, 10)]
+
+    def test_four_digits_is_ten_thousand_sprints(self, tool):
+        """At a fortnight each, longer than anyone is going to run this board."""
+        name = tool.SPRINT_DEFAULTS["name_template"].format(
+            n=9999, key="A", start="", end="", year=2026, iso_week="01")
+        assert name.startswith("9999") and len(name) == 13

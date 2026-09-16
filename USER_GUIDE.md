@@ -391,10 +391,29 @@ epic or initiative *is* flagged when it is in progress with nobody on it — it 
 exempt from the sprint, not from having somebody driving it.
 
 **And the column appears only when it has something to say.** A board where
-nobody holds anything would spend fourteen characters on a column of `—`, taken
-from the title — which at 80 columns is the difference between 26 and 40
-characters of it. One assignee, or one unassigned item in progress, brings the
-column back.
+nobody holds anything would spend twelve characters on a column of `—`, taken
+from the title. One assignee, or one unassigned item in progress, brings it back.
+
+`who` drops a mail domain if the login looks like an address — it is the same for
+everyone on the board — and is capped at ten characters. Two people sharing a
+ten-character prefix is not a team anybody has.
+
+**A long title wraps rather than losing its tail.** The board renders to the
+width of your window, so titles usually fit on one line; where one does not, the
+continuation is indented to the title column and every word survives. `…` would
+take the half that usually says what the work is.
+
+**The sprint column is eight characters, cut rather than elided** — and that is
+only safe because of how sprints are named. `0004 W38-2026` cuts to `0004 W38`:
+the number leads, the week places it in the year, and the year is there to sort
+by. Jira's `<Board> Sprint <n>` spends seven characters on the word *Sprint* and
+cuts to `AGILE S…`, losing the one part anyone says out loud — so the cap and the
+default name are one decision, not two.
+
+`{n:04d} W{iso_week}-{year}` is the default `name_template` for a **new** project.
+An existing profile keeps whatever it names sprints, and existing sprints are
+never renamed: any write to the iteration configuration clears every item's
+`Sprint` value board-wide.
 
 **The filter comes from the view, not from you.** That is the point: the board
 was defined once, in the profile and on GitHub, and this renders *that*
