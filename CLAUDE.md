@@ -166,6 +166,12 @@ lists stay **strings** with a `;` separator, because promising an array means ow
 `github_events` declares **no replication key**, because the watermark filters the *issue* on
 `updated_at` and an event's `occurred_at` is not the field the window was applied to.
 
+**Adding a column to the export means adding it to `github_catalog.json`**, and `tests/test_export_catalog.py`
+fails until you do — both directions, offline, by calling the row builders with fixtures. Written because
+`#90` added five columns and the catalog was updated *by hand*: nothing would have caught the omission,
+and the next person has no reason to know the file exists. A catalog that has drifted is worse than none,
+because it is trusted.
+
 **Export: silver tables.** `github_issues`, `github_events`, `github_prs`, `github_project`, `github_boards`, `github_sprints`.
 Gold `agile_*` belongs to the ExperienceFlow model and is produced by a silver→gold transform in the IWS pipeline;
 nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.

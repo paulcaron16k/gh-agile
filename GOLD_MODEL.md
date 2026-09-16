@@ -178,7 +178,7 @@ Found by running out, not by reading the code.
 
 ## The silver contract
 
-`github_catalog.json`, in this repository, describes what the export writes: six streams, every column
+`github_catalog.json`, in this repository, describes what the export writes — and `tests/test_export_catalog.py` fails when it stops being true, in either direction: six streams, every column
 typed and nullable-or-not, `key_properties`, and the replication method per stream. It is the input a
 silver→gold transform is entitled to assume, and it is checked against the real export rather than
 maintained by hand alone.
