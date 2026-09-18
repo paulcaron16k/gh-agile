@@ -2729,7 +2729,7 @@ def backfill_sprint_labels(args) -> int:
         return sprint_covering(spans, dt.date.fromisoformat(stamp[:10]))
 
     data = rows(args.owner, args.project, with_history=args.source == "timeline")
-    stamped = skipped = uncovered = spanning = 0
+    stamped = skipped = uncovered = containers = 0
     for row in data:
         labels = set(row["labels"].split(";")) if row["labels"] else set()
         # **The bulk write, and the one that matters.** An epic or initiative is
@@ -2738,8 +2738,8 @@ def backfill_sprint_labels(args) -> int:
         # is precisely what someone runs *because* `validate` complained. Same
         # reasoning as the abandoned issue below: a label asserts the sprint the
         # work was worked in, and neither level was worked in one sprint.
-        if spans_sprints(labels):
-            spanning += 1
+        if container_level(labels):
+            containers += 1
             continue
         wanted = []
         if args.source == "field":
@@ -2782,10 +2782,10 @@ def backfill_sprint_labels(args) -> int:
 
     verb = "would stamp" if args.dry_run else "stamped"
     print(f"  {verb} {stamped}, already present {skipped}, across {len(data)} item(s)")
-    if spanning:
+    if containers:
         # Counted out loud. A silent skip on a repair pass reads as a pass that
         # found nothing to do, which is the one thing it must not be confused with.
-        print(f"  {spanning} epic(s)/initiative(s) skipped; a level that spans "
+        print(f"  {containers} epic(s)/initiative(s) skipped; a level that spans "
               f"sprints is never stamped")
     if uncovered:
         print(f"  {uncovered} transition(s) fell outside every sprint and were skipped; "
@@ -2793,7 +2793,7 @@ def backfill_sprint_labels(args) -> int:
     return 0
 
 
-def unstamp_spanning(args) -> int:
+def unstamp_containers(args) -> int:
     """Remove `sprint:` labels from the levels that span sprints.
 
     The one-off repair for labels written before the rule existed, and the only
@@ -2827,7 +2827,7 @@ def unstamp_spanning(args) -> int:
         if content.get("__typename") != "Issue":
             continue
         labels = [n["name"] for n in content["labels"]["nodes"]]
-        level = spans_sprints(labels)
+        level = container_level(labels)
         if not level:
             continue
         scanned += 1
@@ -2892,7 +2892,7 @@ def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
         return 0
 
     _title, items = fetch_items(login, project)
-    changed = agreed = unknown = disagreed = spanning = 0
+    changed = agreed = unknown = disagreed = containers = 0
     for item in items:
         content = item.get("content") or {}
         if content.get("__typename") != "Issue":
@@ -2906,8 +2906,8 @@ def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
         # rule existed, all five proposed for Sprint 2 by a plain `reconcile
         # --dry-run`. Skipped rather than repaired, because the field this
         # would write is the one a level spanning sprints must not have.
-        if spans_sprints(labels):
-            spanning += 1
+        if container_level(labels):
+            containers += 1
             continue
         stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels
                         if lb.startswith(SPRINT_LABEL))
@@ -2947,8 +2947,8 @@ def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
         tail = f", disagreeing {disagreed}" if disagreed else ""
         # Named, because a stray label on an epic is something to clear rather
         # than something to live with: `sprint unstamp` is what clears it.
-        tail += (f", spanning {spanning} (see `gh agile sprint unstamp`)"
-                 if spanning else "")
+        tail += (f", spanning {containers} (see `gh agile sprint unstamp`)"
+                 if containers else "")
         print(f"  {verb} {changed}, already correct {agreed}, "
               f"unresolvable {unknown}{tail}")
     return changed
@@ -2980,7 +2980,7 @@ def cmd_sprint(args) -> int:
         return backfill_sprint_labels(args)
 
     if args.sprint_command == "unstamp":
-        return unstamp_spanning(args)
+        return unstamp_containers(args)
 
     if args.sprint_command == "ensure":
         require_sprint_config(args._config, "`sprint ensure`")
@@ -3479,28 +3479,33 @@ ABANDONED = "NOT_PLANNED"
 
 #: The levels above a story: an initiative holds epics, an epic holds stories.
 #:
-#: One tuple for two rules, because both follow from the same fact -- these
-#: levels *contain* work rather than being it. They must never be placed in a
-#: sprint (below), and their `pts` cell carries a child tally rather than an
-#: estimate (`shows_progress`). A second list with the same contents would drift.
+#: **They contain work rather than being it**, and every rule that reads this
+#: tuple follows from that one sentence. A container is not placed in a sprint
+#: (`cmd_move`), is not estimated in points but tallied by its children
+#: (`shows_progress`), is not held by one person (`render_who`, `cmd_validate`),
+#: and its status is derived from what it holds (`promote_parents`).
 #:
-#: The levels that span sprints and must never be placed in one.
+#: **Named for the set, not for the first rule that needed it.** This was
+#: `CONTAINER_TYPES` / `container_level`, after the sprint rule that introduced it --
+#: and then five more rules read it, of which only three were about sprints. A
+#: reader at the tally, the promotion or the assignee check went looking for a
+#: sprint that was not there. The sprint reasoning now lives at the sprint call
+#: sites, where it is the point rather than a name every other site reads past.
 #:
-#: A story belongs to the sprint it is worked in. An epic does not: it is the
-#: container for work that runs across several, and an initiative sits a level
-#: above that. The `Sprint` field holds exactly one value, so putting either in a
-#: sprint does not say "started here" -- it says "committed to this iteration",
-#: which is false the moment the next one begins.
-SPANNING_TYPES = ("initiative", "epic")
+#: The general mistake, worth naming because it is easy to repeat: a set named
+#: for the first rule that needed it, then read by six.
+#:
+#: One tuple, not two. A second list with the same contents drifts.
+CONTAINER_TYPES = ("initiative", "epic")
 
 
-def spans_sprints(labels) -> str | None:
-    """The level's name if this issue is one that spans sprints, else None.
+def container_level(labels) -> str | None:
+    """The level's name if this issue contains other issues, else None.
 
     Initiative first: an issue carrying both labels is the higher of the two, and
-    the name is only used to say why the sprint was skipped.
+    the name is used only to say which level a rule is talking about.
     """
-    return next((name for name in SPANNING_TYPES if f"type:{name}" in set(labels)), None)
+    return next((name for name in CONTAINER_TYPES if f"type:{name}" in set(labels)), None)
 
 
 def issue_labels(repo: str, issue: int) -> list[str]:
@@ -3916,7 +3921,7 @@ def render_who(row: dict) -> str:
     `validate` applies and the same one `move` maintains.
     """
     who = [name for name in (row.get("assignees") or []) if name]
-    if not who and row.get("type") in SPANNING_TYPES:
+    if not who and row.get("type") in CONTAINER_TYPES:
         # `nobody` is a call to action -- it means *this should have someone*.
         # An epic holds work done by several people and is not meant to have one
         # holder, so the empty marker is the honest cell: nothing is missing.
@@ -3941,7 +3946,7 @@ def shows_progress(row: dict) -> bool:
     the legend, which says *for epics and initiatives* because that is what a
     reader can act on.
 
-    `SPANNING_TYPES` rather than a second list. The same two levels span sprints
+    `CONTAINER_TYPES` rather than a second list. The same two levels span sprints
     and carry a tally, and they do so for one underlying reason -- they contain
     work rather than being it. Two lists with the same contents drift; this one
     does not.
@@ -3949,7 +3954,7 @@ def shows_progress(row: dict) -> bool:
     A tally needs children to count, so a parent with none keeps its em dash:
     `0/0` asserts a denominator that does not exist.
     """
-    return row.get("type") in SPANNING_TYPES and bool(row.get("sub_issues_total"))
+    return row.get("type") in CONTAINER_TYPES and bool(row.get("sub_issues_total"))
 
 
 def render_progress(row: dict) -> str:
@@ -4774,7 +4779,7 @@ def promote_parents(args, repo: str, issue: int) -> None:
 
     for level_node in chain:
         labels = [n["name"] for n in (level_node.get("labels") or {}).get("nodes") or []]
-        level = spans_sprints(labels)
+        level = container_level(labels)
         if not level:
             continue
         item = next((n for n in (level_node.get("projectItems") or {}).get("nodes") or []
@@ -4896,16 +4901,22 @@ def cmd_move(args) -> int:
     # also writes a false record, since a `sprint:` label asserts the sprint the
     # work was *worked in* and one label cannot say "all of them".
     #
+    # Underneath both: the `Sprint` field holds exactly one value, so putting a
+    # container in a sprint does not say "started here" -- it says "committed to
+    # this iteration", which is false the moment the next one begins. That
+    # sentence used to sit on `CONTAINER_TYPES`, where every rule that reads the
+    # tuple had to read past it; it belongs here, with the rule it explains.
+    #
     # Looked up only on the two transitions that touch the sprint, so every other
     # status change costs nothing. Status and the assignee claim are unaffected:
     # an epic still starts, it simply does not join an iteration.
-    spanning = None
+    container = None
     if same_status(args.status, CYCLE_START) or same_status(args.status, CYCLE_END):
-        spanning = spans_sprints(issue_labels(repo, args.issue))
-        if spanning:
+        container = container_level(issue_labels(repo, args.issue))
+        if container:
             # Said out loud rather than skipped quietly: an epic that starts with
             # no sprint line looks like the sprint write failed.
-            print(f"  #{args.issue} is an {spanning}, which spans sprints; "
+            print(f"  #{args.issue} is an {container}, which spans sprints; "
                   f"leaving Sprint and {SPRINT_LABEL} labels alone")
 
     # Starting work puts the item in the current sprint, if it is not already in
@@ -4913,7 +4924,7 @@ def cmd_move(args) -> int:
     # sprint, and a sprint report that quietly omits it. A warning rather than a
     # refusal when no sprint is active: declining to start work because nobody
     # created a sprint would be the tool making a process decision.
-    if same_status(args.status, CYCLE_START) and not spanning:
+    if same_status(args.status, CYCLE_START) and not container:
         # Same reason: item-list carries no custom field values, so the sprint
         # has to come from the GraphQL side.
         assigned = sprint_assignments(args.owner, args.project)
@@ -4966,14 +4977,14 @@ def cmd_move(args) -> int:
     # there is no single "who has this", and the caller is merely whoever
     # happened to start one of them. `--add-assignee` still assigns at any level,
     # because given at all is somebody asking rather than the tool guessing.
-    if given or (same_status(args.status, CYCLE_START) and not spanning):
+    if given or (same_status(args.status, CYCLE_START) and not container):
         # After the Status line and never before it. The status write has already
         # succeeded by here, and these are two grants -- the same split
         # `board_write_reported` exists for: if the assignee write is refused,
         # the output has to carry both facts.
         print(claim_issue(repo, args.issue, wanted, explicit=given))
 
-    if same_status(args.status, CYCLE_END) and not spanning:
+    if same_status(args.status, CYCLE_END) and not container:
         # Again at the end: an item carried across a boundary finishes in a
         # different sprint than it started, and the closing one is what a
         # velocity figure is built from. Both labels survive; the latest date is
@@ -5322,7 +5333,7 @@ def cmd_fix(args) -> int:
     # that spans sprints is not given a Sprint field, so there is nothing here to
     # repair toward. Reported rather than refused -- being asked is reasonable,
     # and the answer is that the label is the stray thing, not the empty field.
-    if level := spans_sprints(labels):
+    if level := container_level(labels):
         print(f"  {repo}#{issue} is an {level}, which spans sprints; it has no Sprint "
               f"field to repair")
         if any(lb.startswith(SPRINT_LABEL) for lb in labels):
@@ -5454,7 +5465,7 @@ def cmd_validate(args) -> int:
         # clears it -- unlike the orphan story above, which somebody may have
         # meant.
         if (same_status(status, CYCLE_START) and row.get("parent_key")
-                and row.get("parent_type") in SPANNING_TYPES):
+                and row.get("parent_type") in CONTAINER_TYPES):
             parent_status = status_of.get(row["parent_key"])
             if not parent_status or same_status(parent_status, "Todo"):
                 stalled.setdefault(
@@ -5529,16 +5540,16 @@ def cmd_validate(args) -> int:
         # epic is in progress, and a check that fails forever is a check people
         # stop running. Same predicate as `move` uses, so the next level added is
         # covered by one list.
-        spanning = spans_sprints(labels)
+        container = container_level(labels)
         if (same_status(status, CYCLE_START) and not row.get("field_sprint")
-                and not spanning):
+                and not container):
             problems[f"{CYCLE_START} but in no sprint"].append(ident)
         # **The other half of starting work.** Status, sprint and assignee are set
         # together by `move --status "In Progress"`, and only two of the three were
         # ever checked -- so the sprint half got caught and the assignee half never
         # did. Reported by the Zamboni team; see #125.
         #
-        # **`spanning` is consulted here, and this reverses an earlier decision
+        # **`container` is consulted here, and this reverses an earlier decision
         # rather than overlooking it.** That decision exempted these levels from
         # the sprint check but not this one, on the stated reasoning that "`move`
         # claims it like anything else". Two things then changed. `move` now
@@ -5553,7 +5564,7 @@ def cmd_validate(args) -> int:
         # assigned one is a decision -- does not apply to a level nobody is meant
         # to hold. Reporting it would be reporting the default. Setting one is
         # still allowed and still meaningful; it is simply never demanded.
-        if same_status(status, CYCLE_START) and not row["assignees"] and not spanning:
+        if same_status(status, CYCLE_START) and not row["assignees"] and not container:
             problems[f"{CYCLE_START} but unassigned"].append(ident)
         # **There is deliberately no check for a *closed* issue with no assignee**,
         # and the reasoning is worth keeping. Two attempts were measured and both
@@ -5579,12 +5590,12 @@ def cmd_validate(args) -> int:
         # demanding one here is what put a false `sprint:2026-08-31` on #72,
         # a duplicate closed on sight, via the `sprint backfill` this very
         # message recommends.
-        # `spanning` for the same reason, and it matters more here than it
+        # `container` for the same reason, and it matters more here than it
         # reads: this message recommends `sprint backfill`, so leaving it in
         # place would have the tool recommend a repair that writes the very
         # label it has just stopped writing -- the #72 shape exactly.
         if (row["state"] == "CLOSED" and same_status(status, CYCLE_END) and not stamps
-                and not spanning
+                and not container
                 and (row.get("state_reason") or "").upper() != ABANDONED):
             problems["closed with no sprint: label -- run `sprint backfill`"].append(ident)
         if stamps and row.get("field_sprint"):

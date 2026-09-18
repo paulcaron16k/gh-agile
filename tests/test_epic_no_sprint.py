@@ -164,10 +164,10 @@ class TestSpansSprints:
         (["type:epic", "type:initiative"], "initiative"),
     ])
     def test_the_level_is_named(self, tool, labels, want):
-        assert tool.spans_sprints(labels) == want
+        assert tool.container_level(labels) == want
 
     def test_a_type_that_merely_contains_the_word_is_not_a_match(self, tool):
-        assert tool.spans_sprints(["type:epical", "initiative:some-slug"]) is None
+        assert tool.container_level(["type:epical", "initiative:some-slug"]) is None
 
 
 class TestItCostsNothingOnOtherTransitions:

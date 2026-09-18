@@ -152,10 +152,10 @@ class TestBackfillSkipsThem:
 
 
 class TestOnePredicateAtEverySite:
-    def test_validate_and_backfill_both_use_spans_sprints(self, tool):
+    def test_every_site_reads_the_one_predicate(self, tool):
         """Three separate label tests would drift; the next level added must be
         covered by editing one list."""
         import pathlib
         source = pathlib.Path(tool.__file__).read_text()
-        assert source.count("spans_sprints(") >= 4   # helper + move + validate + backfill
-        assert 'type:epic' not in source.split("SPANNING_TYPES")[2].split("def cmd_")[0]
+        assert source.count("container_level(") >= 4   # helper + move + validate + backfill
+        assert 'type:epic' not in source.split("CONTAINER_TYPES")[2].split("def cmd_")[0]

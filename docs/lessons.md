@@ -283,3 +283,14 @@ otherwise delete it and be right to, on the evidence in front of them.
 **The owner caught things this tool's author missed** — a cron writing to `/var/log` that a user crontab
 cannot, a recommendation to enable a built-in workflow that does not exist on user-owned projects, and the
 sandbox question itself. Take a challenge as a signal to go and check, not to defend.
+
+**A set named for the first rule that needed it will be read by six.** `SPANNING_TYPES` / `spans_sprints`
+named epic-and-initiative after the rule that introduced them: a container must never be pinned to one
+sprint. Five rules later — the `closed/total` tally, the status promotion, the assignee exemption, two
+validator checks — only three were still about sprints, and `spans_sprints(labels)` was being read at sites
+where no sprint was involved, sending the reader looking for one. Renamed to `CONTAINER_TYPES` /
+`container_level`, after what the set *is*: the levels that contain work rather than being it. Every rule
+follows from that sentence; the sprint reasoning moved down to the sprint call sites, where it is the point
+rather than a name everything else reads past. **Name a set for its membership, not for its first
+consumer** — and when the second rule reads it, that is the moment to check the name still describes the
+set.

@@ -60,7 +60,7 @@ def unstamp(monkeypatch, tool, capsys):
         monkeypatch.setattr(tool, "fetch_items", lambda *a, **k: ("board", list(items)))
         monkeypatch.setattr(tool, "gh", lambda args, **k: edits.append(args) or "")
         args = argparse.Namespace(owner="o", project=1, _config={}, dry_run=dry_run)
-        tool.unstamp_spanning(args)
+        tool.unstamp_containers(args)
         return capsys.readouterr().out, edits
     return go
 
