@@ -221,6 +221,31 @@ if it references a parent by number: GitHub numbers issues per repository, so tw
 repositories on one board both have a `#12`. **The Partner Gold model likely needs
 the same revisit**, and that decision is not this repository's to make.
 
+## Tasks: below the boundary, and not exported
+
+Silver gained a level *below* story — `type:task`, for a team that files
+story-internal housekeeping as issues rather than as a markdown checklist.
+**Nothing about it reaches Gold, because nothing about it reaches the export.**
+
+The decision, taken on AGILE-137 before any of it was written: a task has no
+metric and no KPI. It is how one person is organising their own story, and many
+teams keep exactly the same thing in a checklist file. It carries no story
+points, is never given a `sprint:` label, sits on no board, and is counted by
+nothing that counts stories — so a row for one would change no number in any
+downstream model. **A grain exists to be measured, and this one would not be.**
+
+So `github_issues` has no task rows, and `github_events` drops their events with
+them: an event referencing an issue that has no row is a foreign key into
+nothing, which is worse than the absence. `github_catalog.json` states the
+exclusion rather than leaving it to be inferred, because a contract silent about
+what it omits reads as an oversight.
+
+**This is a boundary, not an omission**, which is the distinction this document
+exists to draw. The Gold model has no task grain and should not acquire one on
+this repository's account. If breakdown analysis is ever wanted, the data is
+still in GitHub and the decision reverses without rewriting anything built on
+it — which is the other reason it was the cheap direction.
+
 ## Consequences for the exporter
 
 1. **Two queries, joined on the issue node ID.** Current state from the project,

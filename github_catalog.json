@@ -41,7 +41,18 @@
     "untouched issue is not. Declaring `occurred_at` as the replication key would",
     "tell a consumer something untrue, so `github_events` declares none and is",
     "resolved on `event_hash` instead. Incremental runs deliberately overlap and",
-    "re-send rows; every stream is idempotent on its key_properties."
+    "re-send rows; every stream is idempotent on its key_properties.",
+    "",
+    "WHAT IS NOT HERE. An issue labelled `type:task` is NOT exported, in any stream.",
+    "A task is story-internal housekeeping -- many teams keep the same thing in a",
+    "markdown checklist -- and it has no metric and no KPI attached to it. It carries",
+    "no story points, is never given a `sprint:` label, and is on no board, so a row",
+    "for one would change no number in any downstream model. A grain exists to be",
+    "measured; this one would not be. Its events are dropped with it, since an event",
+    "row referencing an issue with no `github_issues` row is a foreign key into",
+    "nothing. Stated here rather than left as an absence, because a contract silent",
+    "about an exclusion reads as an oversight. Decided on AGILE-137; reversible, and",
+    "the data is still in GitHub if it is ever wanted."
   ],
   "streams": [
     {

@@ -5371,6 +5371,24 @@ def master_rows(login: str, project: int, config: dict, stamp: str) -> dict[str,
     return {"project": [project_row], "boards": board_rows, "sprints": sprint_rows}
 
 
+def without_tasks(data: list[dict]) -> tuple[list[dict], int]:
+    """Export rows with `type:task` removed, and how many that was.
+
+    The rule from #137, in one place so it can be tested as a rule: **a task is
+    not exported.** It has no metric and no KPI, it is story-internal
+    housekeeping many teams keep in a checklist file, and a grain exists to be
+    measured. #135 makes a task change no number anywhere -- and a row that
+    changes no number is not a measurement.
+
+    Reversible on demand: the data is still in GitHub, so the decision changes
+    without rewriting anything built on it. That is the other reason it is the
+    cheap direction.
+    """
+    kept = [row for row in data
+            if f"type:{TASK_TYPE}" not in set((row.get("labels") or "").split(";"))]
+    return kept, len(data) - len(kept)
+
+
 def cmd_export(args) -> int:
     """Full or incremental, to stdout or to a timestamped file.
 
@@ -5394,6 +5412,24 @@ def cmd_export(args) -> int:
     events: list[dict] | None = [] if args.grain in ("events", "both", "all") else None
     data = rows(args.owner, args.project, with_history=not args.no_history,
                 since=since, events=events)
+    # **Tasks are not exported, and this is a stated rule rather than an
+    # accident of a filter.** Decided on #137: a task has no metric and no KPI.
+    # It is story-internal housekeeping -- many teams do the same thing with a
+    # checklist file -- and a grain exists to be measured. #135 already makes a
+    # task change no number anywhere; a row that changes no number is not a
+    # measurement, and the export is a measurement surface.
+    #
+    # Filtered here rather than in `rows`, which `validate` and `board show`
+    # also read: they must keep seeing tasks, or #136's checks go blind.
+    #
+    # The events are filtered with them, or `github_events` would carry the
+    # history of issues `github_issues` has no row for -- a foreign key into
+    # nothing, which is worse than the absence.
+    data, skipped_tasks = without_tasks(data)
+    if events is not None:
+        exported = {(r["repository"], r["number"]) for r in data}
+        events[:] = [e for e in events
+                     if (e.get("repository"), e.get("number")) in exported]
 
     # Pull requests are fetched once and used twice: for `github_prs`, and for
     # the review events that go into `github_events`. `since` goes to GitHub as
@@ -5424,6 +5460,12 @@ def cmd_export(args) -> int:
         print(f"  incremental since {since}: {len(data)} row(s)", file=sys.stderr)
     else:
         print(f"  full export: {len(data)} row(s)", file=sys.stderr)
+    if skipped_tasks:
+        # Said, because a count that silently omits rows is the failure this
+        # repo already names. The reason is given rather than only the number,
+        # so nobody reads it as a bug and goes looking for the missing grain.
+        print(f"  {skipped_tasks} task(s) not exported: story-internal, no metric "
+              f"(see github_catalog.json)", file=sys.stderr)
 
     if events is not None:
         for event in events:
