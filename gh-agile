@@ -1353,6 +1353,10 @@ DEFAULT_SPEC = {
         {"name": "type:initiative", "color": "1d76db"},
         {"name": "type:epic", "color": "6f42c1"},
         {"name": "type:story", "color": "0e8a16"},
+        # A task is story-internal housekeeping and is deliberately grey: it is
+        # not work the board tracks, and a colour would give it the weight of
+        # the levels that are. See POLICY.md §2.
+        {"name": "type:task", "color": "ededed"},
         {"name": "type:bug", "color": "d73a4a"},
     ],
 }
@@ -1790,7 +1794,7 @@ def title_prefix_mode(config: dict) -> str:
 
 #: The three values a `type:` label may carry. One list, because
 #: `strip_title_prefix` has to recognise exactly what `prefixed_title` writes.
-ISSUE_TYPES = ("initiative", "epic", "story", "bug")
+ISSUE_TYPES = ("initiative", "epic", "story", "task", "bug")
 
 
 def prefixed_title(mode: str, key: str, number: int, kind: str, title: str) -> str:
