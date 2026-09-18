@@ -2742,7 +2742,7 @@ def backfill_sprint_labels(args) -> int:
         # is precisely what someone runs *because* `validate` complained. Same
         # reasoning as the abandoned issue below: a label asserts the sprint the
         # work was worked in, and neither level was worked in one sprint.
-        if container_level(labels):
+        if sprint_exempt(labels):
             containers += 1
             continue
         wanted = []
@@ -2910,7 +2910,7 @@ def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
         # rule existed, all five proposed for Sprint 2 by a plain `reconcile
         # --dry-run`. Skipped rather than repaired, because the field this
         # would write is the one a level spanning sprints must not have.
-        if container_level(labels):
+        if sprint_exempt(labels):
             containers += 1
             continue
         stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels
@@ -3512,6 +3512,35 @@ def container_level(labels) -> str | None:
     return next((name for name in CONTAINER_TYPES if f"type:{name}" in set(labels)), None)
 
 
+#: The type a team may use for story-internal housekeeping. POLICY.md §2 still
+#: recommends a markdown checklist; this is what a task is called when somebody
+#: files one as an issue anyway.
+TASK_TYPE = "task"
+
+
+def sprint_exempt(labels) -> str | None:
+    """Why this issue is never placed in a sprint, or None if it belongs in one.
+
+    **Two levels, two different reasons, and the message says which.** A
+    container is exempt because it *spans* sprints -- the `Sprint` field holds
+    one value and one label cannot say "all of them". A task is exempt because
+    the board does not track it at all: it carries no points, sits on no board,
+    and is counted by nothing, so putting it in a sprint would add it to a
+    velocity nobody meant it to reach.
+
+    One predicate because every caller wants the same answer -- *should this get
+    a sprint* -- and a second list is how the two drift apart. Distinct strings
+    because a reader told only that something was "skipped" learns nothing about
+    which rule applied.
+    """
+    level = container_level(labels)
+    if level:
+        return f"{level}, which spans sprints"
+    if f"type:{TASK_TYPE}" in set(labels):
+        return "task, which the board does not track"
+    return None
+
+
 def issue_labels(repo: str, issue: int) -> list[str]:
     """The issue's label names.
 
@@ -3662,6 +3691,19 @@ def adopt_issue(args, repo: str, issue: dict, item_id: str) -> None:
 ADOPT_CONFIRM_ABOVE = 10
 
 
+def report_tasks_skipped(count: int) -> None:
+    """Say how many tasks a sweep left off the board, and how to reach them.
+
+    Silence would be indistinguishable from a repository that has no tasks in
+    it, and the difference matters: one is nothing to do and the other is a
+    deliberate exclusion somebody may want to override.
+    """
+    if count:
+        print(f"  {count} task(s) left off the board; a task is story-internal. "
+              f"To board them anyway:\n"
+              f"    gh agile sync --query \"label:type:{TASK_TYPE}\"")
+
+
 def cmd_sync(args) -> int:
     """Add issues that belong on the board and are not on it.
 
@@ -3698,7 +3740,7 @@ def cmd_sync(args) -> int:
     # Every candidate is collected before anything is written, so the count is
     # known while it can still be refused.
     candidates: list[tuple[str, dict]] = []
-    skipped = 0
+    skipped = tasks = 0
     for repo in repos:
         cmd = ["issue", "list", "--repo", repo, "--state", args.state,
                "--limit", str(args.limit), "--json", "number,title,url,state,labels"]
@@ -3709,6 +3751,16 @@ def cmd_sync(args) -> int:
             if key in numbers_on_board:
                 skipped += 1
                 continue
+            # **A task is not boarded, and this is where that is true or not.**
+            # `task` adds nothing to the project, but `sync` sweeps the whole
+            # repository, so without this one run puts every task on the board
+            # and the default quietly becomes the opposite of what POLICY.md
+            # says. `--query "label:type:task"` still reaches them for a team
+            # that wants them there: excluded by default, not excluded outright.
+            names = {lb["name"] for lb in issue.get("labels") or []}
+            if f"type:{TASK_TYPE}" in names and not args.query:
+                tasks += 1
+                continue
             candidates.append((repo, issue))
 
     if args.dry_run:
@@ -3716,6 +3768,7 @@ def cmd_sync(args) -> int:
             print(f"  would add {repo}#{issue['number']}  {issue['title'][:52]}")
         print(f"  would add {len(candidates)}, already present {skipped}, "
               f"across {len(repos)} repo(s)")
+        report_tasks_skipped(tasks)
         return 0
 
     if args.adopt and len(candidates) > ADOPT_CONFIRM_ABOVE and not args.yes:
@@ -3741,6 +3794,7 @@ def cmd_sync(args) -> int:
         added += 1
 
     print(f"  added {added}, already present {skipped}, across {len(repos)} repo(s)")
+    report_tasks_skipped(tasks)
     return 0
 
 
@@ -4799,6 +4853,20 @@ def cmd_set(args) -> int:
     item = board_item_for(args.owner, args.project, repo, args.issue)
     if not item:
         sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
+    # **Refused, not accepted and ignored.** `task` has no `--points` flag, but
+    # `set` reaches any issue on the board, and a number written here would be
+    # summed by everything downstream that sums points. Saying so is the whole
+    # difference between a rule and a hope.
+    if args.field.casefold() in ("story points", "points"):
+        labels = issue_labels(repo, args.issue)
+        if f"type:{TASK_TYPE}" in set(labels):
+            sys.exit(
+                f"{repo}#{args.issue} is a task, and a task carries no estimate.\n"
+                f"  A task is how one person is organising their own story, so it "
+                f"changes no number\n  on the board -- points on one would be summed "
+                f"into a velocity nobody meant.\n"
+                f"  Estimate the story instead."
+            )
     value = args.value
     if args.number is not None:
         value = args.number
@@ -5112,12 +5180,13 @@ def cmd_move(args) -> int:
     # an epic still starts, it simply does not join an iteration.
     container = None
     if same_status(args.status, CYCLE_START) or same_status(args.status, CYCLE_END):
-        container = container_level(issue_labels(repo, args.issue))
+        container = sprint_exempt(issue_labels(repo, args.issue))
         if container:
-            # Said out loud rather than skipped quietly: an epic that starts with
-            # no sprint line looks like the sprint write failed.
-            print(f"  #{args.issue} is an {container}, which spans sprints; "
-                  f"leaving Sprint and {SPRINT_LABEL} labels alone")
+            # Said out loud rather than skipped quietly: an issue that starts
+            # with no sprint line looks like the sprint write failed. The reason
+            # is named because the two are different -- see `sprint_exempt`.
+            print(f"  #{args.issue} is a{'n' if container[0] in 'aeiou' else ''} "
+                  f"{container}; leaving Sprint and {SPRINT_LABEL} labels alone")
 
     # Starting work puts the item in the current sprint, if it is not already in
     # one. Anything else means a board where in-progress work sits outside every
