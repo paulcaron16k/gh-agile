@@ -4002,7 +4002,8 @@ def stale_status(row: dict) -> bool:
     return row.get("state") == "CLOSED" and not same_status(row.get("status"), CYCLE_END)
 
 
-def board_columns(rows: list[dict], width: int) -> dict[str, int]:
+def board_columns(rows: list[dict], width: int,
+                  containers: list[dict] | None = None) -> dict[str, int]:
     """Column widths for the text view: the widest value, and the heading it carries.
 
     Measured across every row rather than per section, so the columns line up
@@ -4012,13 +4013,21 @@ def board_columns(rows: list[dict], width: int) -> dict[str, int]:
     def widest(heading, values):
         return max([len(heading)] + [len(v) for v in values])
 
+    # **The band is measured with the table, not beside it.** Its first three
+    # cells reuse these widths so the two grids read as one, which only works if
+    # both are counted: a band naming an `initiative` against rows that are all
+    # `story` overflowed the type cell and pushed every band line out of
+    # alignment with the table under it. Measured, on this board.
+    band = containers or []
     key = widest("key", [r["key"] + (STALE_MARK if stale_status(r) else "")
-                         for r in rows])
-    kind = widest("type", [r["type"] or "?" for r in rows])
+                         for r in rows] + [c["key"] for c in band])
+    kind = widest("type", [r["type"] or "?" for r in rows]
+                          + [c["type"] for c in band])
     # Measured from what is actually printed, not from the points alone: `3/6` is
     # wider than any estimate on most boards, and a cell rendered outside this
     # measurement pushes every row past the width the layout was chosen to fit.
-    points = widest("pts", [render_progress(r) for r in rows])
+    points = widest("pts", [render_progress(r) for r in rows]
+                           + [c["progress"] for c in band])
     sprint = min(widest("sprint", [r["sprint"] or "—" for r in rows]), SPRINT_WIDTH)
     # **The `who` column appears only when it has something to say.** A backlog is
     # all `Todo` and nobody holds any of it, so the column would be fourteen
@@ -4055,9 +4064,108 @@ def elide(text: str, width: int) -> str:
     return text[:width - 1].rstrip() + "…"
 
 
+def board_containers(issues: list[dict], shown: list[dict], keys: dict) -> list[dict]:
+    """The initiatives and epics the displayed work belongs to.
+
+    **Derived from the sprint's own contents, not from the containers' status.**
+    The parents of the items the filter selected, walked upward. It cannot go
+    stale, it needs no epic status maintained to be correct, and it answers the
+    question a sprint board exists to answer -- *what larger work is this sprint
+    advancing*. Keying it off `In Progress` instead would list containers with
+    nothing in this sprint and miss one whose status nobody had updated.
+
+    **Costs no extra call.** `fetch_items` returns the whole board and the filter
+    is applied afterwards, so a parent excluded from the rows is still in
+    `issues` -- with its own `subIssuesSummary`, which is where the tally comes
+    from. The chain is walked through that index rather than by asking GitHub
+    again.
+
+    A parent that is not on the board at all is still named, from the child's own
+    `parent` snippet, with no tally. Dropping it would understate what the sprint
+    advances, and *empty is not excluded* is the rule this board already follows.
+
+    Initiatives first, then epics: the band reads down the hierarchy.
+    """
+    index = {}
+    for item in issues:
+        content = item.get("content") or {}
+        repo = (content.get("repository") or {}).get("nameWithOwner")
+        index[(repo, content.get("number"))] = item
+
+    found: dict[tuple, dict] = {}
+    for item in shown:
+        parent = (item.get("content") or {}).get("parent")
+        seen = set()
+        while parent:
+            repo = (parent.get("repository") or {}).get("nameWithOwner")
+            ref = (repo, parent.get("number"))
+            # A cycle is not possible through GitHub's own sub-issue edges, but
+            # the walk is cheap to make safe and a malformed board should not
+            # hang a read.
+            if ref in seen:
+                break
+            seen.add(ref)
+            labels = [n["name"] for n in (parent.get("labels") or {}).get("nodes") or []]
+            level = container_level(labels)
+            if not level:
+                break
+            if ref not in found:
+                on_board = index.get(ref)
+                row = board_row(on_board, keys) if on_board else None
+                found[ref] = {
+                    "key": row["key"] if row else key_for_issue(
+                        parent["number"], repo, labels, keys),
+                    "type": level,
+                    "title": (row["title"] if row else parent.get("title")) or "",
+                    "progress": render_progress(row) if row else "—",
+                }
+            nxt = index.get(ref)
+            parent = (nxt.get("content") or {}).get("parent") if nxt else None
+
+    return sorted(found.values(),
+                  key=lambda c: (c["type"] != "initiative", c["key"]))
+
+
+#: What the band says it is. Spelled out because the band breaks the rule the
+#: rest of the board keeps: a board here is *reconstructed from its filter*, and
+#: a term outside `FILTER_TERMS` is refused rather than ignored, precisely so a
+#: board cannot quietly show the wrong set. These rows are the deliberate
+#: exception -- items the filter excludes -- so they are labelled as derived and
+#: kept out of the table rather than merged into it, where they would read as
+#: something the filter selected.
+BAND_HEADING = "advancing (derived from the work below, not selected by the filter):"
+
+
+def render_band(containers: list[dict], columns: dict[str, int], width: int) -> list[str]:
+    """The context band: one line per container, aligned to the table below it.
+
+    The first three columns reuse the table's own widths, so the band reads as a
+    continuation of the same grid rather than a second one. There is no `sprint`
+    or `who` cell: a container is in no sprint by construction (#115) and is held
+    by nobody by design (#117), so both would be a column of em dashes.
+
+    Wrapped, not elided, for the reason the title column wraps: losing the tail
+    of a name loses the half that says what the work is.
+    """
+    if not containers:
+        return []
+    lead = 2 + columns["key"] + 2 + columns["type"] + 2 + columns["points"] + 2
+    text = max(width - lead, MIN_TITLE_WIDTH)
+    out = [BAND_HEADING]
+    for container in containers:
+        lines = textwrap.wrap(container["title"], text) or [""]
+        out.append(
+            f"  {container['key']:<{columns['key']}}  "
+            f"{container['type']:<{columns['type']}}  "
+            f"{container['progress']:>{columns['points']}}  {lines[0]}"
+        )
+        out += [" " * lead + line for line in lines[1:]]
+    return out + [""]
+
+
 def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
                  project: int, total: int, shown_filter: str,
-                 width: int = BOARD_WIDTH) -> str:
+                 width: int = BOARD_WIDTH, containers: list[dict] | None = None) -> str:
     """The text view. Vertical sections, because five statuses do not fit across 80
     columns without truncating every title to nothing.
 
@@ -4083,7 +4191,11 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
         out.append("pts: story points, or closed/total sub-issues for epics "
                    "and initiatives")
     out.append("")
-    columns = board_columns(rows, width)
+    columns = board_columns(rows, width, containers)
+    # Above the status columns, and outside the table: the band is context for
+    # what follows, not a section of it. Nothing below counts it -- the item
+    # counts, the `empty:` line and the exit behaviour are what they were.
+    out += render_band(containers or [], columns, width)
     if rows:
         # A heading, because five unlabelled columns put `8` next to
         # `AGILE Sprint 4` and leave the reader to infer which is which.
@@ -4253,14 +4365,21 @@ def cmd_board_show(args) -> int:
     issues = [i for i in items
               if (i.get("content") or {}).get("__typename") == "Issue"
               and not i.get("isArchived")]
-    rows = [board_row(i, keys) for i in issues
-            if item_matches(i, terms, current_sprint=current)]
+    shown = [i for i in issues if item_matches(i, terms, current_sprint=current)]
+    rows = [board_row(i, keys) for i in shown]
     sections = board_sections(rows, LAYOUT_SECTIONS.get(view["layout"], "status"),
                               sprint_order, terms)
+    # **Only where it earns its place.** A scrum board filters on
+    # `sprint:@current`, and a container is deliberately in no sprint, so it is
+    # the one board where the larger work cannot appear among the rows. On a
+    # kanban or backlog board the parents are already there and a band would
+    # repeat them.
+    containers = board_containers(issues, shown, keys) if kind == "scrum" else []
 
     stamp = _now()
     if args.format == "jsonl":
-        body = board_jsonl(view, kind, rows, sections, args, combined, len(issues), stamp)
+        body = board_jsonl(view, kind, rows, sections, args, combined, len(issues),
+                           stamp, containers)
         suffix = "jsonl"
     else:
         # A file gets the fixed width whatever the terminal is doing: `--out-dir`
@@ -4268,7 +4387,7 @@ def cmd_board_show(args) -> int:
         # on the next is a diff nobody can read.
         width = BOARD_WIDTH if args.out_dir else display_width()
         body = render_board(view, kind, rows, sections, args.owner, args.project,
-                            len(issues), combined, width)
+                            len(issues), combined, width, containers)
         suffix = "txt"
 
     if args.out_dir:
@@ -4289,7 +4408,8 @@ def slug(text: str) -> str:
 
 
 def board_jsonl(view: dict, kind: str, rows: list[dict], sections, args,
-                shown_filter: str, total: int, stamp: str) -> str:
+                shown_filter: str, total: int, stamp: str,
+                containers: list[dict] | None = None) -> str:
     """One metadata line, then one line per item, in section order.
 
     The header carries what the text view is built from -- layout, section order,
@@ -4311,6 +4431,11 @@ def board_jsonl(view: dict, kind: str, rows: list[dict], sections, args,
         "board_item_count": total,
     }
     lines = [json.dumps(header, sort_keys=True)]
+    # Its own `kind`, so a reader can tell a container the filter excluded from
+    # an item it selected. Merging them would be the same confusion the text
+    # rendering keeps the band out of the table to avoid.
+    for container in containers or []:
+        lines.append(json.dumps({"kind": "container", **container}, sort_keys=True))
     for name, items in sections:
         for row in items:
             lines.append(json.dumps({"kind": "item", "section": name, **row},

@@ -21,6 +21,10 @@
       "filter": "label:key:REPORTS",
       "name": "Team: REPORTS",
       "type": "scrum"
+    },
+    {
+      "name": "Roadmap",
+      "type": "roadmap"
     }
   ],
   "keys": [
