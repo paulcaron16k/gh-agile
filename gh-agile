@@ -5722,6 +5722,18 @@ def cmd_validate(args) -> int:
         if "type:story" in labels and not row["epic_number"]:
             notes["story has no epic"].append(ident)
 
+        # **A task is defined by its parent.** One under an epic, an initiative
+        # or nothing at all is not a thin task -- it is a story or an epic that
+        # has been mislabelled, and the tally, the sprint and the board all
+        # behave wrongly for it. `task` refuses to create one, so this catches
+        # the hand-labelled and the adopted.
+        #
+        # A problem rather than a note: unlike an orphan story, this is nobody's
+        # deliberate choice and relabelling clears it.
+        if f"type:{TASK_TYPE}" in labels and row.get("parent_type") != "story":
+            where = row.get("parent_type") or "nothing"
+            problems["task is not under a story"].append(f"{ident}: under {where}")
+
         # **The third direction, and the one that misreads a board daily rather
         # than at the end.** The other two compare an epic's *closed* state with
         # its children's; this compares a start. An epic left in `Todo` while
@@ -5809,7 +5821,11 @@ def cmd_validate(args) -> int:
         # epic is in progress, and a check that fails forever is a check people
         # stop running. Same predicate as `move` uses, so the next level added is
         # covered by one list.
-        container = container_level(labels)
+        # `sprint_exempt` rather than `container_level`: a task is exempt too,
+        # and for a different reason -- a container spans sprints, a task is not
+        # tracked by the board at all. Demanding a sprint of either reports the
+        # tool's own correct behaviour as a failure.
+        container = sprint_exempt(labels)
         if (same_status(status, CYCLE_START) and not row.get("field_sprint")
                 and not container):
             problems[f"{CYCLE_START} but in no sprint"].append(ident)
@@ -5833,6 +5849,9 @@ def cmd_validate(args) -> int:
         # assigned one is a decision -- does not apply to a level nobody is meant
         # to hold. Reporting it would be reporting the default. Setting one is
         # still allowed and still meaningful; it is simply never demanded.
+        # `container` here is `sprint_exempt`, which covers the task too, and the
+        # reasoning carries: the board does not track a task, so who holds it is
+        # the story's answer rather than its own.
         if same_status(status, CYCLE_START) and not row["assignees"] and not container:
             problems[f"{CYCLE_START} but unassigned"].append(ident)
         # **There is deliberately no check for a *closed* issue with no assignee**,
