@@ -4716,6 +4716,77 @@ def cmd_key(args) -> int:
     return 0
 
 
+def cmd_task(args) -> int:
+    """Create a task and attach it to its story. The fourth creation command.
+
+    **`--story` is required and there is no `none`.** An epic may stand under no
+    initiative and #91 gave a story the same, because the work is real either
+    way. A task is not: the whole definition is *how one person is organising
+    their own story*, so a parentless task is not a thin task -- it is an issue
+    with the wrong label on it.
+
+    **Not boarded, and that is the point rather than an omission.** A board
+    listing tasks is the ceremony POLICY.md §2 warns about: on a kanban board of
+    fifty items, one story broken into five turns one card into six. So nothing
+    here touches the project, and there is no `--points`, `--priority` or
+    `--status` either -- the flags that would let a task carry a number it must
+    not carry do not exist on this command.
+
+    The parent is resolved **before the issue is created**, the same ordering
+    `epic --initiative` uses: issue numbers are never reused, so a typo caught
+    afterwards leaves a permanent hole in the sequence.
+    """
+    require_key_for_prefix(args._config, getattr(args, "key", None))
+    # Resolved first, so a mistyped `--story` costs nothing. `parse_issue_ref`
+    # takes the keyed form as well as a bare number, as every other command does.
+    repo, story = parse_issue_ref(str(args.story), args._config, args.repo)
+    try:
+        parent = json.loads(gh(["issue", "view", str(story), "--repo", repo,
+                                "--json", "id,labels,title"]))
+    except SystemExit as exc:
+        sys.exit(f"--story {args.story!r} could not be read: {exc}\n"
+                 f"  Nothing was created; an issue number is never reused, so this "
+                 f"refuses before it costs one.")
+    parent_labels = [n["name"] for n in parent.get("labels") or []]
+    parent_type = next((lb[len("type:"):] for lb in parent_labels
+                        if lb.startswith("type:")), None)
+    if parent_type and parent_type != "story":
+        # The level is defined by its parent. A task hanging off an epic is a
+        # structure nobody meant, and `validate` reports it -- better to refuse
+        # before the issue exists than to create one and then complain about it.
+        sys.exit(f"{repo}#{story} is a {parent_type}, and a task belongs to a story.\n"
+                 f"  A task is how one person is organising their own story; under "
+                 f"anything else it is\n  a story or an epic that has been mislabelled.")
+
+    labels = ["type:task"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
+    ensure_labels(repo, labels)
+    number, node = create_issue(
+        repo, args.title,
+        BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
+        labels,
+    )
+    title = apply_title_prefix(
+        args._config, repo, number, getattr(args, "key", None), "task", args.title
+    )
+    url = f"https://github.com/{repo}/issues/{number}"
+    # Announced before the edge is made, for the same reason `epic` and `story`
+    # announce before the board write: what follows can be refused on its own,
+    # and an issue nobody named is an issue nobody can find.
+    print(f"  task #{number} under story #{story}: {title}")
+    print(f"  {url}")
+
+    graphql(
+        "mutation($parent: ID!, $child: ID!) { addSubIssue(input: "
+        "{issueId: $parent, subIssueId: $child}) { subIssue { number } } }",
+        parent=parent["id"], child=node,
+    )
+    # Said, not left to be discovered. A task absent from the board looks like a
+    # failed write unless the command says it was never going to be there.
+    print("  not added to the board: a task is story-internal and changes no "
+          "number on it")
+    return 0
+
+
 def cmd_set(args) -> int:
     """Set a field on an issue already on the board.
 
@@ -6128,6 +6199,38 @@ what an initiative is:
     story.add_argument("--acceptance")
     story.set_defaults(func=cmd_story)
 
+    task = sub.add_parser(
+        "task", help="create a task: story-internal housekeeping, counted by nothing",
+        epilog=field_help([
+            ("title", "text", "required", "the task; positional"),
+            ("--story", "issue number", "required", "the story it belongs to"),
+            ("--repo", "owner/name", "optional", "where the issue is filed"),
+            ("--key", "KEY", "optional", "which key to label it with"),
+            ("--intent", "text", "optional", "## Intent body section"),
+            ("--acceptance", "text", "optional", "## Acceptance body section"),
+        ]) + """
+
+what a task is, and is not:
+  A task is how one person is organising their own story. POLICY.md §2 still
+  recommends a markdown checklist for this, and still says promoting one to an
+  issue buys ceremony and costs signal -- but GitHub's sub-issues make it two
+  clicks, teams do it, and the tool used to punish them with a permanent
+  `no type: label` finding.
+
+  So a task is nameable and changes no number. It carries no points, is never
+  given a `sprint:` label, is not added to the board, is counted by nothing that
+  counts stories, and is not exported. `--story` is required and there is no
+  `none`: a parentless task is not a thin task, it is a mislabelled issue.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    task.add_argument("title")
+    task.add_argument("--story", required=True,
+                      help="the story this task belongs to: a number, or KEY-NUMBER")
+    task.add_argument("--repo", help="owner/name")
+    task.add_argument("--key", help="which key to label the issue with")
+    task.add_argument("--intent")
+    task.add_argument("--acceptance")
+    task.set_defaults(func=cmd_task)
+
     self_test = sub.add_parser(
         "self-test", help="stand up a scratch project, exercise everything, tear it down"
     )
@@ -6519,7 +6622,7 @@ def resolve_owner(args, config: dict) -> None:
 #:               args.project`.
 #:   self-test   stands up its own scratch project, and is exempt from the
 #:               `--project` defaulting above for the same reason.
-PROJECTLESS = {"project", "key", "self-test"}
+PROJECTLESS = {"project", "key", "self-test", "task"}
 
 
 def missing_project_message(explicit: str | None) -> str:
@@ -6615,8 +6718,8 @@ def apply_defaults(args) -> None:
     # it declares a --repo flag. `set --issue 26` had none to attach to, so the
     # attribute never existed and a bare issue number could not be resolved even
     # from inside the repository it belongs to.
-    NEEDS_REPO = {"initiative", "epic", "story", "set", "move", "sync", "key",
-                  "project", "fix"}
+    NEEDS_REPO = {"initiative", "epic", "story", "task", "set", "move", "sync",
+                  "key", "project", "fix"}
     if repo is None and args.command in NEEDS_REPO:
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)
@@ -6651,7 +6754,7 @@ def apply_defaults(args) -> None:
         args.repo = repo
 
     # The key an issue is created with: explicit, else the first for this repo.
-    if hasattr(args, "key") and args.command in ("initiative", "epic", "story"):
+    if hasattr(args, "key") and args.command in ("initiative", "epic", "story", "task"):
         available = keys_for_repo(config, args.repo) if args.repo else []
         if key:
             if available and key not in available:
