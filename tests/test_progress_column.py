@@ -11,7 +11,7 @@ and `board_row` simply did not carry it through, so this costs no extra call.
 **The cell, not the type.** The condition is *has children and no estimate*,
 which is exactly when the column would otherwise print an em dash. Nothing
 consults `type:`, so there is no second list to drift out of step with
-`SPANNING_TYPES`, and an estimate somebody actually set always beats a derived
+`CONTAINER_TYPES`, and an estimate somebody actually set always beats a derived
 number.
 
 **`closed`, never `done`.** `subIssuesSummary.completed` counts *closed*
@@ -97,7 +97,7 @@ class TestShowsProgress:
     def test_it_reads_the_one_list_that_names_those_levels(self, tool):
         """A second list with the same contents would drift out of step with the
         sprint rule that reads this one."""
-        assert set(tool.SPANNING_TYPES) == {"epic", "initiative"}
+        assert set(tool.CONTAINER_TYPES) == {"epic", "initiative"}
 
 
 class TestTheColumnStillLinesUp:
