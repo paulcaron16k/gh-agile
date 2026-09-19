@@ -1353,6 +1353,10 @@ DEFAULT_SPEC = {
         {"name": "type:initiative", "color": "1d76db"},
         {"name": "type:epic", "color": "6f42c1"},
         {"name": "type:story", "color": "0e8a16"},
+        # A task is story-internal housekeeping and is deliberately grey: it is
+        # not work the board tracks, and a colour would give it the weight of
+        # the levels that are. See POLICY.md §2.
+        {"name": "type:task", "color": "ededed"},
         {"name": "type:bug", "color": "d73a4a"},
     ],
 }
@@ -1790,7 +1794,7 @@ def title_prefix_mode(config: dict) -> str:
 
 #: The three values a `type:` label may carry. One list, because
 #: `strip_title_prefix` has to recognise exactly what `prefixed_title` writes.
-ISSUE_TYPES = ("initiative", "epic", "story", "bug")
+ISSUE_TYPES = ("initiative", "epic", "story", "task", "bug")
 
 
 def prefixed_title(mode: str, key: str, number: int, kind: str, title: str) -> str:
@@ -2738,7 +2742,7 @@ def backfill_sprint_labels(args) -> int:
         # is precisely what someone runs *because* `validate` complained. Same
         # reasoning as the abandoned issue below: a label asserts the sprint the
         # work was worked in, and neither level was worked in one sprint.
-        if container_level(labels):
+        if sprint_exempt(labels):
             containers += 1
             continue
         wanted = []
@@ -2906,7 +2910,7 @@ def reconcile_sprints(login: str, project: int, *, dry_run: bool = False,
         # rule existed, all five proposed for Sprint 2 by a plain `reconcile
         # --dry-run`. Skipped rather than repaired, because the field this
         # would write is the one a level spanning sprints must not have.
-        if container_level(labels):
+        if sprint_exempt(labels):
             containers += 1
             continue
         stamps = sorted(lb[len(SPRINT_LABEL):] for lb in labels
@@ -3508,6 +3512,35 @@ def container_level(labels) -> str | None:
     return next((name for name in CONTAINER_TYPES if f"type:{name}" in set(labels)), None)
 
 
+#: The type a team may use for story-internal housekeeping. POLICY.md §2 still
+#: recommends a markdown checklist; this is what a task is called when somebody
+#: files one as an issue anyway.
+TASK_TYPE = "task"
+
+
+def sprint_exempt(labels) -> str | None:
+    """Why this issue is never placed in a sprint, or None if it belongs in one.
+
+    **Two levels, two different reasons, and the message says which.** A
+    container is exempt because it *spans* sprints -- the `Sprint` field holds
+    one value and one label cannot say "all of them". A task is exempt because
+    the board does not track it at all: it carries no points, sits on no board,
+    and is counted by nothing, so putting it in a sprint would add it to a
+    velocity nobody meant it to reach.
+
+    One predicate because every caller wants the same answer -- *should this get
+    a sprint* -- and a second list is how the two drift apart. Distinct strings
+    because a reader told only that something was "skipped" learns nothing about
+    which rule applied.
+    """
+    level = container_level(labels)
+    if level:
+        return f"{level}, which spans sprints"
+    if f"type:{TASK_TYPE}" in set(labels):
+        return "task, which the board does not track"
+    return None
+
+
 def issue_labels(repo: str, issue: int) -> list[str]:
     """The issue's label names.
 
@@ -3658,6 +3691,19 @@ def adopt_issue(args, repo: str, issue: dict, item_id: str) -> None:
 ADOPT_CONFIRM_ABOVE = 10
 
 
+def report_tasks_skipped(count: int) -> None:
+    """Say how many tasks a sweep left off the board, and how to reach them.
+
+    Silence would be indistinguishable from a repository that has no tasks in
+    it, and the difference matters: one is nothing to do and the other is a
+    deliberate exclusion somebody may want to override.
+    """
+    if count:
+        print(f"  {count} task(s) left off the board; a task is story-internal. "
+              f"To board them anyway:\n"
+              f"    gh agile sync --query \"label:type:{TASK_TYPE}\"")
+
+
 def cmd_sync(args) -> int:
     """Add issues that belong on the board and are not on it.
 
@@ -3694,7 +3740,7 @@ def cmd_sync(args) -> int:
     # Every candidate is collected before anything is written, so the count is
     # known while it can still be refused.
     candidates: list[tuple[str, dict]] = []
-    skipped = 0
+    skipped = tasks = 0
     for repo in repos:
         cmd = ["issue", "list", "--repo", repo, "--state", args.state,
                "--limit", str(args.limit), "--json", "number,title,url,state,labels"]
@@ -3705,6 +3751,16 @@ def cmd_sync(args) -> int:
             if key in numbers_on_board:
                 skipped += 1
                 continue
+            # **A task is not boarded, and this is where that is true or not.**
+            # `task` adds nothing to the project, but `sync` sweeps the whole
+            # repository, so without this one run puts every task on the board
+            # and the default quietly becomes the opposite of what POLICY.md
+            # says. `--query "label:type:task"` still reaches them for a team
+            # that wants them there: excluded by default, not excluded outright.
+            names = {lb["name"] for lb in issue.get("labels") or []}
+            if f"type:{TASK_TYPE}" in names and not args.query:
+                tasks += 1
+                continue
             candidates.append((repo, issue))
 
     if args.dry_run:
@@ -3712,6 +3768,7 @@ def cmd_sync(args) -> int:
             print(f"  would add {repo}#{issue['number']}  {issue['title'][:52]}")
         print(f"  would add {len(candidates)}, already present {skipped}, "
               f"across {len(repos)} repo(s)")
+        report_tasks_skipped(tasks)
         return 0
 
     if args.adopt and len(candidates) > ADOPT_CONFIRM_ABOVE and not args.yes:
@@ -3737,6 +3794,7 @@ def cmd_sync(args) -> int:
         added += 1
 
     print(f"  added {added}, already present {skipped}, across {len(repos)} repo(s)")
+    report_tasks_skipped(tasks)
     return 0
 
 
@@ -4712,6 +4770,77 @@ def cmd_key(args) -> int:
     return 0
 
 
+def cmd_task(args) -> int:
+    """Create a task and attach it to its story. The fourth creation command.
+
+    **`--story` is required and there is no `none`.** An epic may stand under no
+    initiative and #91 gave a story the same, because the work is real either
+    way. A task is not: the whole definition is *how one person is organising
+    their own story*, so a parentless task is not a thin task -- it is an issue
+    with the wrong label on it.
+
+    **Not boarded, and that is the point rather than an omission.** A board
+    listing tasks is the ceremony POLICY.md §2 warns about: on a kanban board of
+    fifty items, one story broken into five turns one card into six. So nothing
+    here touches the project, and there is no `--points`, `--priority` or
+    `--status` either -- the flags that would let a task carry a number it must
+    not carry do not exist on this command.
+
+    The parent is resolved **before the issue is created**, the same ordering
+    `epic --initiative` uses: issue numbers are never reused, so a typo caught
+    afterwards leaves a permanent hole in the sequence.
+    """
+    require_key_for_prefix(args._config, getattr(args, "key", None))
+    # Resolved first, so a mistyped `--story` costs nothing. `parse_issue_ref`
+    # takes the keyed form as well as a bare number, as every other command does.
+    repo, story = parse_issue_ref(str(args.story), args._config, args.repo)
+    try:
+        parent = json.loads(gh(["issue", "view", str(story), "--repo", repo,
+                                "--json", "id,labels,title"]))
+    except SystemExit as exc:
+        sys.exit(f"--story {args.story!r} could not be read: {exc}\n"
+                 f"  Nothing was created; an issue number is never reused, so this "
+                 f"refuses before it costs one.")
+    parent_labels = [n["name"] for n in parent.get("labels") or []]
+    parent_type = next((lb[len("type:"):] for lb in parent_labels
+                        if lb.startswith("type:")), None)
+    if parent_type and parent_type != "story":
+        # The level is defined by its parent. A task hanging off an epic is a
+        # structure nobody meant, and `validate` reports it -- better to refuse
+        # before the issue exists than to create one and then complain about it.
+        sys.exit(f"{repo}#{story} is a {parent_type}, and a task belongs to a story.\n"
+                 f"  A task is how one person is organising their own story; under "
+                 f"anything else it is\n  a story or an epic that has been mislabelled.")
+
+    labels = ["type:task"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
+    ensure_labels(repo, labels)
+    number, node = create_issue(
+        repo, args.title,
+        BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
+        labels,
+    )
+    title = apply_title_prefix(
+        args._config, repo, number, getattr(args, "key", None), "task", args.title
+    )
+    url = f"https://github.com/{repo}/issues/{number}"
+    # Announced before the edge is made, for the same reason `epic` and `story`
+    # announce before the board write: what follows can be refused on its own,
+    # and an issue nobody named is an issue nobody can find.
+    print(f"  task #{number} under story #{story}: {title}")
+    print(f"  {url}")
+
+    graphql(
+        "mutation($parent: ID!, $child: ID!) { addSubIssue(input: "
+        "{issueId: $parent, subIssueId: $child}) { subIssue { number } } }",
+        parent=parent["id"], child=node,
+    )
+    # Said, not left to be discovered. A task absent from the board looks like a
+    # failed write unless the command says it was never going to be there.
+    print("  not added to the board: a task is story-internal and changes no "
+          "number on it")
+    return 0
+
+
 def cmd_set(args) -> int:
     """Set a field on an issue already on the board.
 
@@ -4724,6 +4853,20 @@ def cmd_set(args) -> int:
     item = board_item_for(args.owner, args.project, repo, args.issue)
     if not item:
         sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
+    # **Refused, not accepted and ignored.** `task` has no `--points` flag, but
+    # `set` reaches any issue on the board, and a number written here would be
+    # summed by everything downstream that sums points. Saying so is the whole
+    # difference between a rule and a hope.
+    if args.field.casefold() in ("story points", "points"):
+        labels = issue_labels(repo, args.issue)
+        if f"type:{TASK_TYPE}" in set(labels):
+            sys.exit(
+                f"{repo}#{args.issue} is a task, and a task carries no estimate.\n"
+                f"  A task is how one person is organising their own story, so it "
+                f"changes no number\n  on the board -- points on one would be summed "
+                f"into a velocity nobody meant.\n"
+                f"  Estimate the story instead."
+            )
     value = args.value
     if args.number is not None:
         value = args.number
@@ -5037,12 +5180,13 @@ def cmd_move(args) -> int:
     # an epic still starts, it simply does not join an iteration.
     container = None
     if same_status(args.status, CYCLE_START) or same_status(args.status, CYCLE_END):
-        container = container_level(issue_labels(repo, args.issue))
+        container = sprint_exempt(issue_labels(repo, args.issue))
         if container:
-            # Said out loud rather than skipped quietly: an epic that starts with
-            # no sprint line looks like the sprint write failed.
-            print(f"  #{args.issue} is an {container}, which spans sprints; "
-                  f"leaving Sprint and {SPRINT_LABEL} labels alone")
+            # Said out loud rather than skipped quietly: an issue that starts
+            # with no sprint line looks like the sprint write failed. The reason
+            # is named because the two are different -- see `sprint_exempt`.
+            print(f"  #{args.issue} is a{'n' if container[0] in 'aeiou' else ''} "
+                  f"{container}; leaving Sprint and {SPRINT_LABEL} labels alone")
 
     # Starting work puts the item in the current sprint, if it is not already in
     # one. Anything else means a board where in-progress work sits outside every
@@ -5227,6 +5371,24 @@ def master_rows(login: str, project: int, config: dict, stamp: str) -> dict[str,
     return {"project": [project_row], "boards": board_rows, "sprints": sprint_rows}
 
 
+def without_tasks(data: list[dict]) -> tuple[list[dict], int]:
+    """Export rows with `type:task` removed, and how many that was.
+
+    The rule from #137, in one place so it can be tested as a rule: **a task is
+    not exported.** It has no metric and no KPI, it is story-internal
+    housekeeping many teams keep in a checklist file, and a grain exists to be
+    measured. #135 makes a task change no number anywhere -- and a row that
+    changes no number is not a measurement.
+
+    Reversible on demand: the data is still in GitHub, so the decision changes
+    without rewriting anything built on it. That is the other reason it is the
+    cheap direction.
+    """
+    kept = [row for row in data
+            if f"type:{TASK_TYPE}" not in set((row.get("labels") or "").split(";"))]
+    return kept, len(data) - len(kept)
+
+
 def cmd_export(args) -> int:
     """Full or incremental, to stdout or to a timestamped file.
 
@@ -5250,6 +5412,24 @@ def cmd_export(args) -> int:
     events: list[dict] | None = [] if args.grain in ("events", "both", "all") else None
     data = rows(args.owner, args.project, with_history=not args.no_history,
                 since=since, events=events)
+    # **Tasks are not exported, and this is a stated rule rather than an
+    # accident of a filter.** Decided on #137: a task has no metric and no KPI.
+    # It is story-internal housekeeping -- many teams do the same thing with a
+    # checklist file -- and a grain exists to be measured. #135 already makes a
+    # task change no number anywhere; a row that changes no number is not a
+    # measurement, and the export is a measurement surface.
+    #
+    # Filtered here rather than in `rows`, which `validate` and `board show`
+    # also read: they must keep seeing tasks, or #136's checks go blind.
+    #
+    # The events are filtered with them, or `github_events` would carry the
+    # history of issues `github_issues` has no row for -- a foreign key into
+    # nothing, which is worse than the absence.
+    data, skipped_tasks = without_tasks(data)
+    if events is not None:
+        exported = {(r["repository"], r["number"]) for r in data}
+        events[:] = [e for e in events
+                     if (e.get("repository"), e.get("number")) in exported]
 
     # Pull requests are fetched once and used twice: for `github_prs`, and for
     # the review events that go into `github_events`. `since` goes to GitHub as
@@ -5280,6 +5460,12 @@ def cmd_export(args) -> int:
         print(f"  incremental since {since}: {len(data)} row(s)", file=sys.stderr)
     else:
         print(f"  full export: {len(data)} row(s)", file=sys.stderr)
+    if skipped_tasks:
+        # Said, because a count that silently omits rows is the failure this
+        # repo already names. The reason is given rather than only the number,
+        # so nobody reads it as a bug and goes looking for the missing grain.
+        print(f"  {skipped_tasks} task(s) not exported: story-internal, no metric "
+              f"(see github_catalog.json)", file=sys.stderr)
 
     if events is not None:
         for event in events:
@@ -5578,6 +5764,18 @@ def cmd_validate(args) -> int:
         if "type:story" in labels and not row["epic_number"]:
             notes["story has no epic"].append(ident)
 
+        # **A task is defined by its parent.** One under an epic, an initiative
+        # or nothing at all is not a thin task -- it is a story or an epic that
+        # has been mislabelled, and the tally, the sprint and the board all
+        # behave wrongly for it. `task` refuses to create one, so this catches
+        # the hand-labelled and the adopted.
+        #
+        # A problem rather than a note: unlike an orphan story, this is nobody's
+        # deliberate choice and relabelling clears it.
+        if f"type:{TASK_TYPE}" in labels and row.get("parent_type") != "story":
+            where = row.get("parent_type") or "nothing"
+            problems["task is not under a story"].append(f"{ident}: under {where}")
+
         # **The third direction, and the one that misreads a board daily rather
         # than at the end.** The other two compare an epic's *closed* state with
         # its children's; this compares a start. An epic left in `Todo` while
@@ -5665,7 +5863,11 @@ def cmd_validate(args) -> int:
         # epic is in progress, and a check that fails forever is a check people
         # stop running. Same predicate as `move` uses, so the next level added is
         # covered by one list.
-        container = container_level(labels)
+        # `sprint_exempt` rather than `container_level`: a task is exempt too,
+        # and for a different reason -- a container spans sprints, a task is not
+        # tracked by the board at all. Demanding a sprint of either reports the
+        # tool's own correct behaviour as a failure.
+        container = sprint_exempt(labels)
         if (same_status(status, CYCLE_START) and not row.get("field_sprint")
                 and not container):
             problems[f"{CYCLE_START} but in no sprint"].append(ident)
@@ -5689,6 +5891,9 @@ def cmd_validate(args) -> int:
         # assigned one is a decision -- does not apply to a level nobody is meant
         # to hold. Reporting it would be reporting the default. Setting one is
         # still allowed and still meaningful; it is simply never demanded.
+        # `container` here is `sprint_exempt`, which covers the task too, and the
+        # reasoning carries: the board does not track a task, so who holds it is
+        # the story's answer rather than its own.
         if same_status(status, CYCLE_START) and not row["assignees"] and not container:
             problems[f"{CYCLE_START} but unassigned"].append(ident)
         # **There is deliberately no check for a *closed* issue with no assignee**,
@@ -6124,6 +6329,38 @@ what an initiative is:
     story.add_argument("--acceptance")
     story.set_defaults(func=cmd_story)
 
+    task = sub.add_parser(
+        "task", help="create a task: story-internal housekeeping, counted by nothing",
+        epilog=field_help([
+            ("title", "text", "required", "the task; positional"),
+            ("--story", "issue number", "required", "the story it belongs to"),
+            ("--repo", "owner/name", "optional", "where the issue is filed"),
+            ("--key", "KEY", "optional", "which key to label it with"),
+            ("--intent", "text", "optional", "## Intent body section"),
+            ("--acceptance", "text", "optional", "## Acceptance body section"),
+        ]) + """
+
+what a task is, and is not:
+  A task is how one person is organising their own story. POLICY.md §2 still
+  recommends a markdown checklist for this, and still says promoting one to an
+  issue buys ceremony and costs signal -- but GitHub's sub-issues make it two
+  clicks, teams do it, and the tool used to punish them with a permanent
+  `no type: label` finding.
+
+  So a task is nameable and changes no number. It carries no points, is never
+  given a `sprint:` label, is not added to the board, is counted by nothing that
+  counts stories, and is not exported. `--story` is required and there is no
+  `none`: a parentless task is not a thin task, it is a mislabelled issue.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    task.add_argument("title")
+    task.add_argument("--story", required=True,
+                      help="the story this task belongs to: a number, or KEY-NUMBER")
+    task.add_argument("--repo", help="owner/name")
+    task.add_argument("--key", help="which key to label the issue with")
+    task.add_argument("--intent")
+    task.add_argument("--acceptance")
+    task.set_defaults(func=cmd_task)
+
     self_test = sub.add_parser(
         "self-test", help="stand up a scratch project, exercise everything, tear it down"
     )
@@ -6515,7 +6752,7 @@ def resolve_owner(args, config: dict) -> None:
 #:               args.project`.
 #:   self-test   stands up its own scratch project, and is exempt from the
 #:               `--project` defaulting above for the same reason.
-PROJECTLESS = {"project", "key", "self-test"}
+PROJECTLESS = {"project", "key", "self-test", "task"}
 
 
 def missing_project_message(explicit: str | None) -> str:
@@ -6611,8 +6848,8 @@ def apply_defaults(args) -> None:
     # it declares a --repo flag. `set --issue 26` had none to attach to, so the
     # attribute never existed and a bare issue number could not be resolved even
     # from inside the repository it belongs to.
-    NEEDS_REPO = {"initiative", "epic", "story", "set", "move", "sync", "key",
-                  "project", "fix"}
+    NEEDS_REPO = {"initiative", "epic", "story", "task", "set", "move", "sync",
+                  "key", "project", "fix"}
     if repo is None and args.command in NEEDS_REPO:
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)
@@ -6647,7 +6884,7 @@ def apply_defaults(args) -> None:
         args.repo = repo
 
     # The key an issue is created with: explicit, else the first for this repo.
-    if hasattr(args, "key") and args.command in ("initiative", "epic", "story"):
+    if hasattr(args, "key") and args.command in ("initiative", "epic", "story", "task"):
         available = keys_for_repo(config, args.repo) if args.repo else []
         if key:
             if available and key not in available:
