@@ -3804,7 +3804,13 @@ def cmd_sync(args) -> int:
 LAYOUT_SECTIONS = {
     "BOARD_LAYOUT": "status",     # columns in the web UI, sections here
     "TABLE_LAYOUT": None,         # one flat table, as the web UI shows it
-    "ROADMAP_LAYOUT": "sprint",   # the nearest text analogue of a timeline
+    # **Was `sprint`, and #115 made that degenerate.** It was chosen as "the
+    # nearest text analogue of a timeline" when an epic could carry a sprint.
+    # Since a container is guaranteed to have none, every epic landed in one
+    # `(no sprint)` bucket -- measured on project #4, nine of ten. A timeline
+    # with no time in it. `start` groups by when the work under an epic actually
+    # began, derived from the `sprint:` labels of its descendants.
+    "ROADMAP_LAYOUT": "start",
 }
 
 
@@ -3887,6 +3893,76 @@ def key_cell(row: dict) -> str:
     """
     return (" " * row.get("depth", 0) + row["key"]
             + (STALE_MARK if stale_status(row) else ""))
+
+
+#: What the roadmap's sections say when an epic's work has not begun.
+NOT_STARTED = "(not started)"
+
+
+def derive_starts(issues: list[dict], rows: list[dict], keys: dict,
+                  by_start: dict[str, str]) -> None:
+    """Set `started_in` on each row: when the work under it actually began.
+
+    **A roadmap is a WBS report, and its axis is when work started -- normally
+    the planned order, and sometimes not, because plans get rearranged as work
+    arrives.** So the order is derived from what happened rather than from what
+    was intended, and an epic that was planned third and started first appears
+    first.
+
+    **First story started, read from the `sprint:` labels.** Those are the
+    immutable record of the sprint a piece of work was *worked in* -- the whole
+    reason they exist -- so the earliest label anywhere under an epic is when
+    that epic began. Read from labels rather than from the Status timeline
+    because the labels are already in hand: `fetch_items` returns the whole
+    board, so an epic's children are here even when the filter shows only epics,
+    and the timeline would be one query per issue.
+
+    Sprint granularity is the right granularity. A roadmap answers *which
+    fortnight did this begin in*, not which afternoon, and the labels are dated
+    by sprint start for exactly that reason.
+
+    Descendants, not direct children: an initiative's work begins when the first
+    story under any of its epics begins, and a level in between must not hide it.
+
+    A date the sprint configuration no longer covers is shown as the date rather
+    than resolved to a neighbour -- **never invent a sprint**, the same rule
+    `reconcile_sprints` follows when a label names one that is gone.
+    """
+    by_key: dict[str, list[dict]] = {}
+    for item in issues:
+        content = item.get("content") or {}
+        if content.get("__typename") != "Issue":
+            continue
+        row = board_row(item, keys)
+        by_key.setdefault(row.get("parent_key") or "", []).append(row)
+
+    def earliest(key: str, seen: set) -> str | None:
+        if key in seen:
+            return None          # a malformed board must not hang a read
+        seen.add(key)
+        found = []
+        for child in by_key.get(key, ()):
+            stamps = [lb[len(SPRINT_LABEL):] for lb in child.get("labels") or []
+                      if lb.startswith(SPRINT_LABEL)]
+            found += stamps
+            below = earliest(child["key"], seen)
+            if below:
+                found.append(below)
+        return min(found) if found else None
+
+    for row in rows:
+        # The row's own labels count too: an epic worked on directly carries
+        # them, and #123 cleared only the strays written before the rule.
+        own = [lb[len(SPRINT_LABEL):] for lb in row.get("labels") or []
+               if lb.startswith(SPRINT_LABEL)]
+        below = earliest(row["key"], set())
+        dates = own + ([below] if below else [])
+        start = min(dates) if dates else None
+        row["started_in"] = by_start.get(start, start) if start else NOT_STARTED
+        # The date as well as the sprint's name, and both public: a JSONL reader
+        # gets the chronology without parsing a section heading, and the heading
+        # gets it without the reader having to know the sprint series.
+        row["started_on"] = start or ""
 
 
 def flat(rows: list[dict]) -> list[dict]:
@@ -3999,6 +4075,43 @@ def board_sections(rows: list[dict], grouping: str | None, sprint_order: list[st
             buckets.setdefault(match or row["status"] or "(no status)", []).append(row)
         return [(name, flat(sorted(items, key=lambda r: r["number"])))
                 for name, items in buckets.items()]
+    if grouping == "start":
+        # **A WBS report's axis: when work began, not when it was planned.**
+        # Sections in the order the work actually started, which is normally the
+        # planned order and sometimes is not -- plans get rearranged as work
+        # arrives, and an epic planned third but started first belongs first.
+        #
+        # Ordered by the underlying date rather than by the section's name: a
+        # sprint title sorts by its spelling, and `0004 W38-2026` beside
+        # `AGILE Sprint 4` would sort alphabetically into nonsense. Not started
+        # last, because it has no place on a timeline and is the remainder.
+        buckets: dict[str, list[dict]] = {}
+        for row in rows:
+            buckets.setdefault(row.get("started_in") or NOT_STARTED, []).append(row)
+
+        def when(name):
+            if name == NOT_STARTED:
+                return ("\uffff", "")
+            return (min(r.get("started_on") or "" for r in buckets[name]), name)
+
+        def heading(name):
+            # **The name does not order the section; the date does.** This board
+            # reads `AGILE Sprint 4`, `Sprint 1`, `Sprint 2`, `Sprint 3` -- and
+            # `AGILE Sprint 4` ran *first*, two weeks before `Sprint 1`, because
+            # a sprint is never renamed and each name says what it was called
+            # when it ran. A reader seeing `AGILE Sprint 4` above `Sprint 2` and
+            # concluding the sort is broken is reading the only thing the
+            # heading gave them. So the heading carries the date it is sorted on.
+            if name == NOT_STARTED:
+                return name
+            began = min(r.get("started_on") or "" for r in buckets[name])
+            return name if name == began else f"{name} · from {began}"
+
+        return [(heading(name), flat(sorted(buckets[name],
+                                            key=lambda r: (r.get("started_on") or "",
+                                                           r["number"]))))
+                for name in sorted(buckets, key=when)]
+
     # sprint: known sprints in configuration order, then the unassigned.
     buckets = {name: [] for name in sprint_order}
     for row in rows:
@@ -4355,6 +4468,12 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
     #
     # `closed`, never `done`: a child closed as NOT_PLANNED counts, and abandoned
     # is not completed. See `render_progress`.
+    if any("started_in" in row for row in rows):
+        # Named, because a section heading that reads like a sprint would
+        # otherwise be taken for the Sprint field -- which these rows do not have
+        # and by #115 never will.
+        out.append("sections: when the work under each item began, from the "
+                   "earliest sprint: label beneath it")
     if any(shows_progress(row) for row in rows):
         out.append("pts: story points, or closed/total sub-issues for epics "
                    "and initiatives")
@@ -4535,8 +4654,14 @@ def cmd_board_show(args) -> int:
               and not i.get("isArchived")]
     shown = [i for i in issues if item_matches(i, terms, current_sprint=current)]
     rows = [board_row(i, keys) for i in shown]
-    sections = board_sections(rows, LAYOUT_SECTIONS.get(view["layout"], "status"),
-                              sprint_order, terms)
+    grouping = LAYOUT_SECTIONS.get(view["layout"], "status")
+    if grouping == "start":
+        # Needs the whole board, not the filtered rows: a roadmap shows epics and
+        # the dates come from the stories under them, which the filter excludes.
+        # Free, because `fetch_items` has already returned them.
+        derive_starts(issues, rows, keys, {i["startDate"]: i["title"]
+                                           for i in active + completed})
+    sections = board_sections(rows, grouping, sprint_order, terms)
     # **Only where it earns its place.** A scrum board filters on
     # `sprint:@current`, and a container is deliberately in no sprint, so it is
     # the one board where the larger work cannot appear among the rows. On a
