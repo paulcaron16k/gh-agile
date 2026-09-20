@@ -3877,6 +3877,98 @@ def status_excluded(name: str, terms: list[tuple[bool, str, str]]) -> bool:
     return False
 
 
+def key_cell(row: dict) -> str:
+    """The key column's text: the indent, the key, and the stale mark.
+
+    One function because `board_columns` measures this and `render_board` prints
+    it, and #118 found what happens when those two compute a cell separately --
+    a band whose `type` cell was measured from the rows overflowed and pushed
+    every line out of alignment. Measured once, printed once.
+    """
+    return (" " * row.get("depth", 0) + row["key"]
+            + (STALE_MARK if stale_status(row) else ""))
+
+
+def flat(rows: list[dict]) -> list[dict]:
+    """Rows with `depth` set to 0: nothing here is indented.
+
+    A grouped board separates a parent from its children, so it shows no tree
+    and indents nothing -- and `depth` is a rendering property, so 0 is the
+    truth about the rendering rather than a claim about the issue. Set rather
+    than left absent so the JSONL field is always present and always an integer.
+    """
+    for row in rows:
+        row["depth"] = 0
+    return rows
+
+
+def hierarchy_order(rows: list[dict]) -> list[dict]:
+    """Rows as a forest: each root followed by its descendants, depth-first.
+
+    **The value is the ordering; the indent only makes it visible.** Indentation
+    alone would duplicate the `type` column, which already says what level a row
+    is. What `type` cannot say is *which parent*, and that is the thing a reader
+    was rebuilding by hand -- an initiative, its epics and their stories
+    interleaved with unrelated work in issue-number order.
+
+    **Roots, then the rest.** A child whose parent the filter excluded is a root
+    rather than an orphan indented under nothing: the tree shown is the tree
+    present, not the tree that exists. Work belonging to no tree at all -- a
+    standalone bug, an orphan story -- is listed after the trees rather than
+    interleaved with them, so the structured work reads first and the remainder
+    reads as the remainder.
+
+    Siblings by `(repository, number)`, which is the order this branch already
+    used: a board may span repositories and two `#12` on one board is ordinary.
+
+    `depth` is set on each row and is a **rendering** property -- how far this
+    row is indented here -- not a claim about the hierarchy. On a grouped board
+    nothing is indented and every row is 0, which is true of the rendering and
+    says nothing about the issue. The row dicts are the same objects
+    `render_board` and `board_columns` read, which is how the indent reaches the
+    width measurement.
+    """
+    def order(row):
+        return (str(row.get("repository") or ""), row["number"])
+
+    by_key = {row["key"]: row for row in rows if row.get("key")}
+    children: dict[str, list[dict]] = {}
+    for row in rows:
+        parent = row.get("parent_key")
+        if parent and parent in by_key and parent != row.get("key"):
+            children.setdefault(parent, []).append(row)
+    for kids in children.values():
+        kids.sort(key=order)
+
+    roots = [row for row in rows
+             if not (row.get("parent_key") and row["parent_key"] in by_key)]
+    out: list[dict] = []
+    seen: set[int] = set()
+
+    def walk(row, depth):
+        # A cycle cannot arise through GitHub's own sub-issue edges, but a read
+        # must not hang on a board that has one somehow.
+        if id(row) in seen:
+            return
+        seen.add(id(row))
+        row["depth"] = depth
+        out.append(row)
+        for kid in children.get(row["key"], ()):
+            walk(kid, depth + 1)
+
+    for root in sorted((r for r in roots if children.get(r["key"])), key=order):
+        walk(root, 0)
+    for row in sorted((r for r in roots if not children.get(r["key"])), key=order):
+        walk(row, 0)
+    # Anything the walk could not reach -- a cycle with no root among the shown
+    # rows -- keeps its place rather than vanishing. A row the ordering cannot
+    # place must still be shown; dropping it would be a board quietly narrower
+    # than its filter.
+    for row in sorted((r for r in rows if id(r) not in seen), key=order):
+        walk(row, 0)
+    return out
+
+
 def board_sections(rows: list[dict], grouping: str | None, sprint_order: list[str],
                    terms: list[tuple[bool, str, str]]) -> list[tuple[str, list[dict]]]:
     """`[(section name, rows)]` in the order the section should be printed.
@@ -3887,7 +3979,13 @@ def board_sections(rows: list[dict], grouping: str | None, sprint_order: list[st
     `status_excluded`.
     """
     if grouping is None:
-        return [("", sorted(rows, key=lambda r: (str(r["repository"]), r["number"])))]
+        # **The one layout where a tree can be shown together.** A status-grouped
+        # board separates a parent from its children by construction -- an epic
+        # in `In Progress` while its stories are spread over `Todo`, `In Review`
+        # and `Done` -- so indenting inside a section would put children under a
+        # parent that is not there. `TABLE_LAYOUT` is one flat table, which is
+        # Backlog and View 1, and is also how an `initiative:` filter is read.
+        return [("", hierarchy_order(rows))]
     if grouping == "status":
         buckets = {s: [] for s in STATUSES if not status_excluded(s, terms)}
         for row in rows:
@@ -3899,13 +3997,14 @@ def board_sections(rows: list[dict], grouping: str | None, sprint_order: list[st
             # policy for. `(no status)` is reserved for genuinely unset, which is
             # what `validate` reports on.
             buckets.setdefault(match or row["status"] or "(no status)", []).append(row)
-        return [(name, sorted(items, key=lambda r: r["number"]))
+        return [(name, flat(sorted(items, key=lambda r: r["number"])))
                 for name, items in buckets.items()]
     # sprint: known sprints in configuration order, then the unassigned.
     buckets = {name: [] for name in sprint_order}
     for row in rows:
         buckets.setdefault(row["sprint"] or "(no sprint)", []).append(row)
-    return [(name, sorted(items, key=lambda r: r["number"])) for name, items in buckets.items()]
+    return [(name, flat(sorted(items, key=lambda r: r["number"])))
+            for name, items in buckets.items()]
 
 
 def render_points(points) -> str:
@@ -4089,8 +4188,7 @@ def board_columns(rows: list[dict], width: int,
     # `story` overflowed the type cell and pushed every band line out of
     # alignment with the table under it. Measured, on this board.
     band = containers or []
-    key = widest("key", [r["key"] + (STALE_MARK if stale_status(r) else "")
-                         for r in rows] + [c["key"] for c in band])
+    key = widest("key", [key_cell(r) for r in rows] + [c["key"] for c in band])
     kind = widest("type", [r["type"] or "?" for r in rows]
                           + [c["type"] for c in band])
     # Measured from what is actually printed, not from the points alone: `3/6` is
@@ -4286,7 +4384,7 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
         for row in items:
             title_lines = textwrap.wrap(row["title"], columns["title"]) or [""]
             out.append(board_line({
-                "key": row["key"] + (STALE_MARK if stale_status(row) else ""),
+                "key": key_cell(row),
                 "type": row["type"] or "?",
                 "points": render_progress(row),
                 # Cut, not elided. `elide` spends one of the eight characters on
