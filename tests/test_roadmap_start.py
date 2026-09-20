@@ -119,13 +119,13 @@ class TestTheSections:
                 "title": key, "type": "epic", "status": "Todo", "sprint": None,
                 "story_points": None, "assignees": [], "labels": [],
                 "parent_key": "", "state": "OPEN", "sub_issues_total": 0,
-                "sub_issues_done": 0, "started_in": started_in, "_started_on": on}
+                "sub_issues_done": 0, "started_in": started_in, "started_on": on}
 
     def test_sections_run_in_date_order(self, tool):
         rows = [self.row("A-2", 2, "Sprint 3", "2026-08-31"),
                 self.row("A-1", 1, "Sprint 1", "2026-08-03")]
         names = [name for name, _ in tool.board_sections(rows, "start", [], [])]
-        assert names == ["Sprint 1", "Sprint 3"]
+        assert names == ["Sprint 1 · from 2026-08-03", "Sprint 3 · from 2026-08-31"]
 
     def test_the_order_is_the_date_not_the_name(self, tool):
         """`0004 W38-2026` beside `AGILE Sprint 4` sorts alphabetically into
@@ -133,19 +133,50 @@ class TestTheSections:
         rows = [self.row("A-1", 1, "AGILE Sprint 4", "2026-07-06"),
                 self.row("A-2", 2, "0004 W38-2026", "2026-09-14")]
         names = [name for name, _ in tool.board_sections(rows, "start", [], [])]
-        assert names == ["AGILE Sprint 4", "0004 W38-2026"]
+        assert names == ["AGILE Sprint 4 · from 2026-07-06",
+                         "0004 W38-2026 · from 2026-09-14"]
 
     def test_not_started_comes_last(self, tool):
         rows = [self.row("A-1", 1, tool.NOT_STARTED, ""),
                 self.row("A-2", 2, "Sprint 3", "2026-08-31")]
         names = [name for name, _ in tool.board_sections(rows, "start", [], [])]
-        assert names == ["Sprint 3", tool.NOT_STARTED]
+        assert names == ["Sprint 3 · from 2026-08-31", tool.NOT_STARTED]
 
     def test_rows_within_a_section_are_ordered_by_date_then_number(self, tool):
         rows = [self.row("A-9", 9, "Sprint 1", "2026-08-05"),
                 self.row("A-2", 2, "Sprint 1", "2026-08-03")]
         _name, items = tool.board_sections(rows, "start", [], [])[0]
         assert [r["key"] for r in items] == ["A-2", "A-9"]
+
+    def test_the_heading_carries_the_date_it_sorts_on(self, tool):
+        """A reader seeing `AGILE Sprint 4` above `Sprint 2` and concluding the
+        sort is broken is reading the only thing the heading gave them -- and
+        `AGILE Sprint 4` really did run first, two weeks before `Sprint 1`."""
+        rows = [self.row("A-1", 1, "AGILE Sprint 4", "2026-08-03")]
+        name, _items = tool.board_sections(rows, "start", [], [])[0]
+        assert name == "AGILE Sprint 4 · from 2026-08-03"
+
+    def test_a_bare_date_is_not_repeated(self, tool):
+        """When no sprint covers the date, the name *is* the date."""
+        rows = [self.row("A-1", 1, "2025-01-06", "2025-01-06")]
+        name, _items = tool.board_sections(rows, "start", [], [])[0]
+        assert name == "2025-01-06"
+
+    def test_not_started_carries_no_date(self, tool):
+        rows = [self.row("A-1", 1, tool.NOT_STARTED, "")]
+        assert tool.board_sections(rows, "start", [], [])[0][0] == tool.NOT_STARTED
+
+    def test_the_date_reaches_a_jsonl_reader_without_parsing_a_heading(self, tool):
+        import argparse
+        import json
+        rows = [self.row("A-1", 1, "Sprint 1", "2026-08-03")]
+        sections = tool.board_sections(rows, "start", [], [])
+        out = tool.board_jsonl({"name": "R", "layout": "ROADMAP_LAYOUT", "filter": ""},
+                               "roadmap", rows, sections,
+                               argparse.Namespace(owner="o", project=4), "", 1,
+                               "2026-09-20T00:00:00Z")
+        item = json.loads(out.splitlines()[1])
+        assert item["started_on"] == "2026-08-03" and item["started_in"] == "Sprint 1"
 
     def test_nothing_is_indented(self, tool):
         rows = [self.row("A-1", 1, "Sprint 1", "2026-08-03")]

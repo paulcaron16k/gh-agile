@@ -3959,7 +3959,10 @@ def derive_starts(issues: list[dict], rows: list[dict], keys: dict,
         dates = own + ([below] if below else [])
         start = min(dates) if dates else None
         row["started_in"] = by_start.get(start, start) if start else NOT_STARTED
-        row["_started_on"] = start or ""
+        # The date as well as the sprint's name, and both public: a JSONL reader
+        # gets the chronology without parsing a section heading, and the heading
+        # gets it without the reader having to know the sprint series.
+        row["started_on"] = start or ""
 
 
 def flat(rows: list[dict]) -> list[dict]:
@@ -4089,11 +4092,24 @@ def board_sections(rows: list[dict], grouping: str | None, sprint_order: list[st
         def when(name):
             if name == NOT_STARTED:
                 return ("\uffff", "")
-            return (min(r.get("_started_on") or "" for r in buckets[name]), name)
+            return (min(r.get("started_on") or "" for r in buckets[name]), name)
 
-        return [(name, flat(sorted(buckets[name],
-                                   key=lambda r: (r.get("_started_on") or "",
-                                                  r["number"]))))
+        def heading(name):
+            # **The name does not order the section; the date does.** This board
+            # reads `AGILE Sprint 4`, `Sprint 1`, `Sprint 2`, `Sprint 3` -- and
+            # `AGILE Sprint 4` ran *first*, two weeks before `Sprint 1`, because
+            # a sprint is never renamed and each name says what it was called
+            # when it ran. A reader seeing `AGILE Sprint 4` above `Sprint 2` and
+            # concluding the sort is broken is reading the only thing the
+            # heading gave them. So the heading carries the date it is sorted on.
+            if name == NOT_STARTED:
+                return name
+            began = min(r.get("started_on") or "" for r in buckets[name])
+            return name if name == began else f"{name} · from {began}"
+
+        return [(heading(name), flat(sorted(buckets[name],
+                                            key=lambda r: (r.get("started_on") or "",
+                                                           r["number"]))))
                 for name in sorted(buckets, key=when)]
 
     # sprint: known sprints in configuration order, then the unassigned.
