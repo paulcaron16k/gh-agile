@@ -294,3 +294,15 @@ follows from that sentence; the sprint reasoning moved down to the sprint call s
 rather than a name everything else reads past. **Name a set for its membership, not for its first
 consumer** — and when the second rule reads it, that is the moment to check the name still describes the
 set.
+
+**A rule that removes a field from a level degrades every view grouped on it, silently.** #115 stopped
+putting epics and initiatives in sprints — correct, and not in question. `ROADMAP_LAYOUT` had been grouping
+by sprint as "the nearest text analogue of a timeline", chosen when an epic could carry one. Afterwards nine
+of the ten epics on this board sat in a single `(no sprint)` bucket: the view still rendered, still
+validated, still passed every test, and conveyed nothing. Nothing failed, because a grouping that collapses
+to one bucket is indistinguishable from a board that genuinely has one. Found by reviewing the initiative
+against its own acceptance months later, not by anyone hitting it. **When a change makes a field
+unreachable for some level, grep for what groups, sorts or filters on it** — those are the places that
+degrade rather than break. The replacement here derives the axis from work that happened (`sprint:` labels
+on descendants) rather than from a field the rows can never hold, which is also why it cannot degrade the
+same way again.
