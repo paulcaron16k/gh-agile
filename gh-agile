@@ -3835,7 +3835,19 @@ def board_row(item: dict, keys: dict[str, str]) -> dict:
         "sprint": fields.get("Sprint"),
         "labels": labels,
         "assignees": [n["login"] for n in (content.get("assignees") or {}).get("nodes", [])],
-        "epic_number": (content.get("parent") or {}).get("number"),
+        # **The same builder the export rows use, rather than a second one that
+        # can disagree with it.** This line was `content.parent.number`, which is
+        # the pre-#90 defect still living here: the parent's number *whatever the
+        # parent was*, so an epic under an initiative reported an initiative in a
+        # column called `epic_number`, with nothing saying so. Harmless while
+        # nothing could be a parent but an epic; wrong since #85 built the level
+        # above.
+        #
+        # It also gives a row the parent's **key** rather than a bare number.
+        # GitHub numbers issues per repository, so a board spanning repositories
+        # has two `#12`; a number cannot name a parent and a key can. Nothing can
+        # be ordered into a tree until a row can say whose child it is.
+        **parent_columns(content.get("parent"), keys),
         # Already fetched by `FULL_ITEM_SELECTION`, and simply never carried
         # through -- so the tally in the `pts` column costs no extra call. Both
         # land in the JSONL rendering too, which splats this row, so a reader
