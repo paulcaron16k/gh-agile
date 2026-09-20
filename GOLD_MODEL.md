@@ -221,6 +221,28 @@ if it references a parent by number: GitHub numbers issues per repository, so tw
 repositories on one board both have a `#12`. **The Partner Gold model likely needs
 the same revisit**, and that decision is not this repository's to make.
 
+### Container progress is silver's, not Gold's
+
+`github_issues` carries `sub_issues_done` over `sub_issues_total`, and
+`github_catalog.json` states what that pair means. **Gold does not gain a
+corresponding measure**, for the same reason it does not gain the level: an
+initiative is an *attribute* of the issues beneath it, so "how far along is this
+initiative" is a `GROUP BY` over `agile_issues` rather than a column somebody has
+to keep in step.
+
+The silver pair stays because it is what GitHub actually hands over —
+`subIssuesSummary`, per level, counted at read time — and because the boards
+render it directly. A Gold measure derived the same way would be a second
+definition of the same number, and the two would disagree the first time an
+issue was closed between two exports.
+
+So: **read it in silver, aggregate it in Gold.** If a Gold consumer wants
+progress, the honest derivation is over the issues themselves, filtered by
+`initiative_slug` or joined on `parent_key` — not a copy of this pair moved up a
+layer. The one thing a Gold transform must not do is treat `sub_issues_done` as
+transitive: it counts direct children only, so adding an initiative's tally to
+its epics' tallies produces a figure that reconciles to neither level.
+
 ## Tasks: below the boundary, and not exported
 
 Silver gained a level *below* story — `type:task`, for a team that files

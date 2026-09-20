@@ -43,6 +43,26 @@
     "resolved on `event_hash` instead. Incremental runs deliberately overlap and",
     "re-send rows; every stream is idempotent on its key_properties.",
     "",
+    "PROGRESS OF A CONTAINER is `sub_issues_done` over `sub_issues_total`. Three things",
+    "about that pair cannot be said by a type, and each has produced a wrong number.",
+    "",
+    "  PER LEVEL, NOT TRANSITIVE. `subIssuesSummary` counts DIRECT children, so an",
+    "  initiative's tally is epics closed and an epic's is stories closed. Measured:",
+    "  closing one story took its epic to 1/1 while the initiative above it stayed",
+    "  0/1. Summing these across levels, or reading an initiative's as a count of",
+    "  stories, produces a figure nobody can reconcile with the board.",
+    "",
+    "  `done` MEANS CLOSED, NOT COMPLETED. GitHub's field is named `completed` and it",
+    "  counts children closed as NOT_PLANNED as well -- measured on issue 9, six of",
+    "  seven with one abandoned. A dashboard labelling this `completed` asserts",
+    "  something false about that row. The board's own column legend says `closed` for",
+    "  exactly this reason, and so should anything built on these two columns.",
+    "",
+    "  0/0 IS A LEAF, NOT UNKNOWN AND NOT ZERO PERCENT. Both columns are 0 for an",
+    "  issue with no children, which is every story and every bug. A story is not a",
+    "  container and has no progress of this kind; render it as absent rather than as",
+    "  an empty bar. `type:` tells you which rows the pair is meaningful for.",
+    "",
     "WHAT IS NOT HERE. An issue labelled `type:task` is NOT exported, in any stream.",
     "A task is story-internal housekeeping -- many teams keep the same thing in a",
     "markdown checklist -- and it has no metric and no KPI attached to it. It carries",
@@ -165,11 +185,12 @@
             "description": "The initiative this issue belongs to, from its own initiative: label, which `initiative reconcile` maintains down the whole tree. Join to the github_issues row whose type is initiative and whose slug matches."
           },
           "sub_issues_total": {
-            "type": "integer"
+            "type": "integer",
+            "description": "DIRECT children only, so an initiative counts epics and an epic counts stories. 0 for a leaf, which is not the same as unknown. Paired with `sub_issues_done`; see PROGRESS OF A CONTAINER above."
           },
           "sub_issues_done": {
             "type": "integer",
-            "description": "GitHub's name is `completed`; it counts CLOSED children whatever reason they closed for."
+            "description": "GitHub's name is `completed`; it counts CLOSED children whatever reason they closed for, NOT_PLANNED included -- so this is `closed`, not `completed`. DIRECT children only. See PROGRESS OF A CONTAINER above."
           },
           "reported_by": {
             "type": "string",
