@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -149,6 +150,124 @@ def check(command: str) -> list[str]:
             if flag not in text and flag not in GLOBAL_FLAGS]
 
 
+#: Commands the guide is not required to document, and why each one is here.
+#:
+#: **A reason per entry, not a silent skip.** An exemption with no justification
+#: is indistinguishable from an oversight, which is the failure this whole check
+#: exists to catch -- so anything added later has to argue for itself in this
+#: dict, where a reviewer will see it.
+UNDOCUMENTED_OK = {
+    ("self-test",):
+        "a maintainer target, not a user command: it stands up and tears down a "
+        "scratch project and is driven by `make self-test`",
+    ("task",):
+        "filing tasks as GitHub issues is deliberately not promoted -- POLICY.md "
+        "§2 still recommends a markdown checklist inside the story, and the "
+        "command exists so a team doing it anyway is not punished by `validate`. "
+        "Documenting it in the guide would read as a recommendation. Revisit when "
+        "the task model is settled",
+}
+
+
+def parser_leaves() -> set[tuple[str, ...]]:
+    """Every subcommand a user can actually invoke, leaves only.
+
+    Read from the CLI's own help rather than from a list kept beside it, for the
+    reason this direction exists at all: a list maintained by hand drifts from
+    the thing it describes, and then the check is checking the list.
+
+    Leaves, because a guide showing `board list` and never `board show` has not
+    documented `board show`. Reporting the parent as covered would be the false
+    assurance the whole script exists to remove.
+    """
+    def choices(words):
+        # **Read from the `positional arguments:` block, not from the usage
+        # line.** argparse prints an option's choices the same way it prints a
+        # subparser group -- `--state {open,closed,all}` against `{list,show,
+        # create}` -- so matching `{...}` anywhere reported `sync all`,
+        # `sync open` and `sync closed` as undocumented commands. Found by
+        # running it. Only a subparser group appears as a line of its own under
+        # the positional heading.
+        text = help_for(words)
+        block = text.partition("positional arguments:")[2]
+        # First *non-empty* line: `partition` leaves the newline, so taking
+        # `splitlines()[0]` read the empty remainder of the heading and matched
+        # nothing. That made `parser_leaves()` empty and the whole check pass
+        # vacuously -- the exact failure this story exists to prevent, found by
+        # a summary line reading `-2 command(s) require documenting`.
+        first = next((line for line in block.splitlines() if line.strip()), "")
+        match = re.match(r"\s*\{([a-z0-9,\-]+)\}\s*$", first)
+        return match.group(1).split(",") if match else []
+
+    leaves = set()
+    for command in choices(()):
+        children = choices((command,))
+        if children:
+            leaves.update((command, child) for child in children)
+        else:
+            leaves.add((command,))
+    if not leaves:
+        # **A check that can pass by finding nothing is not a check.** This read
+        # the parser's help by pattern, and a help format that changes would
+        # otherwise silently make every command exempt.
+        sys.exit("check_guide: no subcommands found in the CLI's help; "
+                 "the extraction stopped matching")
+    return leaves
+
+
+def documented_leaves(commands: list[tuple[int, str]]) -> set[tuple[str, ...]]:
+    """The leaves the guide actually invokes.
+
+    A command is not documented because its name appears in a sentence -- it is
+    documented when an invocation of it appears, which is the same evidence the
+    other direction of this script already works from.
+    """
+    seen = set()
+    for _line, command in commands:
+        tokens = command.split()[1:] if command.startswith("gh-agile") \
+            else command.split()[2:]
+        words, skip = [], False
+        for token in tokens:
+            if skip:
+                skip = False
+                continue
+            if token.startswith("--"):
+                if len(words) >= 1:
+                    break
+                skip = GLOBAL_FLAGS.get(token.split("=")[0], False) and "=" not in token
+            elif token.replace("-", "").isalpha() and len(words) < 2:
+                words.append(token)
+            else:
+                break
+        if words:
+            seen.add(tuple(words[:2]))
+            seen.add((words[0],))
+    return seen
+
+
+def coverage_problems(commands: list[tuple[int, str]]) -> list[str]:
+    """Leaves the parser exposes and the guide never invokes.
+
+    **The direction this script was missing.** It checked every documented
+    invocation against the CLI and never the CLI against the guide, so a command
+    documented nowhere passed everything: `gh agile task` shipped, `make
+    check-guide` reported "no problems found", CI stayed green, and the omission
+    was found months later by a person asking whether the docs were current.
+
+    The same shape as a grouping that collapses to one bucket: the check ran,
+    passed, and conveyed nothing. A guard that looks one way reports the absence
+    of what it cannot see.
+    """
+    missing = sorted(parser_leaves() - documented_leaves(commands)
+                     - set(UNDOCUMENTED_OK))
+    return [
+        f"`gh agile {' '.join(leaf)}` exists and USER_GUIDE.md never invokes it.\n"
+        f"      Document it there, or add it to UNDOCUMENTED_OK in "
+        f"scripts/check_guide.py with a reason."
+        for leaf in missing
+    ]
+
+
 def run_safe(command: str) -> tuple[bool, str]:
     words = tuple(w for w in command.split()[2:] if not w.startswith("-"))[:2]
     if not any(words[: len(s)] == s for s in SAFE):
@@ -213,7 +332,7 @@ def main() -> int:
     if not commands:
         sys.exit("no commands found in USER_GUIDE.md; the extraction stopped matching")
 
-    problems, ran, skipped = [], 0, {}
+    problems, ran, skipped = coverage_problems(commands), 0, {}
     for line, command in commands:
         issues = check(command)
         for issue in issues:
@@ -237,8 +356,11 @@ def main() -> int:
         if not ok:
             problems.append(f"USER_GUIDE.md:{line}: {command[:60]} -> {note}")
 
+    covered = len(parser_leaves()) - len(UNDOCUMENTED_OK)
     print(f"\n  {len(commands)} documented command(s): {ran} executed in a cron-like "
           f"environment, {sum(len(v) for v in skipped.values())} checked but not run")
+    print(f"  {covered} command(s) require documenting; "
+          f"{len(UNDOCUMENTED_OK)} exempt, with a reason each")
     for reason, items in sorted(skipped.items()):
         print(f"    {reason}: {len(items)}")
     if problems:
