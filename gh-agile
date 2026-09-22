@@ -1574,6 +1574,187 @@ def fields_of(login: str, number: int, *, refresh: bool = False) -> dict[str, di
     return _FIELDS[key]
 
 
+#: The boards a new project gets, and why each earns a place. Written into the
+#: profile so `setup` converges them on every later run -- one mechanism for
+#: creating a board, not two.
+STARTER_BOARDS = [
+    {"name": "Sprint board", "type": "scrum"},
+    {"name": "Engineering: all work", "type": "kanban"},
+    {"name": "Backlog", "type": "backlog"},
+    {"name": "Roadmap", "type": "roadmap"},
+]
+
+#: The project automations the API can read and cannot write, and what each
+#: one's absence costs. Measured on live projects; see USER_GUIDE.md.
+#:
+#: **`init` ends here rather than pretending to finish.** The schema has
+#: `deleteProjectV2Workflow` and nothing that creates, enables or configures
+#: one, so these are web-UI toggles and always will be. A wizard that stopped
+#: without saying so would leave a board that looks set up and silently loses
+#: statuses.
+MANUAL_WORKFLOWS = [
+    ("Item added to project",
+     "an item arriving by any other route has no Status, so it is in no column "
+     "of any board"),
+    ("Item closed",
+     "Status does not follow a close -- an issue closed by a pull request's "
+     "`Closes #n` keeps whatever Status it had, so finished work sits in "
+     "In Progress looking live"),
+    ("Auto-add sub-issues to project",
+     "every story created under a boarded epic would need a `sync`"),
+]
+
+WORKFLOWS_QUERY = """
+query($login: String!, $number: Int!) {
+  %s(login: $login) { projectV2(number: $number) {
+    workflows(first: 20) { nodes { name enabled } } } }
+}"""
+
+
+def project_workflows(login: str, number: int) -> dict[str, bool]:
+    """`{name: enabled}` for the project's built-in workflows, or {} if unreadable.
+
+    **Read, because they can be.** The two are worth keeping apart: the schema
+    exposes `workflows(first: 20)` with `name` and `enabled`, and has no
+    mutation that writes one. So `init` cannot enable them and need not ask
+    somebody to go and check which are on.
+
+    Unreadable is not fatal. The steps still get printed, without their state:
+    a checklist is more useful than an error at the end of a successful setup.
+    """
+    for root in ("user", "organization"):
+        try:
+            data = graphql(WORKFLOWS_QUERY % root, login=login, number=number)
+        except (SystemExit, MissingScope):
+            continue
+        node = ((data.get("data") or {}).get(root) or {}).get("projectV2")
+        if node:
+            return {w["name"]: w["enabled"]
+                    for w in (node.get("workflows") or {}).get("nodes") or []}
+    return {}
+
+
+def report_manual_steps(login: str, number: int) -> None:
+    """What is left, in order, with what each omission costs."""
+    state = project_workflows(login, number)
+    print("\n  Two things the API cannot do, so they are yours in the web UI:")
+    print(f"    https://github.com/users/{login}/projects/{number}/workflows\n")
+    for name, cost in MANUAL_WORKFLOWS:
+        enabled = state.get(name)
+        mark = "[on] " if enabled else "[ ]  " if enabled is not None else "[?]  "
+        print(f"    {mark}{name}")
+        if not enabled:
+            print(f"           without it: {cost}")
+    if not state:
+        print("    (could not read which are already enabled; the list above is "
+              "the whole set)")
+    print("\n  Then: gh agile validate")
+
+
+def cmd_init(args) -> int:
+    """From a fresh clone to a board somebody can use, in one command.
+
+    The path existed and nobody was walked along it: write a profile, `setup`,
+    `board create` once per board, then two web-UI toggles that nothing
+    mentions until you read far enough. The knowledge was all here -- this
+    assembles it into the order the tool already knew.
+
+    **It refuses exactly what the rest of the tool refuses.** A key must match
+    Jira's rules, a sprint cadence is a decision, and `issue_title_prefix` is
+    written into every issue title. Those are flags, and a missing one is a
+    refusal naming the flag rather than a default quietly chosen for you --
+    the cost of guessing lands on somebody else later.
+
+    **Flags rather than prompts, deliberately.** A prompt cannot run in a
+    script, an agent or `check-guide`, so prompting would mean two paths and
+    the scripted one would rot. Everything here is one command line.
+
+    **Idempotent, because the first run gets interrupted.** Every step
+    converges: `project create` refuses a second project, `setup` creates what
+    is missing, `make_board` converges a view by name. A second run reports
+    what is already right and changes nothing.
+
+    It ends by naming the steps it cannot take, with their current state read
+    back -- never by printing success over them.
+    """
+    config = args._config
+    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    declared = (config.get("project") or {}).get("number")
+
+    # Every refusal first, before anything is created. An issue number is never
+    # reused and a project is awkward to delete; a run that fails at step four
+    # should not have written steps one to three.
+    # `--project` adopts one that exists, and adopting needs no title. Getting
+    # this wrong refused a run that had already answered the question, and
+    # suggested the flag it had been given -- found by running the refusals.
+    if not declared and not args.project and not args.title:
+        sys.exit("--title is required to create a project.\n"
+                 "  Or point at one that exists: gh agile --project <n> init ...")
+    if args.key and (problem := key_problem(args.key)):
+        sys.exit(f"--key {args.key!r}: {problem}")
+    if not args.key and not profile_keys(config):
+        sys.exit("--key is required: it labels every issue and prefixes every "
+                 "title, and\n  a key must match Jira's rules, so this will not "
+                 "guess one.\n    gh agile init --key AGILE --title \"My board\"")
+    if args.sprint_template and args.sprint_template not in SPRINT_TEMPLATES:
+        sys.exit(f"--sprint-template {args.sprint_template!r} is not one of: "
+                 f"{', '.join(SPRINT_TEMPLATES)}")
+    if not args.sprint_template and not (config.get("sprint") or {}).get("template"):
+        sys.exit("--sprint-template is required: the cadence decides when every "
+                 "sprint starts and\n  ends, and an unchosen one blocks `epic`, "
+                 "`story` and `ensure`. One of: "
+                 f"{', '.join(SPRINT_TEMPLATES)}")
+    title_prefix_mode({"project": {"issue_title_prefix": args.title_prefix}})
+
+    print(f"  profile: {target}")
+
+    # 1. The project. `project create` writes number, owner, name and key.
+    if declared:
+        print(f"  project #{declared} already in the profile")
+    elif args.project:
+        config.setdefault("project", {}).update(
+            {"number": args.project, "owner": args.owner, "name": args.title or ""})
+        print(f"  project #{args.project} adopted")
+    else:
+        cmd_project(argparse.Namespace(
+            project_command="create", title=args.title, key=args.key,
+            repo=args.repo, owner=args.owner, project=None, force=False,
+            sprint_template=None, _config=config,
+            config=getattr(args, "config", None)))
+        config = read_config(getattr(args, "config", None))
+        args._config = config
+
+    # 2. The decisions, written down so nothing has to ask again.
+    if args.key:
+        entries = profile_keys(config)
+        if not any(e.get("key") == args.key for e in entries):
+            entries.append({"key": args.key, "name": args.title or args.key,
+                            "repo": args.repo})
+            config["keys"] = entries
+        config.setdefault("project", {})["key"] = args.key
+    config.setdefault("project", {})["issue_title_prefix"] = args.title_prefix
+    if args.sprint_template:
+        write_sprint_template(config, args.sprint_template, target)
+    for board in STARTER_BOARDS:
+        if not any(b.get("name") == board["name"]
+                   for b in (config.get("boards") or [])):
+            config.setdefault("boards", []).append(dict(board))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+    print(f"  keys, cadence and {len(STARTER_BOARDS)} board(s) recorded")
+
+    # 3. Fields, labels and the boards -- `setup` converges all three, so there
+    #    is one mechanism for creating a board rather than two.
+    args.project = args.project or (config.get("project") or {}).get("number")
+    cmd_setup(argparse.Namespace(spec=None, repo=args.repo, owner=args.owner,
+                                 project=args.project, _config=config,
+                                 config=getattr(args, "config", None)))
+
+    # 4. What is left, and what it costs.
+    report_manual_steps(args.owner, args.project)
+    return 0
+
+
 def cmd_setup(args) -> int:
     """Create the project's fields and labels, converging rather than duplicating.
 
@@ -6504,6 +6685,46 @@ def main() -> int:
     parser.add_argument("--config", help=f"profile path; searched: {', '.join(CONFIG_PATHS)}")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    init = sub.add_parser(
+        "init", help="from a fresh clone to a working board, in one command",
+        epilog=field_help([
+            ("--key", "KEY", "required*", "labels every issue; Jira's rules apply"),
+            ("--title", "text", "required*", "the project's title"),
+            ("--sprint-template", "|".join(SPRINT_TEMPLATES), "required*",
+             "the cadence; blocks epic/story/ensure until chosen"),
+            ("--title-prefix", "|".join(TITLE_PREFIX_MODES), "optional",
+             "what every issue is called; default off"),
+            ("--project", "number", "optional", "adopt an existing project "
+             "instead of creating one"),
+            ("--repo", "owner/name", "optional", "where labels are created"),
+        ]) + """
+
+*required only the first time: a run against a profile that already names a
+project, a key and a cadence needs none of them.
+
+what it does, in order:
+  1. creates the project and writes the profile -- number, owner, name, key
+  2. records the cadence, the title prefix and four starter boards
+  3. runs `setup`: the fields, the type: and key: labels, and those boards
+  4. prints the web-UI steps the API cannot take, with their current state
+
+Idempotent: every step converges, so an interrupted run is simply run again
+and a second run reports what is already right.
+
+It refuses what the rest of the tool refuses. A key must match Jira's rules, a
+cadence is a decision, and the title prefix is written into every issue title --
+so they are flags, and a missing one is a refusal naming the flag rather than a
+default chosen for you.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    init.add_argument("--key", help="the key labelling every issue, e.g. AGILE")
+    init.add_argument("--title", help="the project's title")
+    init.add_argument("--sprint-template", choices=sorted(SPRINT_TEMPLATES),
+                      help="the sprint cadence")
+    init.add_argument("--title-prefix", choices=sorted(TITLE_PREFIX_MODES),
+                      default="off", help="what every issue is called")
+    init.add_argument("--repo", help="owner/name; defaults to the working directory")
+    init.set_defaults(func=cmd_init)
+
     setup = sub.add_parser("setup", help="create the project's fields and labels, idempotently",
         epilog=field_help(SETUP_FIELDS) + """\n\nproject fields created:\n  Story Points  number                            the Gold model's story_points\n  Priority      single-select  lowest..highest    Gold priority_id\n  FR            text                              requirement traceability\n  Sprint        iteration                         Gold sprint_id; via GraphQL, gh cannot\n  Status        single-select  Todo..Done         Gold state_id; two options added to GitHub's three""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -7011,7 +7232,7 @@ def resolve_owner(args, config: dict) -> None:
 #:               args.project`.
 #:   self-test   stands up its own scratch project, and is exempt from the
 #:               `--project` defaulting above for the same reason.
-PROJECTLESS = {"project", "key", "self-test", "task"}
+PROJECTLESS = {"project", "key", "self-test", "task", "init"}
 
 
 def missing_project_message(explicit: str | None) -> str:
@@ -7108,7 +7329,7 @@ def apply_defaults(args) -> None:
     # attribute never existed and a bare issue number could not be resolved even
     # from inside the repository it belongs to.
     NEEDS_REPO = {"initiative", "epic", "story", "task", "set", "move", "sync",
-                  "key", "project", "fix"}
+                  "key", "project", "fix", "init"}
     if repo is None and args.command in NEEDS_REPO:
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)

@@ -9,6 +9,71 @@ The *rules* are in [POLICY.md](POLICY.md); the *data mapping* is in
 
 ---
 
+## 0. Start here: `gh agile init`
+
+One command from a fresh clone to a board somebody can use:
+
+```bash
+gh agile init --key AGILE --title "GitHub Agile extension" --sprint-template 2-week
+gh agile init --key AGILE --title "..." --sprint-template 2-week --title-prefix key
+gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an existing project
+```
+
+```
+  profile: .github/agile.json
+  project #7 created: https://github.com/users/you/projects/7
+  keys, cadence and 4 board(s) recorded
+  field 'Story Points' created
+  ...
+  board 'Sprint board' created [scrum]
+  board 'Roadmap' created [roadmap]
+  label 'type:epic' created
+  ...
+
+  Two things the API cannot do, so they are yours in the web UI:
+    https://github.com/users/you/projects/7/workflows
+
+    [ ]  Item added to project
+           without it: an item arriving by any other route has no Status, so it
+           is in no column of any board
+    [on] Item closed
+    [on] Auto-add sub-issues to project
+
+  Then: gh agile validate
+```
+
+It creates the project, writes the profile, records the cadence and four starter
+boards, then runs `setup` — the fields, the `type:` and `key:` labels, and those
+boards.
+
+**It refuses what the rest of the tool refuses.** A key must match Jira's rules,
+a sprint cadence decides when every sprint begins and blocks `epic`, `story` and
+`ensure` until chosen, and `--title-prefix` is written into every issue title.
+Those are flags, and a missing one is a refusal naming the flag — not a default
+chosen on your behalf, because the cost of that guess lands on somebody else
+later. Nothing is written before every one of them is settled.
+
+**Flags rather than prompts**, so the whole thing runs in a script, in CI, or on
+an agent's behalf. A prompt would mean a second path, and the scripted one would
+rot.
+
+**It is idempotent.** Every step converges — `project create` refuses a second
+project, `setup` creates what is missing, a board is converged by name — so an
+interrupted run is simply run again, and a second run reports what is already
+right.
+
+**And it stops honestly.** GitHub's built-in project workflows cannot be
+created, enabled or configured through the API: the schema has
+`deleteProjectV2Workflow` and nothing that writes one. So `init` ends by naming
+what is left, with what each omission costs — and reads back which are already
+on, because `workflows(first: 20)` returns `enabled` even though nothing can set
+it. See [Which ones to enable](#which-ones-to-enable-and-which-to-leave-alone).
+
+Everything below is the detail behind those steps, and what to do once the board
+exists.
+
+---
+
 ## 1. The project profile
 
 One JSON file describes the project to the tool. It is **visible, checked in,
