@@ -76,7 +76,7 @@ class TestItClearsTheStrays:
         """An epic stamped across several sprints carries one per sprint."""
         out, _ = unstamp(item(9, labels=EPIC + ["sprint:2026-08-31", "sprint:2026-09-14"]))
         assert "-sprint:2026-08-31" in out and "-sprint:2026-09-14" in out
-        assert "would clear 2 label(s)" in out
+        assert "would clear 2 stray value(s)" in out
 
     def test_for_real_it_removes_rather_than_adds(self, tool, unstamp):
         _out, edits = unstamp(item(9, labels=EPIC + ["sprint:2026-08-31"]), dry_run=False)
@@ -89,6 +89,10 @@ class TestItClearsTheStrays:
 
 
 class TestItIsNarrow:
+    """Widened by #170 from labels to *stray values* -- a container's Sprint
+    field is cleared too -- so the summary counts values. Narrow in the way
+    that matters is unchanged: only containers, never a story."""
+
     def test_a_story_is_never_touched(self, tool, unstamp):
         _out, edits = unstamp(item(9, labels=STORY + ["sprint:2026-08-31"]), dry_run=False)
         assert edits == []
@@ -102,17 +106,17 @@ class TestItIsNarrow:
     def test_a_clean_epic_is_left_alone(self, tool, unstamp):
         out, edits = unstamp(item(9, labels=EPIC), dry_run=False)
         assert edits == []
-        assert "no stray labels" in out
+        assert "nothing stray" in out
 
     def test_a_clean_board_says_so(self, tool, unstamp):
         """A repair pass that prints nothing reads as one that failed to look."""
         out, _ = unstamp(item(9, labels=STORY + ["sprint:2026-08-31"]))
-        assert "no stray labels" in out
+        assert "nothing stray" in out
 
     def test_the_summary_counts_what_it_scanned(self, tool, unstamp):
         out, _ = unstamp(item(9, labels=EPIC + ["sprint:2026-08-31"]),
                          item(10, labels=INITIATIVE), item(11, labels=STORY))
-        assert "1 label(s) across 2 epic(s)/initiative(s)" in out
+        assert "1 stray value(s) across 2 epic(s)/initiative(s)" in out
 
 
 class TestReconcileNoLongerFeedsTheField:
