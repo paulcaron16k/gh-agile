@@ -11,6 +11,39 @@ gh agile validate          # do the conventions hold?
 gh agile export --csv      # backlog with status history
 ```
 
+## The hierarchy
+
+Four levels, carried on **labels** because GitHub's own Issue Types are an
+organization-only feature and this works on a personal account:
+
+| Level | Label | Holds | Required? |
+|---|---|---|---|
+| **Initiative** | `type:initiative` | epics | **optional** — an epic under no initiative is ordinary |
+| **Epic** | `type:epic` | stories | optional — `--epic none` files a story that stands alone |
+| **Story** | `type:story` | the work | — |
+| **Task** | `type:task` | nothing | **discouraged** — a markdown checklist in the story is the recommendation |
+| **Bug** | `type:bug` | — | arrives without asking whether it fits a plan |
+
+The parent/child edge is a real GitHub **sub-issue** edge, which the API can
+traverse and roll up. That is what makes `4/7` on an epic possible without
+anyone maintaining a count.
+
+**An initiative also stamps `initiative:<slug>` on everything beneath it**, and
+the reason is not obvious: a board filter cannot traverse the hierarchy. GitHub's
+view filters reach one level at most, and this tool evaluates a filter one item
+at a time — so seeing an initiative's whole tree on a board needs a label every
+item in it carries. The edge is the truth and rolls up; the label is what a
+filter can see. `initiative reconcile` keeps them in step, in both directions.
+
+**A task is nameable, not encouraged.** `type:task` exists so a team that files
+them as issues is not punished by `validate` — before it, every unlabelled task
+was a permanent finding and the only way to clear it was `type:story`, which put
+one person's breakdown into the story count and the velocity. POLICY.md §2 still
+recommends the checklist.
+
+The rules are in [POLICY.md](POLICY.md#2-the-object-model); the commands are in
+[USER_GUIDE.md](USER_GUIDE.md).
+
 ## The object model
 
 Where each piece of state lives, and why some of it is on the project rather
@@ -29,13 +62,16 @@ classDiagram
         +title, body
         +state  OPEN | CLOSED
         +stateReason  COMPLETED | NOT_PLANNED
-        +labels[]  type:story, key:ZMBNI
+        +labels[]  type:initiative|epic|story|task|bug
+        +labels[]  key:ZMBNI, sprint:YYYY-MM-DD, initiative:slug
         +assignees[]  many, point-in-time
         +author  no separate reporter
     }
     class SubIssueEdge {
         parent to child
+        +initiative to epic
         +epic to story
+        +story to task  discouraged
     }
     class TimelineEvent {
         +actor  WHO
@@ -69,7 +105,7 @@ classDiagram
 
     Repository "1" --> "*" Issue
     Issue "1" --> "*" SubIssueEdge
-    SubIssueEdge "*" --> "1" Issue : epic holds stories
+    SubIssueEdge "*" --> "1" Issue : a level holds the one below
     Issue "1" --> "*" TimelineEvent : HISTORY lives here
     PullRequest "*" --> "*" Issue : closes
     Repository "1" --> "*" PullRequest
