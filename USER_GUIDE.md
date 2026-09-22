@@ -1410,7 +1410,7 @@ So the manual command is for a change made **outside** the tool — a web-UI edi
 another script — or as a scheduled sweep beside `sync`. It invents nothing and is
 safe to automate.
 
-### Clearing a stray label: `sprint unstamp`
+### Clearing a stray sprint: `sprint unstamp`
 
 An epic or an initiative spans sprints, so it is given no `Sprint` value and no
 `sprint:` label. Labels written before that rule existed are strays, and they
@@ -1428,8 +1428,16 @@ gh agile sprint unstamp              # clear it
   cleared 5 label(s) across 10 epic(s)/initiative(s)
 ```
 
-**This is the only place the tool removes a `sprint:` label**, and the exception
-is deliberate. A label asserts *the sprint this work was worked in*; stamped at
+**It clears two things: the label, and the `Sprint` field itself.** A container
+assigned a sprint before the rule existed keeps that value indefinitely --
+`sprint reconcile` only ever *sets* a field, the automatic heal fills empty
+ones, and the save-and-restore around every iteration write carries it forward.
+Measured: an epic with a stale `Sprint 2` showed on the Roadmap and vanished
+from the Backlog, whose filter is `no:sprint` -- the one board an unstarted epic
+belongs on. `validate` reports that state and points here.
+
+**This is the only place the tool removes a `sprint:` label or clears a field**,
+and the exception is deliberate. A label asserts *the sprint this work was worked in*; stamped at
 close, it records the sprint the issue was closed in — which for a story is the
 same fact, and for an epic spanning four sprints is not.
 

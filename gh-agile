@@ -2086,6 +2086,29 @@ def set_field(login: str, project: int, item_id: str, field_name: str, value) ->
     gh(cmd)
 
 
+def clear_field(login: str, project: int, item_id: str, field_name: str) -> None:
+    """Remove one project field's value from one item.
+
+    The only *unset* in the tool. `set_field` writes and `gh project item-edit`
+    cannot clear -- it has no flag for an absent value -- so this is the
+    `clearProjectV2ItemFieldValue` mutation written out.
+
+    Needed because a value can be wrong to *have*, not merely wrong. An epic
+    assigned a sprint before #115 barred it keeps that assignment for ever
+    otherwise: `reconcile_sprints` only ever sets a field from labels, the
+    automatic heal fills empty ones, and `restore_assignments` carries it
+    across every iteration write.
+    """
+    field = fields_of(login, project).get(field_name)
+    if not field:
+        sys.exit(f"no field named {field_name!r} on project {project}; run `gh agile setup`")
+    graphql(
+        "mutation($p: ID!, $i: ID!, $f: ID!) { clearProjectV2ItemFieldValue(input: "
+        "{projectId: $p, itemId: $i, fieldId: $f}) { projectV2Item { id } } }",
+        p=project_id(login, project), i=item_id, f=field["id"],
+    )
+
+
 #: The headings POLICY.md §4 requires, and what each is for. Used to build a
 #: body, to prompt for one, and to reject one that is missing a section.
 SECTIONS = (
@@ -2731,6 +2754,25 @@ def sprint_assignments(login: str, project: int) -> dict[str, str]:
     return out
 
 
+#: **Why this does not skip containers, though one should never be in a sprint.**
+#:
+#: It would work: dropping them here means the next iteration write clears the
+#: stray value and nothing puts it back, and #170 was filed partly because this
+#: pair is what preserves it. It is still the wrong place.
+#:
+#: A save-and-restore has one job -- put back exactly what was there -- and it
+#: runs either side of the most destructive operation in this tool, with no
+#: transaction and a budget check in between. A pair that silently restores less
+#: than it saved cannot be reasoned about when a run dies half way, which is the
+#: failure `require_graphql_budget` exists for.
+#:
+#: And it would repair by side effect: a person running `sprint create` would
+#: find an epic's field quietly gone, with nothing having said so. Clearing a
+#: value that should not exist is a repair, so it belongs in the pass named for
+#: repairs -- `sprint unstamp`, which says what it did -- and `validate` points
+#: there. Symmetric here, explicit there.
+
+
 def restore_assignments(login: str, project: int, saved: dict[str, str]) -> int:
     """Re-apply saved sprint assignments by title. Costs one call per item."""
     if not saved:
@@ -3041,10 +3083,27 @@ def unstamp_containers(args) -> int:
             continue
         scanned += 1
         stamps = [lb for lb in labels if lb.startswith(SPRINT_LABEL)]
-        if not stamps:
-            continue
         repo = (content.get("repository") or {}).get("nameWithOwner")
         ident = f"{repo}#{content['number']}"
+        # **The field, not only the label -- #123 cleared half of this.** A
+        # container assigned a sprint before #115 barred it keeps that value
+        # for ever: `reconcile_sprints` only ever *sets* a field, the automatic
+        # heal fills empty ones, and `restore_assignments` carries it across
+        # every iteration write. Nothing removed it, and `validate` was
+        # deliberately silent about a container's sprint state.
+        #
+        # Measured: `REPORTS-1` sat on the Roadmap and vanished from the
+        # Backlog, whose filter is `no:sprint` -- an epic invisible on the one
+        # board an unstarted epic belongs to.
+        if field_values(item).get("Sprint"):
+            if args.dry_run:
+                print(f"  would clear {ident}  Sprint field  ({level})")
+            else:
+                clear_field(args.owner, args.project, item["id"], "Sprint")
+                print(f"  cleared {ident}  Sprint field  ({level})")
+            cleared += 1
+        if not stamps:
+            continue
         for label in sorted(stamps):
             if args.dry_run:
                 print(f"  would clear {ident}  -{label}  ({level})")
@@ -3059,11 +3118,11 @@ def unstamp_containers(args) -> int:
             cleared += 1
 
     verb = "would clear" if args.dry_run else "cleared"
-    print(f"  {verb} {cleared} label(s) across {scanned} epic(s)/initiative(s)")
+    print(f"  {verb} {cleared} stray value(s) across {scanned} epic(s)/initiative(s)")
     if not cleared:
         # Said plainly: a repair pass that prints nothing is indistinguishable
         # from one that failed to look.
-        print("  no stray labels; every epic and initiative is already clean")
+        print("  nothing stray; every epic and initiative is already clean")
     return 0
 
 
@@ -6308,6 +6367,17 @@ def cmd_validate(args) -> int:
         # tracked by the board at all. Demanding a sprint of either reports the
         # tool's own correct behaviour as a failure.
         container = sprint_exempt(labels)
+        # **The mirror of that exemption, and the half #121 did not have.** A
+        # container is not asked for a sprint -- demanding one is the
+        # check-that-fails-forever failure. But a container that *has* one is
+        # a state that should not exist: it was assigned before #115 barred
+        # it, nothing since removes it, and the `no:sprint` boards it belongs
+        # on silently exclude it. Measured on `REPORTS-1`, found by a person
+        # asking why an epic was on the roadmap and not the backlog.
+        if container_level(labels) and row.get("field_sprint"):
+            problems["epic or initiative is in a sprint -- "
+                     "run `gh agile sprint unstamp`"].append(
+                f"{ident}: {row['field_sprint']}")
         if (same_status(status, CYCLE_START) and not row.get("field_sprint")
                 and not container):
             problems[f"{CYCLE_START} but in no sprint"].append(ident)
