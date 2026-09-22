@@ -289,9 +289,21 @@ from epic created to epic closed — with a section on driving it from an agent.
 The profile lives in **`.github/agile.json`**, visible and checked in:
 
 ```json
-{ "keys": { "owner/repo": "ZMBNI" },
-  "project": { "name": "Zamboni Iceberg table maintainer", "key": "ZMBNI" } }
+{
+  "keys": [
+    { "key": "ZMBNI", "name": "Zamboni Iceberg table maintainer", "repo": "owner/Zamboni" }
+  ],
+  "project": { "number": 5, "owner": "owner", "name": "Zamboni Iceberg table maintainer", "key": "ZMBNI" }
+}
 ```
+
+`keys` is a **list, and the order matters**: the first entry for a repository is
+the default when `--key` is omitted. `project.owner` is part of the project's
+identity rather than a convenience — a number alone means "project 5 belonging to
+whoever typed this", which is invisibly correct for the person who created it and
+resolves to nothing, or to somebody else's project 5, for everyone else.
+
+Every property is in [USER_GUIDE.md](USER_GUIDE.md#1-the-project-profile).
 
 A repository that is not the main one carries only `{"config_from": "owner/main-repo"}`.
 

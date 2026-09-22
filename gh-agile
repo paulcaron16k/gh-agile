@@ -1113,8 +1113,32 @@ def key_problem(key: str) -> str | None:
 
 
 def profile_keys(config: dict) -> list[dict]:
-    """The `keys` list. Ordered, because the order is the default."""
-    return config.get("keys") or []
+    """The `keys` list. Ordered, because the order is the default.
+
+    **A mapping is refused rather than crashed on.** `keys` was documented in the
+    README as `{"owner/repo": "KEY"}` long after it became a list, and the
+    documented shape raised `AttributeError: 'str' object has no attribute 'get'`
+    from whichever consumer reached it first -- iterating a dict yields its keys
+    as strings. A reader copying the first example in *Getting started* got a
+    traceback and no idea which of the two was wrong.
+
+    So the shape is checked once, here, where every read goes through: a mapping
+    is named for what it is and told what to write instead. Refusing rather than
+    quietly accepting both, because a second shape nothing documents is how the
+    first one survived unnoticed -- and because the order is load-bearing, which
+    a mapping cannot express at all.
+    """
+    keys = config.get("keys")
+    if isinstance(keys, dict):
+        sys.exit(
+            "`keys` in the profile is an object, and it must be a list.\n"
+            "  The order is the default: the first entry for a repository is used "
+            "when --key is omitted,\n  which an object cannot express.\n\n"
+            '    "keys": [\n'
+            '      { "key": "ZMBNI", "name": "Zamboni", "repo": "owner/Zamboni" }\n'
+            "    ]\n"
+        )
+    return keys or []
 
 
 def keys_for_repo(config: dict, repo: str) -> list[str]:
