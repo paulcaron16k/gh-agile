@@ -34,7 +34,26 @@ language a person reads before creating an issue.
 | **Initiative** | An issue labelled `type:initiative`, holding epics as **sub-issues**, and carrying `initiative:<slug>` | **Optional.** The plan and WBS for a large feature — the set of epics it requires, with somewhere to write down why. Jira charges for the levels above Epic; sub-issues nest here, and across repositories. An epic under no initiative is ordinary |
 | **Epic** | An issue labelled `type:epic`, holding stories as **sub-issues** | Sub-issues give a real parent/child edge the API can traverse and roll up. Issue *types* would be better but are an organization-only feature |
 | **Story** | An issue labelled `type:story`, normally a sub-issue of exactly one epic | One parent, normally. `--epic none` files a story that stands alone, and `validate` **notes** it rather than failing — a finding that is somebody's deliberate choice cannot be fatal without the validator arguing with the person using it. Saying `none` is required, though: an orphan story is far more often an accident than an intention, and refusing one-off work outright pushes it outside the tool, where it is neither tracked nor exported |
-| **Task** | A markdown checklist inside the story, **or** an issue labelled `type:task` as a sub-issue of one | The checklist is still the default, and still the recommendation: tasks below story level are working notes, and promoting them to issues buys ceremony and costs signal. But GitHub's sub-issues make it two clicks, teams do it, and the tool used to punish them — every unlabelled task was a permanent `no type: label` finding, and the only way to clear it was `type:story`, which put private breakdown into the story count and the velocity. So a task is nameable and **changes no number**: no points, no `sprint:` label, no board row by default, counted by nothing, and not exported |
+| **Task** | A **markdown checklist** in a `## Tasks` section of the story — **or** an issue labelled `type:task` as a sub-issue of one | The checklist is the recommendation, and the original reason stands: tasks below story level are working notes, and promoting them to issues buys ceremony and costs signal. **The tool is deliberately blind to the section.** GitHub already renders `- [ ]` natively with its own count, so there is nothing to add and something to lose: a body is a whole-value replace with no additive primitive, so two people ticking boxes would overwrite each other. It reads nothing, writes nothing, shows nothing on a board and exports nothing — it only guarantees not to damage the section, which `move --evidence` and every other body write are tested against. The issue form exists so `validate` does not punish a team that files them anyway, and it too **changes no number**: no points, no sprint label, no board row, not exported. See AGILE-132, and AGILE-164 for this row's reasoning |
+
+**The task-list section, spelled out**, because a convention two teams write
+differently is one no tool and no reader can rely on:
+
+```markdown
+## Tasks
+- [ ] not done
+- [x] done
+```
+
+The heading is exactly `## Tasks`. The boxes are GitHub's own task-list syntax,
+which renders as checkboxes and carries its own count in the web UI. Order is
+the author's business, nesting is allowed, and prose between the boxes is
+allowed — nothing here parses it.
+
+**An absent section is the normal case.** Most stories need no breakdown, and
+`story` does not create the heading: an empty `## Tasks` on every issue is the
+ceremony this row exists to avoid. Add it when you have something to put in it.
+
 | **Bug** | An issue labelled `type:bug`; may or may not have an epic | Bugs arrive without asking whether they fit a plan |
 | **Sprint** | Project **iteration** field named `Sprint`, named `0004 W38-2026` — number, ISO week, year. **Never renamed**: the iteration configuration has no per-sprint id, so any write replaces it wholesale and clears every item's `Sprint` value board-wide. A rename buys a cosmetic change and costs a reconstruction | The one field GitHub genuinely provides for this. `gh project field-create` cannot make one — its `--data-type` accepts only TEXT, SINGLE_SELECT, DATE and NUMBER — so `setup` creates it through the GraphQL mutation |
 | **Status** | Project single-select: `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` | Deliberately five. Every extra column is a state someone must decide between. GitHub ships three; `setup` adds the other two, because `blocked_hours` and `review_hours` are computed from time spent in them |
