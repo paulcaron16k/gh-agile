@@ -1209,6 +1209,33 @@ So the manual command is for a change made **outside** the tool — a web-UI edi
 another script — or as a scheduled sweep beside `sync`. It invents nothing and is
 safe to automate.
 
+### Clearing a stray label: `sprint unstamp`
+
+An epic or an initiative spans sprints, so it is given no `Sprint` value and no
+`sprint:` label. Labels written before that rule existed are strays, and they
+are **not inert**: `sprint reconcile` sets the field from the labels, and the
+automatic heal runs it after every iteration write — so one stray label puts its
+epic into a sprint with nobody aiming a command at it.
+
+```bash
+gh agile sprint unstamp --dry-run    # what would be cleared
+gh agile sprint unstamp              # clear it
+```
+
+```
+  cleared paulcaron16k/gh-agile#9  -sprint:2026-08-31  (epic)
+  cleared 5 label(s) across 10 epic(s)/initiative(s)
+```
+
+**This is the only place the tool removes a `sprint:` label**, and the exception
+is deliberate. A label asserts *the sprint this work was worked in*; stamped at
+close, it records the sprint the issue was closed in — which for a story is the
+same fact, and for an epic spanning four sprints is not.
+
+Narrow on purpose: only `sprint:` labels, only on epics and initiatives. A story
+is never touched, whatever else is true of it. `reconcile` names the count it
+skipped and points here when it finds any.
+
 ### One issue at a time: `fix --id`
 
 `sprint reconcile` is board-wide, which is right for a sweep and wrong when you
