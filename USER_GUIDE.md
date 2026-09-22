@@ -344,20 +344,26 @@ gh agile board show Backlog --format jsonl
 gh agile board show Backlog --out-dir exports/
 ```
 ```
-Engineering: all work
-kanban · paulcaron16k/projects/4 · 8 of 23 items
-filter: -status:Done
+Backlog
+backlog · paulcaron16k/projects/4 · 4 of 80 items
+filter: no:sprint -status:Done
+pts: story points, or closed/total sub-issues for epics and initiatives
 
-  key       type   pts  sprint          title
-  ────────  ─────  ───  ──────────────  ──────────────────────────────────────
-Todo (8)
-  AGILE-9   epic     —  —               Read side: export and validate
-  AGILE-10  epic     —  —               Write side: setup, epic, story
-  AGILE-24  story    8  AGILE Sprint 4  Synthesise custom-field history from sn…
-  AGILE-37  story    8  —               Export pull requests, reviews and comme…
-
-empty: In Progress · Blocked · In Review
+  key         type   pts  sprint  title
+  ──────────  ─────  ───  ──────  ──────────────────────────────────────────────
+  AGILE-157   epic   3/5  —       Onboarding, and docs that describe the tool
+                                  as it is
+   AGILE-162  story    5  —       gh agile init: install to a working board,
+                                  in one path
+  AGILE-141   bug      —  —       Report which project workflows are off, and
+                                  what each one costs
+  AGILE-164   story    3  —       A formatted task-list section in the issue
 ```
+
+Three things in that output are derived rather than stored, and each has its own
+section below: the **`3/5`** in the `pts` column, the **indentation** putting a
+story under its epic, and the **`pts:` line** explaining a column that now holds
+two kinds of value.
 
 **Four ways to say which board.** Its number, its exact name, an unambiguous
 prefix, or an unambiguous substring — tried in that order, so a name that is
@@ -386,9 +392,15 @@ at. `validate` reports the same state as `In Progress but unassigned` — this i
 the fast path to the same finding, on the board a team reads aloud.
 
 **An unassigned `Todo` is not flagged.** That is the ordinary state of a backlog;
-marking it would mark nearly every row and teach people to ignore the column. An
-epic or initiative *is* flagged when it is in progress with nobody on it — it is
-exempt from the sprint, not from having somebody driving it.
+marking it would mark nearly every row and teach people to ignore the column.
+
+**Nor is an epic or an initiative, at any status.** `nobody` means *this should
+have someone*, and a container should not: it holds stories worked by several
+people, so there is no single answer to "who has this". Filling it from whoever
+started the first story is a guess that is only right on a team of one, so
+`move` never claims one implicitly and `validate` never demands one. Setting an
+assignee on an epic is still allowed and still meaningful — `--add-assignee`
+does it at any level — it is simply never expected.
 
 **And the column appears only when it has something to say.** A board where
 nobody holds anything would spend twelve characters on a column of `—`, taken
@@ -397,6 +409,106 @@ from the title. One assignee, or one unassigned item in progress, brings it back
 `who` drops a mail domain if the login looks like an address — it is the same for
 everyone on the board — and is capped at ten characters. Two people sharing a
 ten-character prefix is not a team anybody has.
+
+**Progress where the estimate would be: `closed/total`.** An epic has never had
+story points, so its `pts` cell was an em dash — dead space on exactly the rows
+that most need a progress figure, which is why a half-finished epic read as
+untouched. It now carries its children:
+
+```
+  AGILE-157   epic   3/5  —       Onboarding, and docs that describe the tool
+```
+
+Three of five closed. The column is headed `pts` and holds two kinds of value,
+so a board carrying any of them prints a legend line saying so — once, in the
+header, and only where it is true.
+
+**It says `closed`, not `done`, and the distinction is load-bearing.** GitHub's
+own field is named `completed`, and it counts children closed as `NOT_PLANNED`
+as well as finished ones. Abandoned is not completed, so nothing here calls that
+number done.
+
+**Per level, never transitive.** An initiative tallies its *epics*; an epic
+tallies its *stories*. Closing one story takes its epic to `1/1` while the
+initiative above stays `0/1`, and that is correct rather than a lag. A story's
+own task list is not tallied at all.
+
+**A list is ordered as a hierarchy, one space per level.** On a layout with no
+grouping — `Backlog`, `View 1`, and anything you read with
+`--filter "initiative:<slug>"` — each parent is followed by its children,
+depth-first, siblings by issue number:
+
+```
+  AGILE-157   epic   3/5  —       Onboarding, and docs that describe the tool
+   AGILE-162  story    5  —       gh agile init: install to a working board
+  AGILE-141   bug      —  —       Report which project workflows are off
+```
+
+The *ordering* is the point; the indent only makes it visible, since the `type`
+column already says what level a row is but cannot say **whose child** it is.
+
+Work belonging to no tree is listed after the trees rather than interleaved by
+number — a standalone bug reads as the remainder, which is what it is. And a
+child whose parent the filter excluded becomes a root rather than being indented
+under nothing: **the tree shown is the tree present**, not the tree that exists.
+
+**A status-grouped board is left alone.** A scrum or kanban board separates a
+parent from its children by construction — an epic sits in `In Progress` while
+its stories are spread over `Todo`, `In Review` and `Done` — so indenting there
+would put children under a parent that is not in the section.
+
+**The scrum board says what the sprint is advancing.** A container spans sprints
+and is deliberately in none, so it can never match `sprint:@current` and never
+appears among the rows. The band above the columns is rendered instead:
+
+```
+Team: AGILE
+scrum · paulcaron16k/projects/4 · 18 of 80 items
+filter: sprint:@current label:key:AGILE
+
+advancing (derived from the work below, not selected by the filter):
+  AGILE-119    initiative  2/2  Initiatives and epics, visible where the work…
+  AGILE-157    epic        3/5  Onboarding, and docs that describe the tool…
+
+  key        type   pts  sprint    who           title
+```
+
+Membership is **derived from the sprint's own contents** — the parents of the
+items the filter selected, walked upward — so it cannot go stale and needs no
+epic status maintained to be right. An epic with nothing in this sprint does not
+appear.
+
+It is labelled as derived because it breaks the rule the rest of the board
+keeps: a board here is reconstructed from its filter, and an unknown filter term
+is refused rather than ignored, precisely so a board cannot quietly show the
+wrong set. This band is the deliberate exception, so it is kept out of the table
+and counted by nothing — the item counts, the `empty:` line and the exit status
+are what they would be without it.
+
+**The roadmap is a WBS report, ordered by when work began.** Its sections are
+not the `Sprint` field — a container never has one — but the earliest
+`sprint:` label anywhere beneath each item:
+
+```
+Roadmap
+roadmap · paulcaron16k/projects/4 · 11 of 80 items
+filter: label:type:epic
+sections: when the work under each item began, from the earliest sprint: label beneath it
+
+AGILE Sprint 4 · from 2026-08-03 (4)
+Sprint 2 · from 2026-08-31 (3)
+Sprint 3 · from 2026-09-14 (3)
+(not started) (1)
+```
+
+Normally that is the planned order. Sometimes it is not, because plans get
+rearranged as work arrives, and an epic planned third but started first belongs
+first.
+
+**The headings carry their dates for a reason.** Sections sort by date, not by
+name, and a sprint is never renamed — so `AGILE Sprint 4` above is genuinely the
+*oldest* sprint on this board, two weeks before `Sprint 1`, and its name records
+only what it was called when it ran. Without the date the order looks wrong.
 
 **A long title wraps rather than losing its tail.** The board renders to the
 width of your window, so titles usually fit on one line; where one does not, the
@@ -525,9 +637,33 @@ GitHub:
 {"kind":"board","name":"Backlog","board_type":"backlog","layout":"TABLE_LAYOUT",
  "filter":"no:sprint -status:Done","sections":[""],"item_count":7,
  "board_item_count":23,"generated_at":"2026-08-24T15:37:53Z", ...}
-{"kind":"item","section":"","key":"AGILE-9","type":"epic","status":"Todo",
- "sprint":null,"story_points":null,"title":"Read side: export and validate", ...}
+{"kind":"item","section":"","key":"AGILE-157","type":"epic","status":"Todo",
+ "sprint":null,"story_points":null,"depth":0,"parent_key":"AGILE-119",
+ "parent_type":"initiative","sub_issues_total":5,"sub_issues_done":3, ...}
+{"kind":"item","section":"","key":"AGILE-162","type":"story","depth":1,
+ "parent_key":"AGILE-157","parent_type":"epic", ...}
 ```
+
+**The structure survives the rendering.** `depth` is how far the row was
+indented, so a reader rebuilds the tree without counting spaces, and
+`parent_key` names the parent unambiguously — a bare number cannot, because a
+board may span repositories and two `#12` is ordinary. `sub_issues_total` and
+`sub_issues_done` are the numbers behind `3/5`, so nothing has to parse the
+rendered string.
+
+`depth` is a property of *this rendering*, not of the issue: a grouped board
+indents nothing and every row reads `0`, which is true of the output and says
+nothing about the hierarchy.
+
+A scrum board's context band arrives as its own record kind, so a container the
+filter excluded is never mistaken for an item it selected:
+
+```jsonl
+{"kind":"container","key":"AGILE-119","type":"initiative","progress":"2/2", ...}
+```
+
+A roadmap's rows carry `started_in` and `started_on` — the sprint each item's
+work began in, and the date that section sorts on.
 
 **Story points keep the type GitHub gave them — a float.** `Story Points` is a
 `NUMBER` field, so a whole estimate arrives as `8.0` and that is what the JSONL
