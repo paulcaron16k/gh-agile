@@ -47,6 +47,9 @@ def run(monkeypatch, tool, tmp_path, capsys):
         monkeypatch.setattr(tool, "project_workflows",
                             lambda login, number:
                             calls["workflows"].append(number) or state)
+        # #141 widened the closing report into a verdict table, which states
+        # the board's pull-request count as the evidence behind two of them.
+        monkeypatch.setattr(tool, "pull_request_items", lambda *a: 0)
         monkeypatch.setattr(tool, "read_config",
                             lambda *a, **k: overrides.get("_config") or {})
         args = args_for(tool, tmp_path, **overrides)
@@ -176,31 +179,33 @@ class TestItIsIdempotent:
 class TestItEndsByNamingWhatItCannotDo:
     def test_the_manual_steps_are_printed(self, tool, run):
         _code, _calls, out, _args = run(project=7)
-        assert "the API cannot do" in out
+        assert "cannot write them" in out
 
     def test_each_unfinished_step_says_what_it_costs(self, tool, run):
         """A checklist without consequences is a checklist people skip."""
         _code, _calls, out, _args = run(project=7)
-        assert "without it:" in out
+        assert "an item arriving by any other route has no Status" in out
 
     def test_it_reads_back_which_are_already_on(self, tool, run):
         """`workflows(first: 20)` returns `enabled` even though nothing can set
         it, so nobody should be told to go and check."""
         _code, _calls, out, _args = run(project=7)
-        assert "[on] Item closed" in out
-        assert "[ ]  Item added to project" in out
+        assert "[on]  enable    Item closed" in out
+        assert "[off] enable    Item added to project" in out
 
-    def test_a_completed_step_does_not_repeat_its_cost(self, tool, run):
+    def test_a_satisfied_step_does_not_repeat_its_cost(self, tool, run):
+        """A `never` or a pull-request one still explains itself even when
+        correct -- see #141 -- but a satisfied `enable` is simply working."""
         _code, _calls, out, _args = run(project=7)
-        after = out.split("[on] Item closed")[1].split("[")[0]
-        assert "without it:" not in after
+        after = out.split("[on]  enable    Item closed")[1].split("[")[0]
+        assert "Status does not follow a close" not in after
 
     def test_an_unreadable_workflow_list_is_not_fatal(self, tool, run):
         """A checklist is more useful than an error at the end of a successful
         setup."""
         code, _calls, out, _args = run(project=7, _workflows={})
         assert code == 0
-        assert "could not read which are already enabled" in out
+        assert "could not read which are enabled" in out
 
     def test_it_points_at_validate(self, tool, run):
         _code, _calls, out, _args = run(project=7)
@@ -228,5 +233,8 @@ class TestTheWorkflowRead:
                             lambda q, **v: (_ for _ in ()).throw(SystemExit("no")))
         assert tool.project_workflows("o", 4) == {}
 
-    def test_every_manual_step_has_a_cost(self, tool):
-        assert all(cost and len(cost) > 20 for _name, cost in tool.MANUAL_WORKFLOWS)
+    def test_every_workflow_has_a_verdict_and_a_reason(self, tool):
+        """#141 widened three entries into a verdict for all six."""
+        assert len(tool.WORKFLOW_ADVICE) == 6
+        assert all(why and len(why) > 20
+                   for _verdict, why in tool.WORKFLOW_ADVICE.values())

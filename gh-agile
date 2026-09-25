@@ -1584,25 +1584,130 @@ STARTER_BOARDS = [
     {"name": "Roadmap", "type": "roadmap"},
 ]
 
-#: The project automations the API can read and cannot write, and what each
-#: one's absence costs. Measured on live projects; see USER_GUIDE.md.
+#: A verdict for **every** built-in workflow, because three of six is not advice.
 #:
-#: **`init` ends here rather than pretending to finish.** The schema has
-#: `deleteProjectV2Workflow` and nothing that creates, enables or configures
-#: one, so these are web-UI toggles and always will be. A wizard that stopped
-#: without saying so would leave a board that looks set up and silently loses
-#: statuses.
-MANUAL_WORKFLOWS = [
-    ("Item added to project",
-     "an item arriving by any other route has no Status, so it is in no column "
-     "of any board"),
-    ("Item closed",
-     "Status does not follow a close -- an issue closed by a pull request's "
-     "`Closes #n` keeps whatever Status it had, so finished work sits in "
-     "In Progress looking live"),
-    ("Auto-add sub-issues to project",
-     "every story created under a boarded epic would need a `sync`"),
-]
+#: `init` used to name the three worth turning on and say nothing about the rest.
+#: Silence reads as an oversight, and the obvious repair -- turn on what is off
+#: -- is pointless for two of these and actively harmful for one. So each is
+#: named with a verdict and the reason for it:
+#:
+#:   enable       worth having on; the reason is what its absence costs
+#:   never        worth having off, and the reason is measured
+#:   issues-only  acts on pull-request items, which this board may hold none of
+#:
+#: One table, read by `init` at configuration time and `validate` when somebody
+#: is chasing a symptom. Two lists giving different advice about one setting is
+#: the drift #157 spent five stories on.
+WORKFLOW_ADVICE = {
+    "Item closed": (
+        "enable",
+        "Status does not follow a close. An issue closed by a pull request's "
+        "`Closes #n` keeps whatever Status it had, so finished work sits in "
+        "In Progress looking live -- #123 did it for twenty-two hours and #138 "
+        "repeated it on merge",
+    ),
+    "Item added to project": (
+        "enable",
+        "an item arriving by any other route has no Status, so it is in no "
+        "column of any board",
+    ),
+    "Auto-add sub-issues to project": (
+        "enable",
+        "every story created under a boarded epic would need a `sync`",
+    ),
+    "Auto-close issue": (
+        "never",
+        "it races this tool's own close and wins: on the sandbox it closed the "
+        "issue as COMPLETED before `move --not-planned` got there, and a "
+        "close reason cannot be changed afterwards (#96)",
+    ),
+    "Pull request merged": (
+        "issues-only",
+        "it acts on pull-request items, which a board of issues does not hold",
+    ),
+    "Pull request linked to issue": (
+        "issues-only",
+        "it acts on pull-request items, which a board of issues does not hold",
+    ),
+}
+
+
+def pull_request_items(login: str, project: int) -> int:
+    """How many items on the board are pull requests, not issues.
+
+    **Measured rather than assumed**, because the assumption expires. The
+    pull-request workflows are pointless on a board of issues and would be
+    useful on one that holds pull requests, so the advice has to be able to stop
+    being true -- and a count in the output is how a reader sees that it was
+    checked. Read through `board_items`, which is the cheap selection and cached
+    per run.
+    """
+    return sum(1 for item in board_items(login, project)
+               if (item.get("content") or {}).get("type") == "PullRequest")
+
+
+def workflow_findings(state: dict[str, bool], pull_requests: int) -> list[str]:
+    """Only what diverges: off and should be on, or on and should not be.
+
+    **`validate` runs often, so it reports the actionable subset**; the whole
+    table with every verdict belongs where somebody is configuring the project,
+    which is `init`. Naming all six on every validate run would be six lines a
+    reader learns to skip, and a check people skip is the failure this repo
+    keeps finding.
+
+    A workflow whose state could not be read is skipped rather than guessed at.
+    """
+    out = []
+    for name, (verdict, why) in WORKFLOW_ADVICE.items():
+        enabled = state.get(name)
+        if enabled is None:
+            continue
+        if verdict == "enable" and not enabled:
+            out.append(f"{name} is off -- {why}")
+        elif verdict == "never" and enabled:
+            out.append(f"{name} is ON and should not be -- {why}")
+        elif verdict == "issues-only" and enabled and not pull_requests:
+            out.append(f"{name} is on, and this board holds no pull-request "
+                       f"items -- {why}")
+    return out
+
+
+def automation_notes(login: str, project: int) -> list[str]:
+    """The advice `validate` prints, behind one name.
+
+    One function rather than two calls at the call site, so the offline suite
+    has a single seam to neutralise: `tests/conftest.py` stubs this by default,
+    because `validate` is driven by a hundred tests that are about issues and
+    have no business reaching the API for a project setting. The pieces --
+    `project_workflows`, `pull_request_items`, `workflow_findings` -- are tested
+    directly, and one test drives this wiring with those stubbed.
+    """
+    return workflow_findings(project_workflows(login, project),
+                             pull_request_items(login, project))
+
+
+def render_workflow_table(state: dict[str, bool], pull_requests: int) -> list[str]:
+    """Every workflow with its verdict. For the moment of configuring a project."""
+    verdict_mark = {"enable": "enable", "never": "never", "issues-only": "n/a here"}
+    out = []
+    for name, (verdict, why) in WORKFLOW_ADVICE.items():
+        enabled = state.get(name)
+        mark = "[on] " if enabled else "[off]" if enabled is not None else "[?]  "
+        out.append(f"    {mark} {verdict_mark[verdict]:<8}  {name}")
+        # **The reason is printed even when the state is already right**, for
+        # everything except an `enable` that is on -- which needs no
+        # explanation, it is working. `never` and `issues-only` always carry
+        # theirs, because both are *off* on a correct board and a reader
+        # scanning a list of things that are off would otherwise turn them on.
+        # That is the whole failure this table exists to prevent: `Auto-close
+        # issue` looks exactly like a missing setting and is the one that cost
+        # `--not-planned` its reason.
+        if not (verdict == "enable" and enabled):
+            out.append(f"             {why}")
+    out.append(f"\n    Checked: this board holds {pull_requests} pull-request "
+               f"item(s), which is why the last two carry no recommendation.")
+    return out
+
 
 WORKFLOWS_QUERY = """
 query($login: String!, $number: Int!) {
@@ -1635,19 +1740,22 @@ def project_workflows(login: str, number: int) -> dict[str, bool]:
 
 
 def report_manual_steps(login: str, number: int) -> None:
-    """What is left, in order, with what each omission costs."""
+    """Every workflow, its verdict and its state -- a rendering of one table.
+
+    **The whole six belong here**, at the moment somebody is configuring the
+    project and looking at that page. `validate` reports only what diverges,
+    because it runs often and six lines every time is six lines a reader learns
+    to skip.
+    """
     state = project_workflows(login, number)
-    print("\n  Two things the API cannot do, so they are yours in the web UI:")
+    print("\n  Project automation. The API can read these and cannot write them, "
+          "so they are yours:")
     print(f"    https://github.com/users/{login}/projects/{number}/workflows\n")
-    for name, cost in MANUAL_WORKFLOWS:
-        enabled = state.get(name)
-        mark = "[on] " if enabled else "[ ]  " if enabled is not None else "[?]  "
-        print(f"    {mark}{name}")
-        if not enabled:
-            print(f"           without it: {cost}")
+    for line in render_workflow_table(state, pull_request_items(login, number)):
+        print(line)
     if not state:
-        print("    (could not read which are already enabled; the list above is "
-              "the whole set)")
+        print("    (could not read which are enabled; the verdicts above still "
+              "hold)")
     print("\n  Then: gh agile validate")
 
 
@@ -6451,6 +6559,16 @@ def cmd_validate(args) -> int:
         problems[f"{level} is {'Todo' if parent_status == 'unset' else parent_status} "
                  f"with a child {CYCLE_START}"].append(
             f"{parent_key} ({parent_status}), e.g. {child}")
+
+    # **Advice, not a failure.** The board works; the automation is merely off,
+    # and there is no mutation that could turn it on -- so this can only ever
+    # point at the web UI, which is exactly what #91's non-fatal severity is
+    # for. It is reported here rather than only in `init` because `init` runs
+    # once at setup and this is what somebody chasing `closed but status is not
+    # Done` is already running.
+    if only is None:
+        for line in automation_notes(args.owner, args.project):
+            notes["project automation that needs a decision"].append(line)
 
     # Sprint overlap is a property of the iteration series, not of any issue, so
     # Board-wide, so skipped under `--id` for the same reason as the sprint
