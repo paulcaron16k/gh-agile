@@ -3381,8 +3381,29 @@ BOARD_TYPES = {
     },
     "roadmap": {
         "layout": "ROADMAP_LAYOUT",
-        "filter": "label:type:epic",
-        "about": "epics over time",
+        # **A roadmap answers "where are we going", so finished work is off it.**
+        # Every other non-scrum type already drops it -- kanban is `-status:Done`,
+        # backlog is `no:sprint -status:Done` -- and roadmap was the lone
+        # exception. Measured on project #4 before this changed: `label:type:epic`
+        # returned 12 epics and all 12 were complete; adding the exclusions left
+        # 1. Sections ascend by start, so those 12 sat *above* the one thing
+        # actually ahead and a reader scrolled backwards to reach the future.
+        #
+        # The argument for keeping history on a roadmap -- that seeing Q1's epic
+        # land in Q2 is what makes next quarter's plan readable -- needs a
+        # baseline, and there is none: `LAYOUT_SECTIONS` groups by when work
+        # *began*, derived from the descendants' `sprint:` labels, and nothing
+        # records what was planned. A completed epic here shows that a thing
+        # happened, not that it slipped, and `export` answers that better. When
+        # `#175` adds a target date the baseline exists and this is worth
+        # revisiting.
+        #
+        # **Both terms, not just the status one.** A closed-as-not-planned epic
+        # need not carry Status `Done` -- that is the state-vs-Status gap `#138`
+        # exists for -- so `-status:Done` alone leaves abandoned work on the
+        # roadmap, which is the one thing more misleading than finished work.
+        "filter": "label:type:epic -status:Done is:open",
+        "about": "epics still ahead, over time",
     },
 }
 
@@ -4806,15 +4827,35 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
     return "\n".join(out).rstrip() + "\n"
 
 
+#: Layouts that identify a board type on their own. `ROADMAP_LAYOUT` is used by
+#: exactly one type, so a view drawn as a roadmap *is* a roadmap whatever its
+#: filter says. `BOARD_LAYOUT` is shared by scrum and kanban and `TABLE_LAYOUT` by
+#: backlog and custom, so neither decides anything and neither is listed.
+LAYOUT_IMPLIES = {"ROADMAP_LAYOUT": "roadmap"}
+
+
 def board_kind(view: dict, config: dict) -> str:
-    """A view's board type: the profile first, then the most specific filter match."""
+    """A view's board type: the profile, then the filter, then the layout.
+
+    **The filter match is the fragile one, and it has to be.** It asks whether the
+    type's base filter appears in the view's, which holds while a board is in step
+    with this tool and fails the moment the base filter here changes -- a roadmap
+    created before `#174` carries `label:type:epic` and no longer contains the
+    spec, so it would report as `custom` until someone re-ran `setup`. Reporting a
+    roadmap as custom is a small wrong answer, but it is the kind that makes a
+    reader distrust the column, and the layout already knows.
+
+    So the layout is consulted last, for the types it can identify alone. It is
+    also what the web UI actually renders, which is the same reason
+    `LAYOUT_SECTIONS` groups on it rather than on the profile's declared type.
+    """
     declared = {b["name"]: b["type"] for b in (config.get("boards") or [])}
     by_specificity = sorted(BOARD_TYPES.items(), key=lambda kv: len(kv[1]["filter"]),
                             reverse=True)
     return declared.get(view["name"]) or next(
         (k for k, spec in by_specificity
          if spec["filter"] and spec["filter"] in (view.get("filter") or "")),
-        "custom",
+        LAYOUT_IMPLIES.get(view.get("layout"), "custom"),
     )
 
 

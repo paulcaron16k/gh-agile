@@ -556,15 +556,36 @@ not the `Sprint` field — a container never has one — but the earliest
 
 ```
 Roadmap
-roadmap · paulcaron16k/projects/4 · 11 of 80 items
-filter: label:type:epic
+roadmap · paulcaron16k/projects/4 · 2 of 85 items
+filter: label:type:epic -status:Done is:open
 sections: when the work under each item began, from the earliest sprint: label beneath it
 
-AGILE Sprint 4 · from 2026-08-03 (4)
-Sprint 2 · from 2026-08-31 (3)
-Sprint 3 · from 2026-09-14 (3)
+Sprint 3 · from 2026-09-14 (1)
 (not started) (1)
 ```
+
+**It carries what is ahead, not what is done.** A roadmap answers *where are we
+going*, so the base filter drops finished work — the same exclusion kanban and
+backlog already make. Without it this board showed twelve epics of which twelve
+were complete, and because the sections ascend by start those twelve printed
+*above* the one thing still in front: you scrolled backwards through history to
+reach the future.
+
+The argument for keeping delivered epics on a roadmap — that watching last
+quarter's promise land a quarter late is what makes this quarter's plan readable
+— needs a baseline to compare against, and there is none here. These sections
+record when work *began*; nothing records when it was *planned*. So a completed
+epic shows that a thing happened, not that it slipped, and `export` answers that
+question with dates. Ask `board show` for the history directly when you want it:
+
+```bash
+gh agile board show Roadmap --filter=status:Done
+```
+
+**Two terms, because closed and `Done` are not the same fact.** An epic closed as
+*not planned* need never have had its Status moved to `Done`, so `-status:Done`
+alone would leave abandoned work on the roadmap — worse than finished work, since
+it is not coming. `is:open` is what removes it.
 
 Normally that is the planned order. Sometimes it is not, because plans get
 rearranged as work arrives, and an epic planned third but started first belongs
@@ -764,7 +785,7 @@ the distinction is the ordinary Agile one:
 | **Scrum** | **Time-boxed.** Shows the work committed to the current iteration, and resets when the sprint does | `sprint:@current` |
 | **Kanban** | **Continuous flow.** No iteration boundary; everything in flight at once, limited by WIP rather than by a sprint | `-status:Done` |
 | **Backlog** | Not yet committed to an iteration | `no:sprint -status:Done` |
-| **Roadmap** | Epics over time | `label:type:epic`, roadmap layout |
+| **Roadmap** | **Epics still ahead, over time.** Finished and abandoned work is off it, because a roadmap answers where the work is going | `label:type:epic -status:Done is:open`, roadmap layout |
 
 Same columns and same items in each; only the scoping differs. This is the
 choice Jira makes at board creation, which is why the command names it the same

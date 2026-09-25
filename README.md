@@ -171,7 +171,7 @@ or kanban.
 |---|---|---|
 | `name` | Identity for convergence — `setup` matches on it | e.g. `Team: AGILE only` |
 | `layout` | How items are drawn | `BOARD_LAYOUT`, `TABLE_LAYOUT`, `ROADMAP_LAYOUT` |
-| `filter` | The type's base filter, ANDed with any extra | scrum `sprint:@current` · kanban `-status:Done` · backlog `no:sprint -status:Done` · roadmap `label:type:epic` |
+| `filter` | The type's base filter, ANDed with any extra | scrum `sprint:@current` · kanban `-status:Done` · backlog `no:sprint -status:Done` · roadmap `label:type:epic -status:Done is:open` |
 
 Live example from this repository's own board, `gh agile board list`:
 
