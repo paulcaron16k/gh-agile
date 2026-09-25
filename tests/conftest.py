@@ -64,6 +64,22 @@ def tool():
     return _load()
 
 
+@pytest.fixture(autouse=True)
+def no_project_automation(monkeypatch, tool):
+    """`validate` asks the API which project workflows are on. Not in here.
+
+    Autouse and silent, because roughly a hundred tests drive `cmd_validate`
+    to assert something about issues, and none of them has any business
+    reaching GitHub for a project setting -- when this arrived unstubbed the
+    suite went from nine seconds to three minutes and a third of it failed.
+
+    The advice itself is tested through its own pieces, which are pure, and one
+    test opts back in by stubbing `project_workflows` and `pull_request_items`
+    and letting the real `automation_notes` run.
+    """
+    monkeypatch.setattr(tool, "automation_notes", lambda *a, **k: [])
+
+
 @pytest.fixture
 def no_network(monkeypatch, tool):
     """Make any accidental shell-out or API call a loud failure.
