@@ -5681,6 +5681,22 @@ def cmd_set(args) -> int:
                 f"into a velocity nobody meant.\n"
                 f"  Estimate the story instead."
             )
+    # **The same rule, at the other door.** `plan` is where a container's dates
+    # are set and it refuses a story; `set` reaches every field on every issue,
+    # so without this the sanctioned path refuses and the generic one writes it
+    # anyway. A date on a story is read by nothing -- the roadmap places a story
+    # from its Sprint, which is what #115 left it.
+    # `and` short-circuits, so the issue is read only for the two field names
+    # this rule is about.
+    if (args.field.casefold() in {name.casefold() for name in DATE_FIELDS}
+            and not container_level(issue_labels(repo, args.issue))):
+        sys.exit(
+            f"{repo}#{args.issue} is not an epic or an initiative, and only "
+            f"those carry a plan.\n"
+            f"  A story's dates are its sprint. Set one with `--field Sprint`.\n"
+            f"  For a container, `gh agile plan` writes both dates in one call "
+            f"and can clear them."
+        )
     value = args.value
     if args.number is not None:
         value = args.number
@@ -5691,6 +5707,90 @@ def cmd_set(args) -> int:
         value = canonical_status(str(value))
     set_field(args.owner, args.project, item["id"], args.field, value)
     print(f"  #{args.issue} {args.field} = {value}")
+    return 0
+
+
+#: `none` on a date flag: take the date off rather than set one. Spelled the way
+#: `story --epic none` already spells the same idea -- an explicit opt-out that
+#: reads as a decision, where a bare `--start` with no argument reads as a
+#: mistake. One sentinel, so a reader who has met one has met both.
+CLEAR_DATE = "none"
+
+
+def planned_dates(start: str | None, target: str | None) -> list[tuple[str, str | None]]:
+    """`(field, value)` for each date **given**, with `None` meaning clear.
+
+    Separated from `cmd_plan` so the parsing is testable without a board, and so
+    every date is parsed before any of them is written: `plan X --start
+    2026-10-01 --target soon` must write nothing at all, not the half of itself
+    that happened to be valid. The same rule `epic` follows for a different
+    reason -- there, a refusal after the issue exists costs an issue number;
+    here it costs a plan that is half one thing and half another.
+
+    Not-given and cleared are different answers and stay tellable apart: absent
+    is "leave it", `none` is "take it off".
+    """
+    out = []
+    for field_name, raw, flag in zip(DATE_FIELDS, (start, target),
+                                     ("--start", "--target"), strict=True):
+        if raw is None:
+            continue
+        out.append((field_name, None if raw.strip().casefold() == CLEAR_DATE
+                    else iso_date(raw, flag)))
+    return out
+
+
+def cmd_plan(args) -> int:
+    """Set or clear the dates on an epic or an initiative that already exists.
+
+    **A team designs and plans before it staffs and schedules.** The dates
+    arrive when somebody is available, when a quarter is agreed, when a
+    dependency lands -- so they are inherently a later edit, and `--start` on
+    `epic` and `initiative`, which only works while the issue is being created,
+    is the wrong shape for them. Raised by the owner, who described that
+    sequence.
+
+    **Its own command rather than a mode on three others**, and the precedent is
+    `move`: starting work is one call because Status, Sprint, the label and the
+    assignee are one decision expressed in four writes. Planning is the same
+    shape -- both dates are one decision, and `set` writes one field per
+    invocation, so re-planning through `set` is two commands and two board
+    writes that can half-fail. `plan` also knows what it is writing to, which
+    `set` by design does not: `set` reaches any field on any issue.
+
+    Clearing is here because a plan that slips is re-planned and a date set in
+    error has to come off. `clear_field` has existed since #170 and nothing
+    reached it from a command line until now.
+    """
+    if args.start is None and args.target is None:
+        sys.exit("plan needs --start, --target, or both. Either takes a "
+                 f"YYYY-MM-DD date in UTC, or {CLEAR_DATE!r} to remove one.")
+    repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
+    # **Every refusal before the first write**, in the order that costs least:
+    # the dates parse with no API call at all, the level is one issue read, and
+    # only then is the board asked for the item.
+    wanted = planned_dates(args.start, args.target)
+    level = container_level(issue_labels(repo, args.issue))
+    if not level:
+        sys.exit(
+            f"{repo}#{args.issue} is not an epic or an initiative, and only those "
+            f"carry a plan.\n"
+            f"  A story's dates are its sprint -- #115 is the rule that a level "
+            f"which spans\n  sprints holds none, which is why these two fields "
+            f"exist for the levels above.\n"
+            f"  Move the story with `gh agile set --issue {args.issue} --field "
+            f"Sprint --value ...`."
+        )
+    item = board_item_for(args.owner, args.project, repo, args.issue)
+    if not item:
+        sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
+    for field_name, value in wanted:
+        if value is None:
+            clear_field(args.owner, args.project, item["id"], field_name)
+            print(f"  #{args.issue} {field_name} cleared")
+        else:
+            set_field(args.owner, args.project, item["id"], field_name, value)
+            print(f"  #{args.issue} {field_name} = {value}")
     return 0
 
 
@@ -7010,6 +7110,14 @@ SET_FIELDS = [
     ("--number", "number", "optional", "numeric value; use instead of --value for a number field"),
 ]
 
+PLAN_FIELDS = [
+    ("issue", "issue number", "required", "the epic or initiative; positional"),
+    ("--start", "YYYY-MM-DD", "conditional", "when the work is planned to begin, "
+                                             "or none to remove it"),
+    ("--target", "YYYY-MM-DD", "conditional", "when it is planned to finish, "
+                                              "or none to remove it"),
+]
+
 MOVE_FIELDS = [
     ("issue", "issue number", "required", "the issue; positional"),
     ("--status", "one of STATUSES", "required", "the status to move to"),
@@ -7066,8 +7174,16 @@ def require_interpreter() -> None:
         )
 
 
-def main() -> int:
-    require_interpreter()
+def build_parser() -> argparse.ArgumentParser:
+    """Every command and flag, built but not parsed.
+
+    Separated from `main` so the parser can be walked in a test. It is the
+    record of which commands exist and what each one takes, and two things
+    beside it have to agree with it -- `NEEDS_REPO`, and the guide -- so it has
+    to be readable without running the tool. `scripts/check_guide.py` reads it
+    through `--help` because it checks the published surface; a test inside the
+    process reads it here.
+    """
     parser = argparse.ArgumentParser(prog="gh agile", description=__doc__.splitlines()[0])
     # No default, so "not given" is distinguishable from an explicit `@me`. Left
     # unset it comes from `project.owner` in the profile and falls back to the
@@ -7515,6 +7631,19 @@ why this exists:
     setter.add_argument("--number", type=float, help="numeric value")
     setter.set_defaults(func=cmd_set)
 
+    planner = sub.add_parser("plan",
+        help="set or clear the dates on an epic or initiative that already exists",
+        epilog=field_help(PLAN_FIELDS) + """""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    planner.add_argument("issue", help="issue number, or a KEY-NUMBER reference")
+    # No `type=`: the parsing belongs with the refusal that names the flag, and
+    # both dates are parsed together so a bad one writes neither.
+    planner.add_argument("--start", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
+    planner.add_argument("--target", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
+    planner.add_argument("--repo", help="only needed if the item's repository "
+                                        "cannot be read back")
+    planner.set_defaults(func=cmd_plan)
+
     export = sub.add_parser("export", help="items, field values and status history")
     export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
     export.add_argument("--grain", default="issues",
@@ -7562,8 +7691,12 @@ why this exists:
                      help="say what would change and change nothing")
     fix.add_argument("--repo", help="only needed if the item's repository cannot be read back")
     fix.set_defaults(func=cmd_fix)
+    return parser
 
-    args = parser.parse_args()
+
+def main() -> int:
+    require_interpreter()
+    args = build_parser().parse_args()
     # The one place a `MissingScope` is turned back into an exit. It travels
     # from `gh` untouched precisely because nothing on the way catches it, so
     # the conversion belongs here and nowhere else.
@@ -7684,6 +7817,21 @@ def missing_project_message(explicit: str | None) -> str:
     )
 
 
+#: Every command that can touch an issue needs a repository, whether or not it
+#: declares a `--repo` flag. `set --issue 26` had none to attach to, so the
+#: attribute never existed and a bare issue number could not be resolved even
+#: from inside the repository it belongs to -- and `plan` repeated it exactly,
+#: minutes after being written.
+#:
+#: **Hand-maintained, so something checks it against the parser.** A command that
+#: names an issue and is missing here does not fail loudly: it refuses a bare
+#: number with *run inside one* from inside one, which reads like the caller's
+#: mistake. `tests/test_plan_command.py` compares this set with the commands that
+#: actually take an issue.
+NEEDS_REPO = {"initiative", "epic", "story", "task", "set", "move", "plan",
+              "sync", "key", "project", "fix", "init"}
+
+
 def apply_defaults(args) -> None:
     """Fill --project, --repo and --key from the profile and the working directory.
 
@@ -7729,12 +7877,6 @@ def apply_defaults(args) -> None:
 
     key = getattr(args, "key", None)
     repo = getattr(args, "repo", None)
-    # Every command that can touch an issue needs a repository, whether or not
-    # it declares a --repo flag. `set --issue 26` had none to attach to, so the
-    # attribute never existed and a bare issue number could not be resolved even
-    # from inside the repository it belongs to.
-    NEEDS_REPO = {"initiative", "epic", "story", "task", "set", "move", "sync",
-                  "key", "project", "fix", "init"}
     if repo is None and args.command in NEEDS_REPO:
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)

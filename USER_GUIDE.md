@@ -1768,6 +1768,58 @@ update a field of type date*. Nothing caught it: the flag is chosen one layer
 below every test that stubs the write, and the fields did not yet exist on the
 board the author used. It is chosen from the field's `dataType` now.
 
+### Dates after the fact: `plan`
+
+The flags above only exist while the issue is being created, which is the one
+moment a team usually does not know the answer. **A team designs and plans
+before it staffs and schedules** — the epics are broken out first, and the dates
+arrive when somebody is free, when a quarter is agreed, when a dependency lands.
+So `plan` sets them on an epic or an initiative that already exists:
+
+```bash
+gh agile plan AGILE-173 --start 2026-10-01 --target 2026-12-19
+#   #173 Start date = 2026-10-01
+#   #173 Target date = 2026-12-19
+```
+
+Either flag alone is fine, and says nothing about the other:
+
+```bash
+gh agile plan AGILE-173 --target 2027-03-31
+```
+
+**A plan that slips is re-planned, and a date set in error has to come off.**
+`none` removes one — the same spelling as `story --epic none`, an opt-out that
+reads as a decision rather than a typo:
+
+```bash
+gh agile plan AGILE-173 --start none --target 2027-03-31
+#   #173 Start date cleared
+#   #173 Target date = 2027-03-31
+```
+
+**Both dates are one decision, which is why this is one command.** The precedent
+is `move`: starting work is one call because Status, Sprint, the label and the
+assignee all follow from it. `gh agile set --field "Start date"` still works and
+writes one field per invocation, so re-planning through it is two commands, two
+board writes, and a window where the plan is half one thing and half another.
+
+**Only an epic or an initiative can be planned.** A story's dates are its sprint
+— a level that spans sprints holds no `Sprint` field, which is why these two
+date fields exist for the levels above and not below. `set` refuses a date on a
+story for the same reason, so the sanctioned path and the generic one agree:
+
+```bash
+gh agile plan AGILE-164 --start 2026-10-01
+#   o/r#164 is not an epic or an initiative, and only those carry a plan.
+#     A story's dates are its sprint -- #115 is the rule that a level which spans
+#     sprints holds none, which is why these two fields exist for the levels above.
+```
+
+Both dates are parsed **before either is written**, so one bad date writes
+neither. A half-written plan is worse than a refusal, because the half that
+landed looks deliberate.
+
 ### Initiatives: a level above epic
 
 An **initiative** is the plan and WBS for a large new feature — the set of epics
