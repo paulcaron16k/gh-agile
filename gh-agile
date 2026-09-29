@@ -1372,6 +1372,12 @@ DEFAULT_SPEC = {
         # computed from time spent in them, so without the options those Gold
         # columns can never be anything but null.
         {"name": "Status", "type": "SINGLE_SELECT", "options": list(STATUSES)},
+        # For GitHub's own roadmap layout, which places an item from a date
+        # field or an iteration field -- and an epic has no Sprint by rule.
+        # `gh project field-create` accepts DATE, so this needs no new
+        # machinery; see `DATE_FIELDS`.
+        {"name": "Start date", "type": "DATE"},
+        {"name": "Target date", "type": "DATE"},
     ],
     "labels": [
         {"name": "type:initiative", "color": "1d76db"},
@@ -2692,6 +2698,39 @@ def attach_to_initiative(target: dict, repo: str, number: int, node: str) -> Non
     print(f"  #{number} under initiative {target['repo']}#{target['number']}  ({label})")
 
 
+#: The two dates the web roadmap needs to place a bar, and the only fields here
+#: that record a *plan* rather than a measurement.
+#:
+#: GitHub's roadmap layout places an item from a date field or an iteration
+#: field, and an epic has neither: #115 made it a rule that a container carries
+#: no Sprint. So every epic landed in the web roadmap's undated bucket while
+#: `board show` looked right -- it reconstructs an axis from the `sprint:`
+#: labels of an epic's *descendants*, which the web UI has no way to do.
+#:
+#: **They are a plan, and the derived axis is a measurement.** `board show`
+#: keeps deriving *when did this start* from the labels beneath an epic; these
+#: say when somebody intended it to. The two are not interchangeable and neither
+#: replaces the other.
+DATE_FIELDS = ("Start date", "Target date")
+
+
+def iso_date(value: str | None, flag: str) -> str | None:
+    """`YYYY-MM-DD`, or a refusal naming the flag. UTC, like every date here.
+
+    Refused rather than passed through, for the reason the whole convention
+    exists: a date written into a plan that nobody can parse is a plan nobody
+    can read, and GitHub would accept the string and render nothing.
+    """
+    if value is None:
+        return None
+    import datetime as dt
+    try:
+        return dt.date.fromisoformat(value.strip()).isoformat()
+    except ValueError:
+        sys.exit(f"{flag} {value!r} is not a date. Use YYYY-MM-DD, in UTC -- "
+                 f"{today_utc().isoformat()} is today.")
+
+
 def cmd_epic(args) -> int:
     require_sprint_config(args._config, "creating an epic")
     require_key_for_prefix(args._config, getattr(args, "key", None))
@@ -2700,6 +2739,12 @@ def cmd_epic(args) -> int:
     # orphan -- the issue was created, printed, and then the command exited.
     target = (initiative_target(args._config, args.initiative, args.repo)
               if getattr(args, "initiative", None) else None)
+    # Parsed before anything is created, for the same reason `--initiative` is
+    # resolved first: an issue number is never reused, so a refusal afterwards
+    # costs one. Named `starts_on`/`targets_on` because `target` in this
+    # function is already the initiative being attached to.
+    starts_on = iso_date(getattr(args, "start", None), "--start")
+    targets_on = iso_date(getattr(args, "target", None), "--target")
     labels = ["type:epic"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, _node = create_issue(
@@ -2723,6 +2768,13 @@ def cmd_epic(args) -> int:
     with board_write_reported(number, url, args.project):
         item = add_to_project(args.owner, args.project, url)
         set_field(args.owner, args.project, item, "Status", "Todo")
+        # Optional, always. An epic with no dates behaves exactly as it did
+        # before these fields existed -- on every board, and in `validate`.
+        for field_name, value in zip(DATE_FIELDS, (starts_on, targets_on),
+                                     strict=True):
+            if value:
+                set_field(args.owner, args.project, item, field_name, value)
+                print(f"  #{number} {field_name} = {value}")
     return 0
 
 
@@ -7016,6 +7068,10 @@ what an initiative is:
     epic.add_argument("--initiative",
                       help="attach to an initiative: its number (35), a keyed reference "
                            "(TEST-35), or its slug (large-new-feature)")
+    epic.add_argument("--start", metavar="YYYY-MM-DD",
+                      help="planned start; a DATE field GitHub's roadmap can draw")
+    epic.add_argument("--target", metavar="YYYY-MM-DD",
+                      help="planned finish; the baseline a slip is measured against")
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
     epic.set_defaults(func=cmd_epic)

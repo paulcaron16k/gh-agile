@@ -305,6 +305,22 @@
           "exported_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "field_start_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The epic's planned start, a project DATE field. A PLAN, not a measurement: `board show`'s roadmap derives when work actually began from the `sprint:` labels beneath an item, and the two are not interchangeable. Null on anything nobody dated, which is most rows."
+          },
+          "field_target_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The epic's planned finish, a project DATE field. The baseline a slip is measured against; null on anything nobody dated. See `field_start_date`."
           }
         }
       }

@@ -57,6 +57,8 @@ def board_item():
             field("Story Points", 3.0, "ProjectV2ItemFieldNumberValue", "number"),
             field("Priority", "high", "ProjectV2ItemFieldSingleSelectValue", "name"),
             field("FR", "FR-7.18"),
+            field("Start date", "2026-09-01", "ProjectV2ItemFieldDateValue", "date"),
+            field("Target date", "2026-10-31", "ProjectV2ItemFieldDateValue", "date"),
         ]},
         "content": {
             "__typename": "Issue", "id": "I_1", "number": 7, "title": "a title",

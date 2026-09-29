@@ -1720,6 +1720,35 @@ complains.
 
 ---
 
+### Dates on an epic, for GitHub's own roadmap
+
+```bash
+gh agile epic "Initiatives above epics" --start 2026-09-01 --target 2026-10-31
+```
+
+`setup` creates `Start date` and `Target date` as project **DATE** fields. Both
+are optional everywhere: an epic with neither behaves exactly as it did before
+they existed, on every board and in `validate`.
+
+**They exist because the web roadmap cannot draw an epic without them.** GitHub's
+roadmap layout places an item from a date field or an iteration field, and an
+epic carries no `Sprint` by rule — a level that spans sprints is never asked for
+one. So both of the layout's inputs were absent and every epic landed in the
+undated bucket.
+
+**`board show` hid that, and is unchanged.** Its roadmap sections derive *when
+work began* from the `sprint:` labels of an epic's descendants — a reconstruction
+the web UI has no way to perform. So the text roadmap looked right while the one
+a stakeholder opens drew nothing.
+
+**A plan is not a measurement**, and the two are not interchangeable. `Target
+date` is what somebody intended; the derived axis is what happened. Keeping both
+is what lets a finished epic show a slip rather than only a date.
+
+Dates are UTC and `YYYY-MM-DD`. Anything else is refused rather than written —
+GitHub would accept the string and render nothing, so a refusal is the only way
+the mistake is ever seen.
+
 ### Initiatives: a level above epic
 
 An **initiative** is the plan and WBS for a large new feature — the set of epics
