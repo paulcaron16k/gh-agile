@@ -3562,7 +3562,11 @@ BOARD_TYPES = {
         # need not carry Status `Done` -- that is the state-vs-Status gap `#138`
         # exists for -- so `-status:Done` alone leaves abandoned work on the
         # roadmap, which is the one thing more misleading than finished work.
-        "filter": "label:type:epic -status:Done is:open",
+        # **Both levels, because the top of the hierarchy belongs on the one
+        # view that shows the shape of the plan.** `label:type:epic` excluded
+        # `type:initiative` by construction, so an initiative was missing from
+        # the roadmap while every one of its epics was on it.
+        "filter": "level:container -status:Done is:open",
         "about": "epics still ahead, over time",
     },
 }
@@ -3715,6 +3719,8 @@ FILTER_TERMS = {
     "label": "a label on the issue, e.g. label:type:epic",
     "initiative": "everything in an initiative's tree, by slug: "
                   "initiative:large-new-feature",
+    "level": "a level of the hierarchy: level:container is an epic or an "
+             "initiative",
     "no": "a field that is empty: no:sprint, no:status, no:label",
     "is": "is:open, is:closed, is:issue",
 }
@@ -3769,46 +3775,73 @@ def item_matches(item: dict, terms: list[tuple[bool, str, str]],
     status = fields.get("Status")
     sprint = fields.get("Sprint")
 
-    for negated, key, value in terms:
-        wanted = value.casefold()
-        if key == "status":
-            hit = same_status(status, value)
-        elif key == "sprint":
-            # `@current` is the first *active* iteration, decided by GitHub
-            # returning completed ones separately -- the same rule
-            # `resolve_iteration` follows, so a scrum board and `set --value
-            # @current` cannot disagree about which sprint is current.
-            if wanted in ("@current", "current"):
-                hit = bool(sprint) and bool(current_sprint) and sprint == current_sprint
-            else:
-                hit = bool(sprint) and sprint.casefold() == wanted
-        elif key == "label":
-            hit = wanted in labels
-        elif key == "initiative":
-            # Exactly `label:initiative:<slug>`, and a term of its own because
-            # `label:initiative:large-new-feature` reads badly and because a term
-            # is where the meaning gets documented for `--help`.
-            #
-            # It works at all only because `initiative reconcile` puts the label
-            # on every issue in the tree: a filter cannot traverse the hierarchy,
-            # so the label is the only thing an item-at-a-time evaluator can see.
-            hit = f"{INITIATIVE_LABEL}{wanted}" in labels
-        elif key == "is":
-            state = (content.get("state") or "").casefold()
-            kind = content.get("__typename", "")
-            hit = {"open": state == "open", "closed": state == "closed",
-                   "issue": kind == "Issue", "pr": kind == "PullRequest",
-                   "pullrequest": kind == "PullRequest"}.get(wanted, False)
-        elif key == "no":
-            hit = {"sprint": not sprint, "status": not status, "label": not labels,
-                   }.get(wanted)
-            if hit is None:
-                sys.exit(f"no:{value} is not understood; try no:sprint, no:status or no:label")
-        else:                                   # unreachable: parse_filter refused it
-            sys.exit(f"unhandled filter term {key!r}")
+    for negated, key, alternatives in terms:
+        # **A comma is OR, because that is what GitHub means by one**, and
+        # because a board's filter comes *back* from the view it was written
+        # to. `github_filter` expands `level:container` to
+        # `label:type:initiative,type:epic` so the web UI agrees -- and
+        # `board show` then reads that string back and has to understand it.
+        # Measured: without this the roadmap it had just written matched 0 of
+        # 86 items. A shorthand that expands must also parse on the way home.
+        hit = any(matches_one(key, part, content, labels, status, sprint,
+                              current_sprint, value=alternatives)
+                  for part in alternatives.split(","))
         if hit == negated:
             return False
     return True
+
+
+def matches_one(key, wanted, content, labels, status, sprint, current_sprint,
+                *, value) -> bool:
+    """One term against one value. `value` is the whole term, for messages."""
+    wanted = wanted.strip().casefold()
+    if key == "status":
+        hit = same_status(status, wanted)
+    elif key == "sprint":
+        # `@current` is the first *active* iteration, decided by GitHub
+        # returning completed ones separately -- the same rule
+        # `resolve_iteration` follows, so a scrum board and `set --value
+        # @current` cannot disagree about which sprint is current.
+        if wanted in ("@current", "current"):
+            hit = bool(sprint) and bool(current_sprint) and sprint == current_sprint
+        else:
+            hit = bool(sprint) and sprint.casefold() == wanted
+    elif key == "label":
+        hit = wanted in labels
+    elif key == "initiative":
+        # Exactly `label:initiative:<slug>`, and a term of its own because
+        # `label:initiative:large-new-feature` reads badly and because a term
+        # is where the meaning gets documented for `--help`.
+        #
+        # It works at all only because `initiative reconcile` puts the label
+        # on every issue in the tree: a filter cannot traverse the hierarchy,
+        # so the label is the only thing an item-at-a-time evaluator can see.
+        hit = f"{INITIATIVE_LABEL}{wanted}" in labels
+    elif key == "level":
+        # **A shorthand for a set of `type:` labels**, following
+        # `initiative:` -- a term is where the meaning gets documented, and
+        # `github_filter` expands it to something GitHub's own view
+        # evaluates the same way. `container` is the one set that has a
+        # rule attached to it: the levels that hold work rather than being
+        # it, which is what a roadmap shows.
+        if wanted == "container":
+            hit = bool(labels & {f"type:{t}" for t in CONTAINER_TYPES})
+        else:
+            hit = f"type:{wanted}" in labels
+    elif key == "is":
+        state = (content.get("state") or "").casefold()
+        kind = content.get("__typename", "")
+        hit = {"open": state == "open", "closed": state == "closed",
+               "issue": kind == "Issue", "pr": kind == "PullRequest",
+               "pullrequest": kind == "PullRequest"}.get(wanted, False)
+    elif key == "no":
+        hit = {"sprint": not sprint, "status": not status, "label": not labels,
+               }.get(wanted)
+        if hit is None:
+            sys.exit(f"no:{value} is not understood; try no:sprint, no:status or no:label")
+    else:                                   # unreachable: parse_filter refused it
+        sys.exit(f"unhandled filter term {key!r}")
+    return bool(hit)
 
 
 def resolve_filter_initiatives(config: dict, text: str | None, repo: str | None) -> str | None:
@@ -3856,6 +3889,14 @@ def github_filter(text: str) -> str:
         bare = token[1:] if negated else token
         if bare.casefold().startswith(INITIATIVE_LABEL):
             bare = f"label:{bare}"
+        elif bare.casefold().startswith("level:"):
+            # GitHub knows `label:` and does not know `level:`, and it ORs the
+            # comma-separated values of one qualifier. So the shorthand is
+            # written out as the labels it stands for, and the web UI shows
+            # what `board show` shows -- the whole point of this function.
+            wanted = bare.split(":", 1)[1].casefold()
+            levels = CONTAINER_TYPES if wanted == "container" else (wanted,)
+            bare = "label:" + ",".join(f"type:{level}" for level in levels)
         out.append(f"-{bare}" if negated else bare)
     return " ".join(out)
 
@@ -4552,9 +4593,20 @@ def board_sections(rows: list[dict], grouping: str | None, sprint_order: list[st
             began = min(r.get("started_on") or "" for r in buckets[name])
             return name if name == began else f"{name} · from {began}"
 
-        return [(heading(name), flat(sorted(buckets[name],
-                                            key=lambda r: (r.get("started_on") or "",
-                                                           r["number"]))))
+        # **A tree, not a flat list, and the objection to indenting elsewhere
+        # does not apply here.** A status-grouped board separates a parent from
+        # its children by construction; this one groups by when work began, and
+        # an initiative is dated by the earliest start among its epics -- so a
+        # parent and the child that dated it land in the same section, which is
+        # where the tree can honestly be drawn.
+        #
+        # An epic that started in a later section appears there at the top
+        # level, under no repeated parent: the initiative is stated once, in
+        # the section its work began in. Every row in a section shares one
+        # `started_on` -- it is the sprint's start date -- so the ordering
+        # inside it is `hierarchy_order`'s, by repository and number, which is
+        # the tiebreak this branch already used.
+        return [(heading(name), hierarchy_order(buckets[name]))
                 for name in sorted(buckets, key=when)]
 
     # sprint: known sprints in configuration order, then the unassigned.
