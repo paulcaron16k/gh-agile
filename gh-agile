@@ -2657,6 +2657,12 @@ def create_initiative(args) -> int:
     """
     require_sprint_config(args._config, "creating an initiative")
     require_key_for_prefix(args._config, getattr(args, "key", None))
+    # Parsed before anything is created, the same ordering `epic` uses: an
+    # issue number is never reused, so a refusal afterwards costs one. The same
+    # `iso_date` too -- a second parser is one that can disagree about what a
+    # date is.
+    starts_on = iso_date(getattr(args, "start", None), "--start")
+    targets_on = iso_date(getattr(args, "target", None), "--target")
     slug = args.slug or initiative_slug(args.title)
     # Refused rather than shared. Two initiatives answering to one slug would put
     # both trees behind one board filter and look entirely correct -- the same
@@ -2689,6 +2695,22 @@ def create_initiative(args) -> int:
     with board_write_reported(number, url, args.project):
         item = add_to_project(args.owner, args.project, url)
         set_field(args.owner, args.project, item, "Status", "Todo")
+        # **The same two fields an epic gets, and for the same reason.** #175
+        # gave an epic dates because GitHub's roadmap places an item from a date
+        # or an iteration field and a container has no Sprint by rule. #176 put
+        # initiatives on that roadmap, which reproduced the defect one level up:
+        # `board show` renders them, the web UI drops them into the undated
+        # bucket.
+        #
+        # **Typed, never derived.** The tool could compute these from the epics
+        # beneath -- and would then be authoring a plan nobody made. The derived
+        # answer to *when did this start* already exists as the roadmap's own
+        # axis, from the `sprint:` labels below. A plan is not a measurement.
+        for field_name, value in zip(DATE_FIELDS, (starts_on, targets_on),
+                                     strict=True):
+            if value:
+                set_field(args.owner, args.project, item, field_name, value)
+                print(f"  #{number} {field_name} = {value}")
     return 0
 
 
@@ -7137,6 +7159,12 @@ what an initiative is:
     initiative_new.add_argument("--slug", help="override the slug derived from the title")
     initiative_new.add_argument("--repo")
     initiative_new.add_argument("--key", help="which key to label the issue with")
+    initiative_new.add_argument("--start", metavar="YYYY-MM-DD",
+                                help="planned start; the DATE field GitHub's "
+                                     "roadmap draws from")
+    initiative_new.add_argument("--target", metavar="YYYY-MM-DD",
+                                help="planned finish; the baseline a slip is "
+                                     "measured against")
     initiative_new.add_argument("--intent")
     initiative_new.add_argument("--acceptance")
     initiative_fix = initiative_sub.add_parser(

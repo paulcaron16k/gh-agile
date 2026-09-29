@@ -1724,7 +1724,12 @@ complains.
 
 ```bash
 gh agile epic "Initiatives above epics" --start 2026-09-01 --target 2026-10-31
+gh agile initiative create "Hierarchy visibility" --start 2026-09-01 --target 2026-12-31
 ```
+
+**Both container levels take them**, because both are on the roadmap and neither
+has a Sprint. An initiative without dates is dropped by the web roadmap exactly
+as an undated epic was.
 
 `setup` creates `Start date` and `Target date` as project **DATE** fields. Both
 are optional everywhere: an epic with neither behaves exactly as it did before
