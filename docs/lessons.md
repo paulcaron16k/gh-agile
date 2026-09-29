@@ -306,3 +306,32 @@ unreachable for some level, grep for what groups, sorts or filters on it** — t
 degrade rather than break. The replacement here derives the axis from work that happened (`sprint:` labels
 on descendants) rather than from a field the rows can never hold, which is also why it cannot degrade the
 same way again.
+
+**A comment explaining why something is *not* selected is a claim about the future, and nothing checks
+it.** `PROJECT_FIELDS_SELECTION` asked GraphQL for `__typename` and deliberately not `dataType`, with four
+lines saying why: the two callers compared against `ProjectV2IterationField` and `ProjectV2Field`, and
+selecting both would invite confusing them. True when written, and it separated exactly three kinds of
+field — because everything that is not an iteration or a single-select is `ProjectV2Field`. TEXT, NUMBER and
+DATE are one typename, 14 of the 17 fields on this board. So `#175` added two DATE fields and the premise
+was gone that moment, silently, with the comment still standing there reading as authoritative. Every date
+`gh agile epic --start` wrote went out as `--text`, and GitHub answered *did not receive a date value to
+update a field of type date*. **When a change adds a case to a set, re-read the comments that justified
+narrowing that set** — a rationale is dated evidence, not a standing fact, and the one place it will not be
+questioned is the place it is written down.
+
+**Something must test the thing everything else stubs.** Roughly thirty tests monkeypatch `set_field` away,
+correctly: they are about what a command decides to write, not how. The consequence is that nothing had
+ever looked at the argv it builds, so the defect above lived one layer below the entire suite — 1334
+offline tests, `lint`, CI on four interpreters, all green, on a feature that had never once worked. It was
+found by a question about a different part of it. **Count the stubs**: a seam mocked in thirty tests is
+load-bearing, and it needs one test of its own that asserts on the real thing. Here that is
+`tests/test_set_field_types.py`, which builds the command and reads the flags back — and whose fixtures
+carry both `__typename` and `dataType`, so that against the unfixed tool it fails on the defect rather than
+on a `KeyError`.
+
+**And the write side is not covered by anything green.** CI gets no token and calls no `gh`; `check-guide`
+runs read commands only; the offline suite is pure by design. So a green board says the logic is sound and
+says nothing whatever about whether a write reaches GitHub. The date fields did not yet exist on the
+author's own board, so the first real attempt to write one was the bug report. **Run it once against a real
+project before calling it shipped** — that is the step whose absence let this go out, and the sandbox
+(`paulcaron16k/agile-test`, project `19`) exists so it costs nothing.

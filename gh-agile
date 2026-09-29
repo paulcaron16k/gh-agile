@@ -1525,15 +1525,23 @@ def project_id(login: str, number: int) -> str:
     return _PROJECT_IDS[(login, number)]
 
 
-#: `dataType` is deliberately not selected: the callers compare against
-#: `ProjectV2IterationField` and `ProjectV2Field`, which are `__typename` values,
-#: and `gh project field-list` happened to report `__typename` under the key
-#: `type`. Selecting both would invite the two being confused.
+#: **`dataType` is what a field is; `__typename` is only which interface it
+#: implements, and the two are not the same question.** This selection used to
+#: ask for `__typename` alone, on the reasoning that it separated the field
+#: kinds the callers cared about and that selecting both would invite confusing
+#: them. It separated three of them. `ProjectV2IterationField` and
+#: `ProjectV2SingleSelectField` have typenames of their own -- and *everything
+#: else* is `ProjectV2Field`: TEXT, NUMBER and DATE alike, 14 of the 17 fields
+#: on this board. So the moment #175 added a DATE field the premise was gone,
+#: silently, and `set_field` sent every date as `--text` (#182).
+#:
+#: Only `dataType` is selected now, so there is exactly one answer in this
+#: record to *what kind of field is this* -- which is the honest way to settle
+#: the confusion the old comment feared.
 PROJECT_FIELDS_SELECTION = """
       fields(first: 50) {
         nodes {
-          __typename
-          ... on ProjectV2FieldCommon { id name }
+          ... on ProjectV2FieldCommon { id name dataType }
           ... on ProjectV2SingleSelectField { options { id name } }
         }
       }
@@ -1541,11 +1549,14 @@ PROJECT_FIELDS_SELECTION = """
 
 
 def project_fields(login: str, number: int) -> list[dict]:
-    """The project's fields, in the shape `gh project field-list` returned.
+    """The project's fields: `id`, `name`, `data_type`, and `options` when it has any.
 
-    That command cost 102 GraphQL points and this query costs 1 -- and
-    `field-list`'s cost did not move with `-L`, so there was no cheaper way to
-    call it. Same shape, same callers, two orders of magnitude apart.
+    Replaces `gh project field-list`, which cost 102 GraphQL points where this
+    query costs 1 -- and whose cost did not move with `-L`, so there was no
+    cheaper way to call it. It no longer returns that command's shape: its
+    `type` key carried the `__typename`, which cannot tell a DATE field from a
+    TEXT one, and `data_type` is the API's own answer to the question its one
+    caller actually asks. See `PROJECT_FIELDS_SELECTION` and #182.
 
     The user-then-organization fallback, and the `SystemExit` catch that makes it
     work at all, live in `project_node`.
@@ -1557,7 +1568,7 @@ def project_fields(login: str, number: int) -> list[dict]:
         {
             "id": field["id"],
             "name": field["name"],
-            "type": field["__typename"],
+            "data_type": field["dataType"],
             **({"options": field["options"]} if field.get("options") else {}),
         }
         for field in node["fields"]["nodes"]
@@ -2178,22 +2189,45 @@ def create_issue(repo: str, title: str, body: str, labels: list[str]) -> tuple[i
 
 
 def set_field(login: str, project: int, item_id: str, field_name: str, value) -> None:
-    """Set one project field on one item, by field name."""
+    """Set one project field on one item, by field name.
+
+    **The flag is chosen from the field's declared `data_type`, never guessed
+    from the value.** It used to be both: `__typename` for the two kinds that
+    have one of their own, and `isinstance(value, (int, float))` for NUMBER --
+    with TEXT as the fallback for everything else. TEXT *was* everything else,
+    until #175 added `Start date` and `Target date`, and a DATE field reports
+    the same `ProjectV2Field` as a TEXT one. So every date this tool wrote went
+    out as `--text`, which `gh` accepts and the API rejects, and `epic --start`
+    had never once worked when #182 was filed.
+
+    A guess from the value cannot be made correct here either: `3` is a legal
+    NUMBER and a legal TEXT, and `"2026-09-01"` is a legal DATE and a legal
+    TEXT. Only the field knows.
+
+    Dates are parsed on the way through rather than passed on trust: `set
+    --field "Target date" --value soon` reaches this function without ever
+    meeting `--start`'s parser, and an unparseable date is refused at every
+    other door.
+    """
     field = fields_of(login, project).get(field_name)
     if not field:
         sys.exit(f"no field named {field_name!r} on project {project}; run `gh agile setup`")
     cmd = ["project", "item-edit", "--id", item_id,
            "--project-id", project_id(login, project), "--field-id", field["id"]]
-    if field["type"] == "ProjectV2IterationField":
+    kind = field["data_type"]
+    if kind == "ITERATION":
         cmd += ["--iteration-id", resolve_iteration(login, project, str(value))]
-    elif field.get("options"):
+    elif kind == "SINGLE_SELECT":
         match = next(
-            (o for o in field["options"] if o["name"].casefold() == str(value).casefold()), None
+            (o for o in field.get("options") or []
+             if o["name"].casefold() == str(value).casefold()), None
         )
         if not match:
             sys.exit(f"{value!r} is not an option of {field_name!r}")
         cmd += ["--single-select-option-id", match["id"]]
-    elif field["type"] == "ProjectV2Field" and isinstance(value, (int, float)):
+    elif kind == "DATE":
+        cmd += ["--date", iso_date(str(value), field_name)]
+    elif kind == "NUMBER":
         cmd += ["--number", str(value)]
     else:
         cmd += ["--text", str(value)]
@@ -2717,9 +2751,15 @@ DATE_FIELDS = ("Start date", "Target date")
 def iso_date(value: str | None, flag: str) -> str | None:
     """`YYYY-MM-DD`, or a refusal naming the flag. UTC, like every date here.
 
-    Refused rather than passed through, for the reason the whole convention
-    exists: a date written into a plan that nobody can parse is a plan nobody
-    can read, and GitHub would accept the string and render nothing.
+    **Refused before anything is created**, which is the whole value of checking
+    here. `gh` does parse a `--date` itself and rejects `soon` too -- measured,
+    against a real DATE field -- but only once `epic` has made the issue, and an
+    issue number is never reused, so that refusal leaves a permanent orphan. The
+    same reasoning as resolving `--initiative` before the issue exists.
+
+    (Said differently until #182: that GitHub would take the string and render
+    nothing. That was true of the value this tool was actually sending, which was
+    `--text`.)
     """
     if value is None:
         return None

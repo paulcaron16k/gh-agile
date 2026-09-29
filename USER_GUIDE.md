@@ -1745,9 +1745,23 @@ a stakeholder opens drew nothing.
 date` is what somebody intended; the derived axis is what happened. Keeping both
 is what lets a finished epic show a slip rather than only a date.
 
-Dates are UTC and `YYYY-MM-DD`. Anything else is refused rather than written —
-GitHub would accept the string and render nothing, so a refusal is the only way
-the mistake is ever seen.
+Dates are UTC and `YYYY-MM-DD`. Anything else is refused **before the issue is
+created**, which is the part that matters: `gh` would reject the malformed date
+too, but only after `epic` had already made the issue, and an issue number is
+never reused.
+
+```bash
+gh agile epic "Q4 migration" --start soon
+#   --start 'soon' is not a date. Use YYYY-MM-DD, in UTC -- 2026-09-29 is today.
+```
+
+**These fields could not actually be written until `#182`.** `set_field` chose
+its `gh project item-edit` flag from the field's GraphQL `__typename`, which
+reads `ProjectV2Field` for a TEXT, a NUMBER *and* a DATE field alike, so every
+date went out as `--text` and GitHub answered *did not receive a date value to
+update a field of type date*. Nothing caught it: the flag is chosen one layer
+below every test that stubs the write, and the fields did not yet exist on the
+board the author used. It is chosen from the field's `dataType` now.
 
 ### Initiatives: a level above epic
 

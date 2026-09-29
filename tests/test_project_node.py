@@ -95,9 +95,9 @@ class TestCallersReachTheOrganisation:
 
     def test_project_fields_finds_an_org_project(self, tool, roots):
         roots({"user": SystemExit(NOT_A_USER), "organization": {"projectV2": {"fields": {
-            "nodes": [{"__typename": "ProjectV2Field", "id": "F1", "name": "Story Points"}]}}}})
+            "nodes": [{"id": "F1", "name": "Story Points", "dataType": "NUMBER"}]}}}})
         got = tool.project_fields("acme", 4)
-        assert got == [{"id": "F1", "name": "Story Points", "type": "ProjectV2Field"}]
+        assert got == [{"id": "F1", "name": "Story Points", "data_type": "NUMBER"}]
 
     @pytest.mark.parametrize("call", ["project_id", "sprint_field", "project_fields"])
     def test_a_genuinely_absent_project_blames_the_project_not_the_login(
