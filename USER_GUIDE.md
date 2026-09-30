@@ -7,6 +7,14 @@ an agent can run it on a developer's behalf.
 The *rules* are in [POLICY.md](POLICY.md); the *data mapping* is in
 [GOLD_MODEL.md](GOLD_MODEL.md). This is the *how*.
 
+**Which version you are running.** A `gh` script extension is a clone of the
+default branch: `gh extension install paulcaron16k/gh-agile` clones `main`,
+`gh extension upgrade agile` fast-forwards it, and no tag is consulted. So there
+is nothing to pin and nothing to choose — you are on `main`, and a fix reaches
+you on your next upgrade. Tags are cut so a build can be *named* in a report,
+never installed from. The promise that makes this safe, and what a tag does and
+does not mean, are in the README under *Versions, and what installing gets you*.
+
 ---
 
 ## 0. Start here: `gh agile init`
