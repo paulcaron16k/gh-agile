@@ -1798,6 +1798,57 @@ gh agile plan AGILE-173 --start none --target 2027-03-31
 #   #173 Target date = 2027-03-31
 ```
 
+**Nobody types an end date; a planner sizes the phase.** `--for` takes the span
+and works out the target — which is what a WBS has always done, and what the
+roadmap bar is:
+
+```bash
+gh agile plan AGILE-173 --start 2026-10-01 --for 6w
+#   #173 Start date = 2026-10-01
+#   #173 Target date = 2026-11-11 (6w from 2026-10-01)
+```
+
+The terminal says where the date came from because the field cannot: once
+written, a date arrived at by arithmetic looks exactly like one somebody typed.
+
+Units are `d`, `w` and `sprints` — `10d`, `6w`, `3sprints`. A sprint is the
+profile's own `cadence_days`, so the conversion is exact rather than
+approximate, which is the reason that unit is offered at all. **A month is
+refused**: it is 28, 29, 30 or 31 days, and choosing one on your behalf would
+put a number in a plan that nobody agreed to.
+
+**Calendar days, not working days.** GitHub's two fields hold calendar dates and
+its roadmap draws calendar time. Working days would need a holiday calendar for
+a team whose location this tool never sees, so `6w` is forty-two days.
+
+**The span is inclusive of its first day**, which is what makes it agree with
+the sprint windows the tool already prints:
+
+```bash
+gh agile sprint list
+#   0005 W40-2026 2026-09-28 .. 2026-10-11  (current)
+
+gh agile plan AGILE-173 --start 2026-09-28 --for 1sprint
+#   #173 Target date = 2026-10-11 (1sprint from 2026-09-28)
+```
+
+`--for` on its own measures from the start date already on the issue, so
+re-sizing a phase does not mean restating a start that has not changed:
+
+```bash
+gh agile plan AGILE-173 --for 8w
+```
+
+`--for` and `--target` together are refused. They answer the same question and
+they can disagree — pass `--target` for a date somebody fixed, `--for` for a
+span you are sizing. `epic` and `initiative` take `--for` at creation for the
+same reason they take `--start`.
+
+**Nothing is derived from the work beneath.** Not story points, not velocity,
+not the sprints the children sat in. The duration is typed by a planner, which
+is what keeps the result a plan rather than a forecast wearing a plan's clothes
+— and it is why `Target date` can be compared against what actually happened.
+
 **Both dates are one decision, which is why this is one command.** The precedent
 is `move`: starting work is one call because Status, Sprint, the label and the
 assignee all follow from it. `gh agile set --field "Start date"` still works and

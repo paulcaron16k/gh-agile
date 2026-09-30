@@ -2662,7 +2662,9 @@ def create_initiative(args) -> int:
     # `iso_date` too -- a second parser is one that can disagree about what a
     # date is.
     starts_on = iso_date(getattr(args, "start", None), "--start")
-    targets_on = iso_date(getattr(args, "target", None), "--target")
+    targets_on = spanned_target(starts_on,
+                                iso_date(getattr(args, "target", None), "--target"),
+                                getattr(args, "span", None), args._config)
     slug = args.slug or initiative_slug(args.title)
     # Refused rather than shared. Two initiatives answering to one slug would put
     # both trees behind one board filter and look entirely correct -- the same
@@ -2706,11 +2708,16 @@ def create_initiative(args) -> int:
         # beneath -- and would then be authoring a plan nobody made. The derived
         # answer to *when did this start* already exists as the roadmap's own
         # axis, from the `sprint:` labels below. A plan is not a measurement.
+        # Said the same way `plan` says it: a date reached by arithmetic looks
+        # exactly like one somebody typed, and the field cannot hold the
+        # difference.
+        note = (f" ({args.span} from {starts_on})" if getattr(args, "span", None) else "")
         for field_name, value in zip(DATE_FIELDS, (starts_on, targets_on),
                                      strict=True):
             if value:
                 set_field(args.owner, args.project, item, field_name, value)
-                print(f"  #{number} {field_name} = {value}")
+                print(f"  #{number} {field_name} = {value}"
+                      f"{note if field_name == DATE_FIELDS[1] else ''}")
     return 0
 
 
@@ -2793,6 +2800,95 @@ def iso_date(value: str | None, flag: str) -> str | None:
                  f"{today_utc().isoformat()} is today.")
 
 
+#: What a planner types instead of an end date, in days. **Calendar days, not
+#: working days**, and the refusal to pretend otherwise is the point: the two
+#: fields GitHub holds are calendar dates and its roadmap draws calendar time,
+#: while working-day arithmetic needs a holiday calendar for a team whose
+#: location this tool never sees.
+DURATION_UNITS = {"d": 1, "day": 1, "days": 1, "w": 7, "week": 7, "weeks": 7}
+
+#: The one unit a planner says out loud that a calendar cannot convert. Taken
+#: from the profile's own `cadence_days`, so `3sprints` is exact rather than
+#: approximate -- which is the whole reason it is offered.
+SPRINT_UNITS = ("sprint", "sprints")
+
+#: Refused by name rather than falling into the general message. A month is not
+#: a duration -- it is 28, 29, 30 or 31 days -- and quietly choosing one of them
+#: is the kind of guess that ends up in a plan somebody quotes.
+AMBIGUOUS_UNITS = ("m", "mo", "month", "months", "y", "year", "years")
+
+
+def duration_days(text: str, config: dict) -> int:
+    """`6w` -> 42, `3sprints` -> 3 x the profile's cadence. Whole days, always.
+
+    The profile is read only when the unit is a sprint, so a duration in days or
+    weeks works on a profile that declares no sprint block at all.
+    """
+    raw = "".join(str(text).split()).casefold()
+    cut = 0
+    while cut < len(raw) and raw[cut].isdigit():
+        cut += 1
+    count, unit = raw[:cut], raw[cut:]
+    if not count or int(count) < 1:
+        sys.exit(f"--for {text!r} is not a duration. Use a count and a unit, "
+                 f"as in 6w, 10d or 3sprints.")
+    if unit in SPRINT_UNITS:
+        return int(count) * sprint_settings(config)["cadence_days"]
+    if unit in AMBIGUOUS_UNITS:
+        sys.exit(
+            f"--for {text!r}: a month or a year is not a fixed number of days, so "
+            f"nothing here can\n  turn one into a date without choosing on your "
+            f"behalf. Say it in weeks, days or\n  sprints -- 13w, 90d, 6sprints."
+        )
+    if unit not in DURATION_UNITS:
+        sys.exit(f"--for {text!r}: {unit!r} is not a unit. Use d, w, or sprints.")
+    return int(count) * DURATION_UNITS[unit]
+
+
+def target_from(start: str, span: str, config: dict) -> str:
+    """The last day of a span beginning on `start`. **Inclusive.**
+
+    `--start 2026-09-28 --for 1sprint` gives `2026-10-11`, which is exactly what
+    `sprint list` prints for that iteration: a fortnight is fourteen days counted
+    inclusively, and the last of them is the fourteenth. A convention that
+    disagreed with the tool's own sprint windows by a day would be found by
+    somebody comparing the two and never quite believed again.
+    """
+    import datetime as dt
+    days = duration_days(span, config)
+    return (dt.date.fromisoformat(start) + dt.timedelta(days=days - 1)).isoformat()
+
+
+#: Refused wherever both arrive. They answer the same question and can disagree,
+#: and picking one silently is how a plan ends up meaning something nobody typed.
+#: One string because there are two doors -- `epic` and `initiative` reach it
+#: through `spanned_target`, `plan` refuses before it reads anything at all.
+SPAN_AND_TARGET = (
+    "--for and --target both say when this finishes, and they can disagree.\n"
+    "  Pass one: --target for a date somebody fixed, --for a span you are sizing."
+)
+
+
+def spanned_target(starts_on: str | None, targets_on: str | None,
+                   span: str | None, config: dict) -> str | None:
+    """`--target`, or the end of `--for` measured from the start. Never both.
+
+    **A planner types a duration, not an end date.** A WBS sizes a phase in
+    weeks, a Gantt places it after a start and draws the bar; nobody types the
+    far end. This is that arithmetic and nothing more -- the duration is typed by
+    a person, so the result is still a plan, which is the line #179 drew and the
+    reason this reads no estimate, no velocity and nothing beneath the item.
+    """
+    if not span:
+        return targets_on
+    if targets_on:
+        sys.exit(SPAN_AND_TARGET)
+    if not starts_on:
+        sys.exit("--for measures a span, and there is no start date to measure it "
+                 "from.\n  Pass --start YYYY-MM-DD as well.")
+    return target_from(starts_on, span, config)
+
+
 def cmd_epic(args) -> int:
     require_sprint_config(args._config, "creating an epic")
     require_key_for_prefix(args._config, getattr(args, "key", None))
@@ -2806,7 +2902,9 @@ def cmd_epic(args) -> int:
     # costs one. Named `starts_on`/`targets_on` because `target` in this
     # function is already the initiative being attached to.
     starts_on = iso_date(getattr(args, "start", None), "--start")
-    targets_on = iso_date(getattr(args, "target", None), "--target")
+    targets_on = spanned_target(starts_on,
+                                iso_date(getattr(args, "target", None), "--target"),
+                                getattr(args, "span", None), args._config)
     labels = ["type:epic"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, _node = create_issue(
@@ -2832,11 +2930,16 @@ def cmd_epic(args) -> int:
         set_field(args.owner, args.project, item, "Status", "Todo")
         # Optional, always. An epic with no dates behaves exactly as it did
         # before these fields existed -- on every board, and in `validate`.
+        # Said the same way `plan` says it: a date reached by arithmetic looks
+        # exactly like one somebody typed, and the field cannot hold the
+        # difference.
+        note = (f" ({args.span} from {starts_on})" if getattr(args, "span", None) else "")
         for field_name, value in zip(DATE_FIELDS, (starts_on, targets_on),
                                      strict=True):
             if value:
                 set_field(args.owner, args.project, item, field_name, value)
-                print(f"  #{number} {field_name} = {value}")
+                print(f"  #{number} {field_name} = {value}"
+                      f"{note if field_name == DATE_FIELDS[1] else ''}")
     return 0
 
 
@@ -5740,6 +5843,26 @@ def planned_dates(start: str | None, target: str | None) -> list[tuple[str, str 
     return out
 
 
+def item_date(login: str, project: int, item_id: str, field_name: str) -> str | None:
+    """One DATE field's value on one item, or None if it holds nothing.
+
+    Its own call, for the reason `issue_assignees` is: `board_items` reads
+    `LEAN_ITEM_SELECTION` -- an item's id, number, repository and type and
+    deliberately nothing else -- and widening it would charge every board-wide
+    read for something one command needs. Addressed by node id, so it costs 1
+    point rather than a whole-board read.
+    """
+    data = graphql(
+        "query($i: ID!) { node(id: $i) { ... on ProjectV2Item { fieldValues(first: 20) "
+        "{ nodes { ... on ProjectV2ItemFieldDateValue { date field "
+        "{ ... on ProjectV2FieldCommon { name } } } } } } } }",
+        i=item_id,
+    )
+    nodes = (((data.get("data") or {}).get("node") or {}).get("fieldValues") or {}).get("nodes") or []
+    return next((n["date"] for n in nodes
+                 if (n.get("field") or {}).get("name") == field_name and n.get("date")), None)
+
+
 def cmd_plan(args) -> int:
     """Set or clear the dates on an epic or an initiative that already exists.
 
@@ -5762,9 +5885,18 @@ def cmd_plan(args) -> int:
     error has to come off. `clear_field` has existed since #170 and nothing
     reached it from a command line until now.
     """
-    if args.start is None and args.target is None:
-        sys.exit("plan needs --start, --target, or both. Either takes a "
-                 f"YYYY-MM-DD date in UTC, or {CLEAR_DATE!r} to remove one.")
+    span = getattr(args, "span", None)
+    if args.start is None and args.target is None and span is None:
+        sys.exit("plan needs --start, --target, --for, or a combination. A date is "
+                 f"YYYY-MM-DD in UTC,\n  {CLEAR_DATE!r} removes one, and --for sizes "
+                 f"the span from the start -- 6w, 10d, 3sprints.")
+    if span and args.target:
+        sys.exit(SPAN_AND_TARGET)
+    # Refused rather than resolved one way: `--start none --for 6w` asks for the
+    # span to be measured from the date it is removing in the same breath.
+    if span and (args.start or "").strip().casefold() == CLEAR_DATE:
+        sys.exit("--for measures from a start date, and --start none takes it away.\n"
+                 "  Clear the dates, or give the start this span runs from.")
     repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
     # **Every refusal before the first write**, in the order that costs least:
     # the dates parse with no API call at all, the level is one issue read, and
@@ -5784,13 +5916,32 @@ def cmd_plan(args) -> int:
     item = board_item_for(args.owner, args.project, repo, args.issue)
     if not item:
         sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
+    # **The start a span runs from may already be on the item**, which is what
+    # makes `plan X --for 8w` a sentence: re-sizing a phase is a thing a planner
+    # does on its own, without restating a start date that has not changed. Read
+    # only when `--for` is given and `--start` is not, so nothing else pays for it.
+    note = ""
+    if span:
+        starts_on = next((v for name, v in wanted if name == DATE_FIELDS[0]), None)
+        if starts_on is None:
+            starts_on = item_date(args.owner, args.project, item["id"], DATE_FIELDS[0])
+        if not starts_on:
+            sys.exit(
+                f"--for measures a span, and {repo}#{args.issue} has no start date to "
+                f"measure it from.\n  Pass --start YYYY-MM-DD as well, or set one first."
+            )
+        wanted.append((DATE_FIELDS[1], target_from(starts_on, span, args._config)))
+        note = f" ({span} from {starts_on})"
     for field_name, value in wanted:
         if value is None:
             clear_field(args.owner, args.project, item["id"], field_name)
             print(f"  #{args.issue} {field_name} cleared")
         else:
             set_field(args.owner, args.project, item["id"], field_name, value)
-            print(f"  #{args.issue} {field_name} = {value}")
+            # The provenance is printed because the field cannot hold it: a date
+            # arrived at by arithmetic looks exactly like one somebody typed.
+            print(f"  #{args.issue} {field_name} = {value}"
+                  f"{note if field_name == DATE_FIELDS[1] else ''}")
     return 0
 
 
@@ -7116,6 +7267,8 @@ PLAN_FIELDS = [
                                              "or none to remove it"),
     ("--target", "YYYY-MM-DD", "conditional", "when it is planned to finish, "
                                               "or none to remove it"),
+    ("--for", "6w | 10d | 3sprints", "conditional", "the target, sized from the "
+                                                    "start; calendar days, inclusive"),
 ]
 
 MOVE_FIELDS = [
@@ -7281,6 +7434,9 @@ what an initiative is:
     initiative_new.add_argument("--target", metavar="YYYY-MM-DD",
                                 help="planned finish; the baseline a slip is "
                                      "measured against")
+    initiative_new.add_argument("--for", dest="span", metavar="SPAN",
+                                help="size the span instead of naming its end: "
+                                     "6w, 10d, 3sprints. Calendar days, inclusive")
     initiative_new.add_argument("--intent")
     initiative_new.add_argument("--acceptance")
     initiative_fix = initiative_sub.add_parser(
@@ -7308,6 +7464,9 @@ what an initiative is:
                       help="planned start; a DATE field GitHub's roadmap can draw")
     epic.add_argument("--target", metavar="YYYY-MM-DD",
                       help="planned finish; the baseline a slip is measured against")
+    epic.add_argument("--for", dest="span", metavar="SPAN",
+                      help="size the span instead of naming its end: 6w, 10d, "
+                           "3sprints. Calendar days, inclusive")
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
     epic.set_defaults(func=cmd_epic)
@@ -7640,6 +7799,11 @@ why this exists:
     # both dates are parsed together so a bad one writes neither.
     planner.add_argument("--start", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
     planner.add_argument("--target", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
+    # `dest="span"`: `args.for` is not addressable in Python, and argparse would
+    # have named it that.
+    planner.add_argument("--for", dest="span", metavar="SPAN",
+                         help="size the span from the start instead of naming its "
+                              "end: 6w, 10d, 3sprints. Calendar days, inclusive")
     planner.add_argument("--repo", help="only needed if the item's repository "
                                         "cannot be read back")
     planner.set_defaults(func=cmd_plan)
