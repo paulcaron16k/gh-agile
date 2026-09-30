@@ -1,5 +1,5 @@
 #!/bin/sh
-# Tell me when the branch I just pulled is broken.
+# Tell me when the branch I just pulled is broken, and what it left unfinished.
 #
 # `git pull` after merging a pull request is the moment somebody is already at
 # the terminal, and it was the moment this repository's `main` sat red without
@@ -11,5 +11,11 @@
 [ -x "$(command -v gh)" ] || exit 0
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 [ "$branch" = "main" ] || exit 0
-python3 "$(git rev-parse --show-toplevel)/scripts/ci_status.py" --branch main --quiet || true
+root=$(git rev-parse --show-toplevel)
+python3 "$root/scripts/ci_status.py" --branch main --quiet || true
+# And the other half of the same moment: a pull request closes an issue, GitHub
+# sets no Status, and the wrap-up is a person's. `Item closed -> Done` is
+# deliberately off -- it would write Status and nothing else, leaving the issue
+# reading Done with no Evidence. See scripts/finish_merged.py.
+python3 "$root/scripts/finish_merged.py" --quiet || true
 exit 0

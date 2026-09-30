@@ -28,7 +28,7 @@ make scratch       # LIVE: leaves a scratch project standing;  make teardown NUM
 make metrics DIR=exports/AGILE
 make merge-check   # the suite against HEAD + origin/main. Run it BEFORE merging
 make ci-status     # whether main's last CI run passed
-make hooks         # install the post-merge hook that reports a red main
+make hooks         # post-merge hook: a red main, and issues a merge left unfinished
 ```
 
 **Green on a branch is not green on the merge.** Two pull requests cut from the same base, each passing

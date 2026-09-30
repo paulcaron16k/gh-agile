@@ -122,7 +122,7 @@ help:
 	@echo "make lint                syntax and style"
 	@echo "make merge-check         run the suite against HEAD + origin/main -- BEFORE merging"
 	@echo "make ci-status           whether main's last CI run passed"
-	@echo "make hooks               install the post-merge hook that reports a red main"
+	@echo "make hooks               post-merge hook: a red main, and issues a merge left unfinished"
 	@echo
 	@echo "OWNER=$(OWNER)  REPO=$(REPO)"
 	@echo
@@ -270,4 +270,5 @@ ci-status:
 hooks:
 	@cp templates/post-merge .git/hooks/post-merge
 	@chmod +x .git/hooks/post-merge
-	@echo '  installed .git/hooks/post-merge -- "git pull" on main now reports a red build'
+	@echo '  installed .git/hooks/post-merge -- "git pull" on main now reports a red'
+	@echo '  build, and any issue the merge closed that is not finished on the board'

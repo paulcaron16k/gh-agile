@@ -23,17 +23,23 @@ stories on.
 from __future__ import annotations
 
 import argparse
+import pathlib
 
 import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 ALL_OFF = dict.fromkeys((
     "Item closed", "Item added to project", "Auto-add sub-issues to project",
     "Auto-close issue", "Pull request merged", "Pull request linked to issue"),
     False)
-#: A board configured as the table recommends: all three `enable` ones on, the
-#: harmful one off, and the two pull-request ones off on a board of issues.
+#: A board configured as the table recommends: the two `enable` ones on, the
+#: harmful one off, the two pull-request ones off on a board of issues -- and
+#: `Item closed` **off**, which #186 changed. It writes Status and nothing else,
+#: so an issue it touches reads Done with no Evidence and no closing sprint
+#: label; the post-merge hook asks a person to finish it instead.
 CORRECT = {**ALL_OFF, "Auto-add sub-issues to project": True,
-           "Item closed": True, "Item added to project": True}
+           "Item added to project": True}
 
 
 class TestTheTableCoversEverything:
@@ -45,9 +51,9 @@ class TestTheTableCoversEverything:
     def test_each_one_by_name(self, tool, name):
         assert name in tool.WORKFLOW_ADVICE
 
-    def test_every_verdict_is_one_of_the_three(self, tool):
+    def test_every_verdict_is_one_of_the_four(self, tool):
         verdicts = {v for v, _why in tool.WORKFLOW_ADVICE.values()}
-        assert verdicts <= {"enable", "never", "issues-only"}
+        assert verdicts <= {"enable", "never", "issues-only", "by-hand"}
 
     def test_every_entry_carries_a_reason(self, tool):
         assert all(len(why) > 30 for _v, why in tool.WORKFLOW_ADVICE.values())
@@ -66,7 +72,7 @@ class TestTheTableCoversEverything:
 class TestValidateReportsOnlyWhatDiverges:
     def test_an_enable_that_is_off_is_reported(self, tool):
         found = tool.workflow_findings(ALL_OFF, 0)
-        assert any("Item closed is off" in line for line in found)
+        assert any("Item added to project is off" in line for line in found)
 
     def test_an_enable_that_is_on_is_not(self, tool):
         found = tool.workflow_findings(CORRECT, 0)
@@ -201,3 +207,80 @@ class TestThePullRequestCount:
     def test_an_item_with_no_content_does_not_break_it(self, tool, monkeypatch):
         monkeypatch.setattr(tool, "board_items", lambda *a, **k: [{"content": None}])
         assert tool.pull_request_items("o", 1) == 0
+
+
+class TestItemClosedIsOffOnPurpose:
+    """AGILE-186 reversed this one, and the reversal has to be legible.
+
+    It was `enable`, on a real measurement: #123 sat closed and In Progress for
+    twenty-two hours and #138 repeated it. What that missed is what the workflow
+    *cannot* do -- it writes Status and nothing else, so the issue reads Done
+    with no Evidence, no closing `sprint:` label and no completed-or-not-planned.
+    A visibly unfinished issue costs one command; one that looks finished is
+    indistinguishable from work somebody did.
+    """
+
+    def test_the_verdict_is_by_hand(self, tool):
+        verdict, _why = tool.WORKFLOW_ADVICE["Item closed"]
+        assert verdict == "by-hand"
+
+    def test_the_reason_says_what_it_cannot_write(self, tool):
+        _verdict, why = tool.WORKFLOW_ADVICE["Item closed"]
+        assert "Evidence" in why and "sprint:" in why
+
+    def test_and_names_what_replaces_it(self, tool):
+        """A verdict that only forbids leaves the reader with the gap."""
+        _verdict, why = tool.WORKFLOW_ADVICE["Item closed"]
+        assert "move --status Done --evidence" in why and "#186" in why
+
+    def test_off_is_not_reported(self, tool):
+        """The whole point: `validate` stopped arguing with the decision."""
+        assert not any("Item closed" in line for line in tool.workflow_findings(CORRECT, 0))
+
+    def test_all_off_no_longer_reports_it_either(self, tool):
+        assert not any("Item closed" in line for line in tool.workflow_findings(ALL_OFF, 0))
+
+    def test_ON_is_reported(self, tool):
+        found = tool.workflow_findings({**CORRECT, "Item closed": True}, 0)
+        line = next(x for x in found if "Item closed" in x)
+        assert "is ON" in line and "by hand" in line
+
+    def test_the_table_marks_it_by_hand(self, tool):
+        lines = tool.render_workflow_table(CORRECT, 0)
+        assert any("by hand" in line and "Item closed" in line for line in lines)
+
+    def test_the_table_carries_its_reason_although_it_is_off(self, tool):
+        """It is off on a correct board and looks exactly like an oversight --
+        more so than the others, because it was recommended until #186."""
+        text = "\n".join(tool.render_workflow_table(CORRECT, 0))
+        assert "writes Status and nothing else" in text
+
+
+class TestTheGuideAgreesWithTheTable:
+    """Two places say which workflows to turn on, and they can disagree.
+
+    The table is what `init` and `validate` print; the guide is what somebody
+    reads while configuring the project. #186 changed one verdict, and a guide
+    still recommending the opposite would be the more persuasive of the two.
+    """
+
+    def guide(self):
+        return (ROOT / "USER_GUIDE.md").read_text()
+
+    def test_the_guide_does_not_recommend_item_closed(self):
+        row = next(line for line in self.guide().splitlines()
+                   if line.startswith("| **Item closed**"))
+        assert "**no**" in row
+
+    def test_the_guide_gives_the_reason_the_table_gives(self):
+        assert "writes Status and *nothing else*" in self.guide()
+
+    def test_the_guide_names_what_replaces_it(self):
+        text = self.guide()
+        assert "make hooks" in text and "post-merge" in text
+
+    def test_auto_close_is_still_refused_in_both(self, tool):
+        row = next(line for line in self.guide().splitlines()
+                   if line.startswith("| **Auto-close issue**"))
+        assert "**no**" in row
+        assert tool.WORKFLOW_ADVICE["Auto-close issue"][0] == "never"

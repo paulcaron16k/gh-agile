@@ -1616,12 +1616,20 @@ STARTER_BOARDS = [
 #: is chasing a symptom. Two lists giving different advice about one setting is
 #: the drift #157 spent five stories on.
 WORKFLOW_ADVICE = {
+    # **Off on purpose, which is not the same as off.** It was `enable` until
+    # #186, on the strength of a real cost -- #123 sat closed-and-In-Progress
+    # for twenty-two hours and #138 repeated it on the next merge. What that
+    # reasoning missed is what the workflow *cannot* do: it writes Status and
+    # nothing else, so the issue it touches reads `Done` with no Evidence, no
+    # closing `sprint:` label and no choice between completed and not planned.
+    # A visibly unfinished issue costs one command; one that looks finished is
+    # indistinguishable from work somebody actually did.
     "Item closed": (
-        "enable",
-        "Status does not follow a close. An issue closed by a pull request's "
-        "`Closes #n` keeps whatever Status it had, so finished work sits in "
-        "In Progress looking live -- #123 did it for twenty-two hours and #138 "
-        "repeated it on merge",
+        "by-hand",
+        "it writes Status and nothing else -- no Evidence, no closing sprint: "
+        "label, no completed-or-not-planned -- so an issue it touches reads Done "
+        "while being unfinished. `move --status Done --evidence` writes all "
+        "three, and the post-merge hook asks for it at the terminal (#186)",
     ),
     "Item added to project": (
         "enable",
@@ -1683,6 +1691,8 @@ def workflow_findings(state: dict[str, bool], pull_requests: int) -> list[str]:
             out.append(f"{name} is off -- {why}")
         elif verdict == "never" and enabled:
             out.append(f"{name} is ON and should not be -- {why}")
+        elif verdict == "by-hand" and enabled:
+            out.append(f"{name} is ON, and closing is finished by hand here -- {why}")
         elif verdict == "issues-only" and enabled and not pull_requests:
             out.append(f"{name} is on, and this board holds no pull-request "
                        f"items -- {why}")
@@ -1705,7 +1715,8 @@ def automation_notes(login: str, project: int) -> list[str]:
 
 def render_workflow_table(state: dict[str, bool], pull_requests: int) -> list[str]:
     """Every workflow with its verdict. For the moment of configuring a project."""
-    verdict_mark = {"enable": "enable", "never": "never", "issues-only": "n/a here"}
+    verdict_mark = {"enable": "enable", "never": "never", "issues-only": "n/a here",
+                    "by-hand": "by hand"}
     out = []
     for name, (verdict, why) in WORKFLOW_ADVICE.items():
         enabled = state.get(name)
@@ -1715,7 +1726,9 @@ def render_workflow_table(state: dict[str, bool], pull_requests: int) -> list[st
         # everything except an `enable` that is on -- which needs no
         # explanation, it is working. `never` and `issues-only` always carry
         # theirs, because both are *off* on a correct board and a reader
-        # scanning a list of things that are off would otherwise turn them on.
+        # scanning a list of things that are off would otherwise turn them on --
+        # and `by-hand` most of all, since it is the one that was recommended
+        # until #186 and looks exactly like an oversight.
         # That is the whole failure this table exists to prevent: `Auto-close
         # issue` looks exactly like a missing setting and is the one that cost
         # `--not-planned` its reason.
