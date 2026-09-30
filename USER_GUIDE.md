@@ -951,14 +951,30 @@ are executable code, so cloning never brings them — and even the versioned rou
 config` per clone. Something is done once per developer per repository either
 way.
 
-The hook it writes is four lines and reaches no path inside the extension's own
-checkout:
+The hook it writes reaches no path inside the extension's own checkout, and it
+distinguishes *nothing to report* from *could not report*:
 
 ```sh
 [ -x "$(command -v gh)" ] || exit 0
-gh agile unfinished --quiet || true
+if said=$(gh agile unfinished --quiet 2>&1); then
+    [ -n "$said" ] && printf '%s\n' "$said" >&2
+    exit 0
+fi
+printf '%s\n' "  gh-agile: the post-merge check did not run, so nothing was checked." \
+              "$said" "  gh extension upgrade agile" >&2
 exit 0
 ```
+
+**`gh agile unfinished` exits non-zero only when it could not run.** A finding is
+not a failure — an outstanding issue still exits 0 — so that code means *the
+check did not happen* and nothing else. It is what lets the hook say so in its
+own words rather than leaving a stray `gh` error to stand in for it, and the
+commonest cause is the ordinary one:
+
+> `gh-agile: the post-merge check did not run, so nothing was checked.`
+> `gh agile: error: argument command: invalid choice: 'unfinished'`
+> `If that says the command is unknown, this clone's gh-agile is older than`
+> `its hook:  gh extension upgrade agile`
 
 `gh agile unfinished` is the check, and it can be run by hand at any time —
 `--range` takes any revision range, and defaults to `ORIG_HEAD..HEAD`, which is
@@ -1003,8 +1019,8 @@ requests, and a story left open after a partial merge is ordinary. What makes it
 worth saying is local to the merge you just pulled, which is where the hook is
 standing.
 
-It is read-only, silent when there is nothing to say, and **exits 0 on every
-path** — no `gh`, no network, no board, a fresh clone with no `ORIG_HEAD`. A
+It is read-only, silent when the check ran and found nothing, and **exits 0 on
+every path** — no `gh`, no network, no board, a fresh clone with no `ORIG_HEAD`. A
 hook that can stop you pulling is a hook people delete.
 
 It does not restate what a finished issue looks like: it asks `gh agile validate

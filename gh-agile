@@ -6804,7 +6804,7 @@ def merged_pull_requests(subjects: list[str]) -> list[int]:
     return found
 
 
-def closing_issues(pull_request: int) -> list[int]:
+def closing_issues(pull_request: int) -> list[tuple[str, int]] | None:
     """Which issues that pull request closes, **as GitHub resolved it**.
 
     Not by parsing `Closes #n` out of the commit message: the reference lives in
@@ -6820,7 +6820,10 @@ def closing_issues(pull_request: int) -> list[int]:
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return []
+        # **`None`, not `[]`.** A call that failed and a pull request that closes
+        # nothing are different answers, and collapsing them reports a clean
+        # merge to somebody whose token has just expired. See #192.
+        return None
     refs = (json.loads(result.stdout or "{}") or {}).get("closingIssuesReferences") or []
     # The repository as well as the number, for the reason `board_item_for`
     # exists: a board may span repositories and each numbers its issues from 1,
@@ -6909,7 +6912,11 @@ HOOK_MARKER = "# gh-agile post-merge hook"
 #: no choice of interpreter: `gh` resolves the extension, and where `gh` keeps
 #: its extensions is a host-and-OS detail that would rot quietly inside every
 #: consumer's `.git/hooks`.
-POST_MERGE_HOOK = f"""#!/bin/sh
+#:
+#: A **raw** f-string, so what is written here is what lands in the file: an
+#: ordinary one turns `\n` into a newline and `\` at a line end into nothing,
+#: which silently reflowed this script into one line the first time.
+POST_MERGE_HOOK = rf"""#!/bin/sh
 {HOOK_MARKER} -- installed by `gh agile hooks`, and safe to delete.
 #
 # A merged pull request closes an issue and GitHub sets no Status -- or does not
@@ -6919,9 +6926,25 @@ POST_MERGE_HOOK = f"""#!/bin/sh
 # at the moment they are already at the terminal.
 #
 # Read-only, and it never blocks a pull: a hook that can stop you pulling is a
-# hook people delete.
+# hook people delete. Every path below ends in `exit 0`.
+#
+# `unfinished` exits non-zero only when it could not run. A finding is not a
+# failure, so that code means "the check did not happen" and nothing else --
+# which is what lets the message below be this hook's own words rather than
+# whatever error happened to reach the terminal.
 [ -x "$(command -v gh)" ] || exit 0
-gh agile unfinished --quiet || true
+if said=$(gh agile unfinished --quiet 2>&1); then
+    [ -n "$said" ] && printf '%s\n' "$said" >&2
+    exit 0
+fi
+printf '%s\n' \
+  "" \
+  "  gh-agile: the post-merge check did not run, so nothing was checked." \
+  "$said" \
+  "  If that says the command is unknown, this clone's gh-agile is older than" \
+  "  its hook:  gh extension upgrade agile" \
+  "  To stop checking here, delete $0" \
+  "" >&2
 exit 0
 """
 
@@ -6968,26 +6991,47 @@ def cmd_unfinished(args) -> int:
     told at the moment they are already at the terminal rather than at the next
     time somebody remembers to run `validate`.
 
-    **Read-only, and it never blocks a pull**: it returns 0 on every path,
-    including no `git`, no range, and a board it cannot read. A hook that can
-    stop you pulling is a hook people delete.
+    **Read-only, and it never blocks a pull.** The hook it is written for turns
+    every outcome into `exit 0`.
+
+    **The exit code is the seam that hook reads, and it says one thing: whether
+    the check ran.** 0 whenever it did, whatever it found -- an outstanding issue
+    is a finding, not a failure. Non-zero only when it could not run at all, so
+    the hook can say *the check did not happen* in its own words instead of
+    letting a stray `gh` error stand in for it (#192).
+
+    A range that does not resolve is not a failure: a first clone has no
+    `ORIG_HEAD` and a pull that merged nothing has nothing to say.
     """
     log = subprocess.run(["git", "log", "--format=%s", args.range],
                          capture_output=True, text=True)
     if log.returncode != 0:
-        # No ORIG_HEAD on a first clone, a range that does not resolve, not a
-        # repository. Silence rather than a complaint: this is a prompt.
         return 0
     issues = []
     for pull_request in merged_pull_requests(log.stdout.splitlines()):
-        for ref in closing_issues(pull_request):
+        closed = closing_issues(pull_request)
+        if closed is None:
+            # **Not the same as closing nothing.** Reporting "nothing waiting"
+            # because the API call failed is the quiet wrong answer this bug is
+            # about: it looks exactly like a clean merge.
+            print(f"  could not ask GitHub what pull request #{pull_request} closes",
+                  file=sys.stderr)
+            return 1
+        for ref in closed:
             if ref not in issues:
                 issues.append(ref)
     if not issues:
         if not args.quiet:
             print(f"  nothing closed by {args.range} is waiting to be finished")
         return 0
-    board = rows(args.owner, args.project, with_history=False)
+    try:
+        board = rows(args.owner, args.project, with_history=False)
+    except (MissingScope, SystemExit) as exc:
+        # `rows` exits on a board it cannot read -- the right answer to somebody
+        # who typed a command, and the wrong one inside a hook, where it would
+        # be indistinguishable from a clean pull.
+        print(f"  could not read project {args.project}: {exc}", file=sys.stderr)
+        return 1
     reports = [text for repo, issue in issues
                if (text := outstanding(args, board, repo, issue))]
     if not reports:

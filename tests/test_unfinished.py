@@ -110,9 +110,12 @@ class TestWhatItAsksGitHub:
                             lambda cmd, **k: Stub(0, '{"closingIssuesReferences": []}'))
         assert hook.closing_issues(188) == []
 
-    def test_a_failed_call_reports_nothing_rather_than_raising(self, hook, monkeypatch):
+    def test_a_failed_call_is_none_and_not_an_empty_list(self, hook, monkeypatch):
+        """A call that failed and a pull request that closes nothing are
+        different answers. Collapsing them reported a clean merge to somebody
+        whose token had just expired -- AGILE-192."""
         monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(1, ""))
-        assert hook.closing_issues(188) == []
+        assert hook.closing_issues(188) is None
 
 
 class TestTheTwoStatesAMergeLeaves:
@@ -280,9 +283,14 @@ class TestInstallingTheHook:
         assert "gh agile unfinished --quiet" in repo.read_text()
 
     def test_it_cannot_fail_a_pull(self, hook, repo):
+        """Every `exit` in it, not merely the last one: the failure branch
+        added by #192 is a second way out of the script."""
         hook.cmd_hooks(argparse.Namespace())
         text = repo.read_text()
-        assert "|| true" in text and text.rstrip().endswith("exit 0")
+        exits = [line.strip() for line in text.splitlines()
+                 if line.strip().startswith("exit ")]
+        assert exits and all(line == "exit 0" for line in exits)
+        assert text.rstrip().endswith("exit 0")
 
     def test_its_own_hook_is_replaced(self, hook, repo, capsys):
         """Somebody who installed one last month gets this by running it again,
@@ -335,3 +343,108 @@ class TestThisRepositorysOwnHookAgrees:
 
     def test_make_hooks_still_installs_the_template(self):
         assert "templates/post-merge" in (ROOT / "Makefile").read_text()
+
+
+class TestSayingWhatDidNotHappen:
+    """A check that cannot run says so, in the hook's words. AGILE-192.
+
+    Filed as *silent*, which was wrong and is recorded on the issue: `|| true`
+    swallowed the exit code and never the output, so a stray `can't open file`
+    or `invalid choice` did reach the terminal. What was missing is that neither
+    says a post-merge check did not happen, nor what to do about it -- and both
+    repeated on every pull unchanged.
+    """
+
+    def test_a_finding_is_not_a_failure(self, hook, monkeypatch, capsys):
+        """The contract the hook reads: non-zero means the check did not run,
+        never that it found something."""
+        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        monkeypatch.setattr(hook, "closing_issues", lambda pr: [(REPO, 174)])
+        monkeypatch.setattr(hook, "rows", lambda *a, **k: [])
+        monkeypatch.setattr(hook, "outstanding",
+                            lambda a, b, repo, issue: "  #174 needs finishing")
+        assert hook.cmd_unfinished(args_for(hook)) == 0
+
+    def test_a_failed_closing_lookup_is_not_a_clean_merge(self, hook, monkeypatch,
+                                                          capsys):
+        """`closing_issues` returning None rather than []: a token that expired
+        would otherwise report *nothing waiting*, which looks exactly right."""
+        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        monkeypatch.setattr(hook, "closing_issues", lambda pr: None)
+        assert hook.cmd_unfinished(args_for(hook)) == 1
+        assert "could not ask GitHub" in capsys.readouterr().err
+
+    def test_a_board_it_cannot_read_is_not_a_clean_merge(self, hook, monkeypatch,
+                                                         capsys):
+        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        monkeypatch.setattr(hook, "closing_issues", lambda pr: [(REPO, 174)])
+        def unreadable(*a, **k):
+            raise SystemExit("no project 4 found")
+        monkeypatch.setattr(hook, "rows", unreadable)
+        assert hook.cmd_unfinished(args_for(hook)) == 1
+        assert "could not read project" in capsys.readouterr().err
+
+    def test_a_missing_scope_is_reported_rather_than_raised(self, hook, monkeypatch,
+                                                            capsys):
+        """`MissingScope` travels uncaught to `main` by design; a hook is where
+        that would become a traceback on somebody's pull."""
+        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        monkeypatch.setattr(hook, "closing_issues", lambda pr: [(REPO, 174)])
+        def unscoped(*a, **k):
+            raise hook.MissingScope("read:project is missing")
+        monkeypatch.setattr(hook, "rows", unscoped)
+        assert hook.cmd_unfinished(args_for(hook)) == 1
+
+    def test_an_unresolvable_range_is_still_not_a_failure(self, hook, monkeypatch):
+        """A first clone has no ORIG_HEAD and a pull that merged nothing has
+        nothing to say. Neither is a broken check."""
+        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(128, ""))
+        assert hook.cmd_unfinished(args_for(hook)) == 0
+
+
+class TestTheHookScriptItself:
+    """The shell, which is where this bug lived and where no test looked."""
+
+    def script(self, hook):
+        return hook.POST_MERGE_HOOK
+
+    def test_it_is_valid_shell(self, hook, tmp_path):
+        import subprocess
+        path = tmp_path / "post-merge"
+        path.write_text(self.script(hook))
+        assert subprocess.run(["sh", "-n", str(path)]).returncode == 0
+
+    def test_it_says_the_check_did_not_happen(self, hook):
+        assert "the post-merge check did not run" in self.script(hook)
+
+    def test_it_names_the_fix(self, hook):
+        assert "gh extension upgrade agile" in self.script(hook)
+
+    def test_it_says_how_to_stop(self, hook):
+        """A message with no way out is one people silence by deleting the
+        hook, which takes the working half with it."""
+        assert "delete $0" in self.script(hook)
+
+    def test_it_passes_the_underlying_message_through(self, hook):
+        """The tool's own words are still worth showing; they are just not
+        enough on their own."""
+        assert '"$said"' in self.script(hook)
+
+    def test_every_path_exits_zero(self, hook):
+        lines = [line.strip() for line in self.script(hook).splitlines()
+                 if line.strip().startswith("exit ")]
+        assert lines and all(line == "exit 0" for line in lines)
+
+    def test_the_escapes_survived_the_f_string(self, hook):
+        r"""An ordinary f-string turns `\n` into a newline and `\` at a line end
+        into nothing, which reflowed this script into one line the first time it
+        was written. It is raw for that reason."""
+        assert "printf '%s\\n'" in self.script(hook)
+        assert self.script(hook).count("\\\n") >= 5
+
+    def test_this_repositorys_template_says_the_same(self):
+        """Two hook bodies exist and can drift; the sentence they share is the
+        one a reader acts on."""
+        template = (ROOT / "templates" / "post-merge").read_text()
+        assert "the post-merge check did not run" in template
+        assert "gh extension upgrade agile" in template
