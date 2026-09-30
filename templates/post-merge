@@ -11,11 +11,15 @@
 [ -x "$(command -v gh)" ] || exit 0
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 [ "$branch" = "main" ] || exit 0
-root=$(git rev-parse --show-toplevel)
-python3 "$root/scripts/ci_status.py" --branch main --quiet || true
+python3 "$(git rev-parse --show-toplevel)/scripts/ci_status.py" --branch main --quiet || true
 # And the other half of the same moment: a pull request closes an issue, GitHub
-# sets no Status, and the wrap-up is a person's. `Item closed -> Done` is
-# deliberately off -- it would write Status and nothing else, leaving the issue
-# reading Done with no Evidence. See scripts/finish_merged.py.
-python3 "$root/scripts/finish_merged.py" --quiet || true
+# sets no Status -- or does not close it at all -- and the wrap-up is a person's.
+# `Item closed -> Done` is deliberately off, because it would write Status and
+# nothing else, leaving the issue reading Done with no Evidence.
+#
+# **This line is the whole hook that `gh agile hooks` installs elsewhere.** It
+# reaches no path inside this checkout, which is what makes it work in a
+# repository that is not this one (#193). The `ci_status.py` line above does,
+# and is this repository's own business.
+gh agile unfinished --quiet || true
 exit 0

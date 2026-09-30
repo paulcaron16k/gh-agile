@@ -276,8 +276,10 @@ class TestTheGuideAgreesWithTheTable:
         assert "writes Status and *nothing else*" in self.guide()
 
     def test_the_guide_names_what_replaces_it(self):
+        """And names it as the command a consumer can run, not as a Makefile
+        target of this repository -- #193."""
         text = self.guide()
-        assert "make hooks" in text and "post-merge" in text
+        assert "gh agile hooks" in text and "post-merge" in text
 
     def test_auto_close_is_still_refused_in_both(self, tool):
         row = next(line for line in self.guide().splitlines()

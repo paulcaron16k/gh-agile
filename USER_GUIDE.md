@@ -935,12 +935,38 @@ than at the next `validate` run. That is the whole gap, and `#174` sat in it for
 days.
 
 ```bash
-make hooks
+gh agile hooks
 ```
 
-installs `.git/hooks/post-merge`, so `git pull` on `main` — the moment somebody
-is already at the terminal — reports two things: whether `main`'s last CI run is
-red, and any issue the merge just closed that the board has not caught up with.
+installs `.git/hooks/post-merge` into the clone you are standing in, so `git
+pull` — the moment somebody is already at the terminal — names any issue the
+merge closed and nobody finished. `gh agile init` prints the same line at the
+end of a fresh setup, and running `hooks` again replaces a hook this tool wrote.
+A hook somebody else wrote is refused rather than overwritten, with the one line
+to add to it.
+
+**It is per clone, and that is git's decision rather than an oversight.** Hooks
+are executable code, so cloning never brings them — and even the versioned route,
+`git config core.hooksPath .githooks` with the hook committed, needs one `git
+config` per clone. Something is done once per developer per repository either
+way.
+
+The hook it writes is four lines and reaches no path inside the extension's own
+checkout:
+
+```sh
+[ -x "$(command -v gh)" ] || exit 0
+gh agile unfinished --quiet || true
+exit 0
+```
+
+`gh agile unfinished` is the check, and it can be run by hand at any time —
+`--range` takes any revision range, and defaults to `ORIG_HEAD..HEAD`, which is
+what a pull just merged:
+
+```bash
+gh agile unfinished --range main@{1}..main
+```
 
 **A merge leaves an issue in one of two states, and they need different
 commands.** GitHub may close it and leave the board behind:
