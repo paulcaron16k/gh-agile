@@ -93,6 +93,16 @@ class TestTheRuleIsNotRestated:
         monkeypatch.setattr(hook.subprocess, "run", lambda *a, **k: Stub(1, "a problem"))
         assert hook.unfinished(187) == "a problem"
 
+    def test_validate_is_never_asked_about_an_open_issue(self, hook, monkeypatch):
+        """An open issue whose pull request merged is not a convention
+        violation -- the board cannot see pull requests, and a story left open
+        after a partial merge is ordinary. AGILE-190 keeps that knowledge here
+        rather than making it a rule the validator cannot fairly hold."""
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "OPEN")
+        monkeypatch.setattr(hook, "unfinished", lambda issue: pytest.fail(
+            "validate was asked about an open issue"))
+        assert hook.outstanding(186) is not None
+
     def test_a_clean_issue_says_nothing(self, hook, monkeypatch):
         monkeypatch.setattr(hook.shutil, "which", lambda name: "/usr/bin/gh")
         monkeypatch.setattr(hook.subprocess, "run", lambda *a, **k: Stub(0, ""))
@@ -112,21 +122,95 @@ class Stub:
         self.returncode, self.stdout, self.stderr = returncode, stdout, ""
 
 
-class TestTheReport:
-    def test_it_names_the_issue_and_the_command(self, hook):
-        text = hook.report(187, "closed but status is not Done (1):")
-        assert "#187" in text
-        assert "gh agile move 187 --status Done --evidence" in text
+def rendered(hook, issue):
+    """The text the developer would see for this issue, or '' if nothing."""
+    entry = hook.outstanding(issue)
+    return hook.report(issue, *entry) if entry else ""
 
-    def test_it_says_not_to_close_again_and_why(self, hook):
+
+class TestTheTwoStatesAMergeLeaves:
+    """GitHub closes the issue, or it does not, and they need different
+    commands. Measured across five consecutive pull requests: the closing link
+    was registered for every one and the close fired for only some, which is how
+    #186's own merge left it open. AGILE-190.
+    """
+
+    def test_closed_and_not_done_reports_the_no_close_command(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "CLOSED")
+        monkeypatch.setattr(hook, "unfinished", lambda issue: "closed but status is not Done")
+        text = rendered(hook, 174)
+        assert "gh agile move 174 --status Done --evidence" in text
+        assert "--close" not in text.split("finish it:")[1].splitlines()[0]
+
+    def test_and_says_why_not(self, hook, monkeypatch):
         """Closing an already-closed issue exits 0 and changes nothing, which is
         how `--not-planned` lost its reason."""
-        text = hook.report(187, "x")
-        assert "no --close" in text
-        assert "exits 0" in text
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "CLOSED")
+        monkeypatch.setattr(hook, "unfinished", lambda issue: "x")
+        assert "no --close" in rendered(hook, 174) and "exits 0" in rendered(hook, 174)
 
-    def test_it_carries_what_validate_said(self, hook):
-        assert "closed but status is not Done" in hook.report(187, "closed but status is not Done")
+    def test_it_carries_what_validate_said(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "CLOSED")
+        monkeypatch.setattr(hook, "unfinished", lambda issue: "closed but status is not Done")
+        assert "closed but status is not Done" in rendered(hook, 174)
+
+    def test_closed_and_done_reports_nothing(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "CLOSED")
+        monkeypatch.setattr(hook, "unfinished", lambda issue: None)
+        assert hook.outstanding(187) is None
+
+    def test_still_open_is_reported(self, hook, monkeypatch):
+        """The gap #186 shipped with: GitHub left the issue open, `validate`
+        found nothing wrong with it, and the terminal said nothing."""
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "OPEN")
+        assert "is still open" in rendered(hook, 186)
+
+    def test_and_reports_the_close_command(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "OPEN")
+        assert "gh agile move 186 --status Done --close --evidence" in rendered(hook, 186)
+
+    def test_and_says_why_the_reason_matters(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "OPEN")
+        assert "not-planned" in rendered(hook, 186)
+
+    def test_an_open_issue_nobody_started_is_still_reported(self, hook, monkeypatch):
+        """Todo, no work done, and a merged pull request says it closed it.
+        That is exactly the case worth seeing."""
+        monkeypatch.setattr(hook, "issue_state", lambda issue: "OPEN")
+        assert hook.outstanding(186) is not None
+
+    def test_an_unreadable_state_reports_nothing(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "issue_state", lambda issue: None)
+        assert hook.outstanding(186) is None
+
+    def test_the_state_is_read_once(self, hook, monkeypatch):
+        """Asking twice -- once for the message, once for the command -- is how
+        the two end up disagreeing about what finished means."""
+        calls = []
+        monkeypatch.setattr(hook, "issue_state",
+                            lambda issue: calls.append(issue) or "OPEN")
+        hook.outstanding(186)
+        assert calls == [186]
+
+    def test_two_issues_are_each_in_their_own_state(self, hook, monkeypatch):
+        """One pull request can close several, and they need not agree."""
+        monkeypatch.setattr(hook, "issue_state",
+                            lambda issue: "OPEN" if issue == 186 else "CLOSED")
+        monkeypatch.setattr(hook, "unfinished", lambda issue: "closed but status is not Done")
+        assert "--close" in rendered(hook, 186).split("finish it:")[1]
+        assert "--close" not in rendered(hook, 174).split("finish it:")[1].splitlines()[0]
+
+
+class TestReadingTheState:
+    def test_it_asks_github_for_the_state(self, hook, monkeypatch):
+        asked = []
+        monkeypatch.setattr(hook, "run", lambda cmd: asked.append(cmd) or '{"state": "OPEN"}')
+        assert hook.issue_state(186) == "OPEN"
+        assert "state" in asked[0] and "186" in asked[0]
+
+    def test_a_failed_read_is_none_rather_than_a_guess(self, hook, monkeypatch):
+        monkeypatch.setattr(hook, "run", lambda cmd: None)
+        assert hook.issue_state(186) is None
 
 
 class TestItNeverFailsAPull:
@@ -135,7 +219,11 @@ class TestItNeverFailsAPull:
                             ["finish_merged"] + (["--quiet"] if quiet else []))
         monkeypatch.setattr(hook, "run", lambda cmd: log)
         monkeypatch.setattr(hook, "closing_issues", lambda pr: list(issues))
-        monkeypatch.setattr(hook, "unfinished", lambda issue: problem)
+        # `outstanding` is the seam main() turns on: it already decided which of
+        # the two states the issue is in and which command that needs.
+        monkeypatch.setattr(hook, "outstanding", lambda issue: (
+            (problem, f"gh agile move {issue} --status Done --evidence \"...\"", "why")
+            if problem else None))
         code = hook.main()
         return code, capsys.readouterr()
 

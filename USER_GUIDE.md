@@ -942,13 +942,40 @@ installs `.git/hooks/post-merge`, so `git pull` on `main` — the moment somebod
 is already at the terminal — reports two things: whether `main`'s last CI run is
 red, and any issue the merge just closed that the board has not caught up with.
 
+**A merge leaves an issue in one of two states, and they need different
+commands.** GitHub may close it and leave the board behind:
+
 ```
   #187 was closed by this merge, and the board has not caught up:
       closed but status is not Done (1):
         #187 AGILE-187 A planner types a duration, not an end : 'In Progress'
 
       finish it:  gh agile move 187 --status Done --evidence "..."
+      no --close: it is already closed, and closing an issue twice is a
+      no-op that exits 0 -- which is how a close reason gets lost.
 ```
+
+or — just as often — not close it at all:
+
+```
+  #186 is still open, although a merged pull request in this range says it closes it.
+
+      finish it:  gh agile move 186 --status Done --close --evidence "..."
+      --close, because nothing else has closed it and the reason is this tool's
+      to choose -- `completed`, or `--not-planned` if that is what happened.
+```
+
+**Do not assume `Closes #n` closes the issue.** Measured across five consecutive
+pull requests on this repository: the link GitHub resolves
+(`closingIssuesReferences`) was registered for every one, and the close fired
+for some and not others — `#186`'s own merge left it open. The link is reliable;
+the close is not.
+
+`validate` is deliberately not taught about the second case. An open issue whose
+pull request merged is not a convention violation — the board cannot see pull
+requests, and a story left open after a partial merge is ordinary. What makes it
+worth saying is local to the merge you just pulled, which is where the hook is
+standing.
 
 It is read-only, silent when there is nothing to say, and **exits 0 on every
 path** — no `gh`, no network, no board, a fresh clone with no `ORIG_HEAD`. A

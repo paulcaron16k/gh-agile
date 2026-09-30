@@ -14,6 +14,11 @@ and `In Progress` for twenty-two hours, `#138` repeated it on the next merge,
 and `#174` was still in that state days later. None of those is an argument for
 the workflow; every one is an argument for this.
 
+**Two states, because a merge leaves either one** (`#190`). GitHub may close the
+issue and leave the board behind, or -- just as often here -- not close it at
+all: `#186`'s own merge left it open. They need different commands, so this
+reads the state once and says which.
+
 The same moment, and the same reasoning, as `ci_status.py`: `git pull` on `main`
 after a merge is when somebody is looking.
 
@@ -93,15 +98,71 @@ def unfinished(issue: int) -> str | None:
     return result.stdout.strip() if result.returncode == 1 and result.stdout.strip() else None
 
 
-def report(issue: int, found: str) -> str:
+def issue_state(issue: int) -> str | None:
+    """`OPEN` or `CLOSED`, or None if it cannot be read.
+
+    Read **once**, with both branches turning on it. Asking twice -- once to
+    decide which message to print and once to decide which command -- is how the
+    two end up disagreeing about what finished means.
+    """
+    out = run(["gh", "issue", "view", str(issue), "--json", "state"])
+    return (json.loads(out or "{}") or {}).get("state") if out is not None else None
+
+
+#: The two states a merge can leave an issue in, and what each one needs. They
+#: are different commands, which is why this is not a filter over one message.
+#:
+#: **GitHub's auto-close is not reliable here.** Measured across five
+#: consecutive pull requests: `closingIssuesReferences` was registered for every
+#: one of them -- #189 -> 186, #188 -> 187, #185 -> 183, #184 -> 182, #181 ->
+#: 179 -- and the close fired for some and not others. #186's own merge left it
+#: open, which is how this gap was found. So the open case is at least as common
+#: as the closed one, and a prompt covering only the closed one reads, to
+#: somebody watching it stay quiet, as an assurance that nothing is outstanding.
+STILL_OPEN = (
+    "is still open, although a merged pull request in this range says it closes it.",
+    "--close, because nothing else has closed it and the reason is this tool's\n"
+    "      to choose -- `completed`, or `--not-planned` if that is what happened.",
+)
+CLOSED_NOT_DONE = (
+    "was closed by this merge, and the board has not caught up:",
+    "no --close: it is already closed, and closing an issue twice is a\n"
+    "      no-op that exits 0 -- which is how a close reason gets lost.",
+)
+
+
+def outstanding(issue: int) -> tuple[str, str, str] | None:
+    """`(what is wrong, the command, why that command)`, or None if it is done.
+
+    An issue left **open** is not a convention violation and `validate` rightly
+    says nothing about it: the board cannot see pull requests, and a story left
+    open after a partial merge is ordinary. What makes it reportable is local to
+    the merge being pulled -- a pull request in this range said it closed it --
+    which is exactly where this is standing, so the knowledge stays here rather
+    than becoming a rule the validator cannot fairly hold.
+    """
+    state = issue_state(issue)
+    if state is None:
+        return None
+    if state == "OPEN":
+        detail, why = STILL_OPEN
+        return detail, f"gh agile move {issue} --status Done --close --evidence \"...\"", why
+    found = unfinished(issue)
+    if not found:
+        return None
+    detail, why = CLOSED_NOT_DONE
+    return f"{detail}\n{found}", f"gh agile move {issue} --status Done --evidence \"...\"", why
+
+
+def report(issue: int, detail: str, command: str, why: str) -> str:
     """What the developer sees. One issue, what is wrong, and the command."""
-    body = "\n".join(f"      {line}" for line in found.splitlines() if line.strip())
+    body = "\n".join(f"      {line}" for line in detail.splitlines()[1:] if line.strip())
+    headline = detail.splitlines()[0]
     return (
-        f"\n  #{issue} was closed by this merge, and the board has not caught up:\n"
-        f"{body}\n\n"
-        f"      finish it:  gh agile move {issue} --status Done --evidence \"...\"\n"
-        f"      no --close: it is already closed, and closing an issue twice is a\n"
-        f"      no-op that exits 0 -- which is how a close reason gets lost.\n"
+        f"\n  #{issue} {headline}\n"
+        + (f"{body}\n" if body.strip() else "")
+        + f"\n      finish it:  {command}\n"
+        f"      {why}\n"
     )
 
 
@@ -125,8 +186,8 @@ def main() -> int:
         for issue in closing_issues(pull_request):
             if issue not in issues:
                 issues.append(issue)
-    reports = [report(issue, found)
-               for issue in issues if (found := unfinished(issue))]
+    reports = [report(issue, *entry)
+               for issue in issues if (entry := outstanding(issue))]
     if not reports:
         if not args.quiet:
             print(f"  nothing closed by {args.range} is waiting to be finished")
