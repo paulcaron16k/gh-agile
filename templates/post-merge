@@ -17,9 +17,24 @@ python3 "$(git rev-parse --show-toplevel)/scripts/ci_status.py" --branch main --
 # `Item closed -> Done` is deliberately off, because it would write Status and
 # nothing else, leaving the issue reading Done with no Evidence.
 #
-# **This line is the whole hook that `gh agile hooks` installs elsewhere.** It
+# **This block is the whole hook that `gh agile hooks` installs elsewhere.** It
 # reaches no path inside this checkout, which is what makes it work in a
 # repository that is not this one (#193). The `ci_status.py` line above does,
 # and is this repository's own business.
-gh agile unfinished --quiet || true
+#
+# The `else` is #192: `unfinished` returns non-zero only when it could not run,
+# so this says *the check did not happen* in the hook's own words instead of
+# letting a stray `gh` error stand in for it.
+if said=$(gh agile unfinished --quiet 2>&1); then
+    [ -n "$said" ] && printf '%s\n' "$said" >&2
+else
+    printf '%s\n' \
+      "" \
+      "  gh-agile: the post-merge check did not run, so nothing was checked." \
+      "$said" \
+      "  If that says the command is unknown, this clone's gh-agile is older than" \
+      "  its hook:  gh extension upgrade agile" \
+      "  To stop checking here, delete $0" \
+      "" >&2
+fi
 exit 0
