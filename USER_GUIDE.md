@@ -33,11 +33,17 @@ gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an exis
   Two things the API cannot do, so they are yours in the web UI:
     https://github.com/users/you/projects/7/workflows
 
-    [ ]  Item added to project
-           without it: an item arriving by any other route has no Status, so it
-           is in no column of any board
-    [on] Item closed
-    [on] Auto-add sub-issues to project
+    [off] enable    Item added to project
+             an item arriving by any other route has no Status, so it is in
+             no column of any board
+    [on]  enable    Auto-add sub-issues to project
+    [off] by hand   Item closed
+             it writes Status and nothing else -- no Evidence, no closing
+             sprint: label, no completed-or-not-planned -- so an issue it
+             touches reads Done while being unfinished
+    [off] never     Auto-close issue
+             it races this tool's own close and wins
+    ...
 
   Then: gh agile validate
 ```
@@ -888,7 +894,7 @@ Measured on two live projects, which is where the recommendation comes from:
 | Workflow | Enable? | What its absence costs |
 |---|---|---|
 | **Auto-add sub-issues to project** | **yes** (on by default) | Every story created under a boarded epic would need a `sync` |
-| **Item closed** → Status = Done | **yes** | Status does not follow a close. An issue closed by a pull request's `Closes #n` keeps whatever Status it had, so finished work sits in the In Progress column looking live |
+| **Item closed** → Status = Done | **no** — see below | Nothing it can fix. Status does not follow a close, so finished work sits in the In Progress column looking live — but this workflow writes Status and *nothing else*, so it replaces a visibly unfinished issue with one that reads Done and is not. The post-merge hook asks a person instead |
 | **Item added to project** → Status = Todo | **yes** | An item arriving by any other route has no Status, which puts it in no column of any board |
 | **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `move` can set the reason. That is how `--not-planned` lost its reason on the sandbox |
 | Pull request merged · Pull request linked to issue | not for a board of issues | They act on **pull-request items**. This board holds 65 items and every one is an issue, so both would do nothing |
@@ -896,12 +902,61 @@ Measured on two live projects, which is where the recommendation comes from:
 **Project → ⋯ (top right) → Workflows.** It is a setting on the **project**, not
 on a repository — see below.
 
-**`Item closed` is the one people miss**, and it is the one that matters most
-here: every issue in this repository is closed by a merged pull request saying
-`Closes #n`, and that automation sets the issue's state and *nothing else*.
-Without this workflow, `gh agile validate` reports `closed but status is not Done`
-and `board show` marks the row — both correct, both repairs for a state the board
-keeps producing.
+**`Item closed` was recommended here until `#186`, and the reversal is worth
+reading.** Every issue in this repository is closed by a merged pull request
+saying `Closes #n`, and that automation sets the issue's state and nothing else
+— so the row sits in In Progress looking live. `#123` did it for twenty-two
+hours and `#138` repeated it on the next merge, which is a real cost and was the
+case for turning the workflow on.
+
+What that missed is what the workflow *cannot* do. It writes one field. It
+cannot write Evidence, cannot stamp the closing `sprint:` label, and cannot
+choose between completed and not planned. Enabled, the issue reads `Done` with
+an empty Evidence section and nothing anywhere saying otherwise —
+**indistinguishable from work somebody actually finished**. Disabled, the same
+issue is visibly outstanding, which is not a lie: it is a wrap-up nobody has
+done, and the wrap-up is one command.
+
+That command is strictly better than the workflow, not merely equal:
+
+```bash
+gh agile move AGILE-187 --status Done --evidence "..."
+```
+
+No `--close`, because the issue is already closed and closing one twice is a
+no-op that exits 0 — which is how a close reason gets lost. It writes the
+Evidence, sets the Status, **and** stamps the closing sprint. The workflow
+produces none of those three.
+
+### What replaces it: the post-merge hook
+
+Leaving the workflow off only works if the person finds out at merge time rather
+than at the next `validate` run. That is the whole gap, and `#174` sat in it for
+days.
+
+```bash
+make hooks
+```
+
+installs `.git/hooks/post-merge`, so `git pull` on `main` — the moment somebody
+is already at the terminal — reports two things: whether `main`'s last CI run is
+red, and any issue the merge just closed that the board has not caught up with.
+
+```
+  #187 was closed by this merge, and the board has not caught up:
+      closed but status is not Done (1):
+        #187 AGILE-187 A planner types a duration, not an end : 'In Progress'
+
+      finish it:  gh agile move 187 --status Done --evidence "..."
+```
+
+It is read-only, silent when there is nothing to say, and **exits 0 on every
+path** — no `gh`, no network, no board, a fresh clone with no `ORIG_HEAD`. A
+hook that can stop you pulling is a hook people delete.
+
+It does not restate what a finished issue looks like: it asks `gh agile validate
+--id`, whose exit code is 1 when it found something. A second copy of that rule
+is one that can disagree with the first.
 
 **`Auto-close issue` is the one to actively avoid.** It is the mirror image and it
 races this tool: `move --status Done --not-planned --close` sets Status first, the

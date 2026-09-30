@@ -335,3 +335,24 @@ says nothing whatever about whether a write reaches GitHub. The date fields did 
 author's own board, so the first real attempt to write one was the bug report. **Run it once against a real
 project before calling it shipped** — that is the step whose absence let this go out, and the sandbox
 (`paulcaron16k/agile-test`, project `19`) exists so it costs nothing.
+
+**A measurement can justify the wrong fix.** `Item closed -> Status = Done` was recommended here on real
+evidence: `#123` sat closed with Status `In Progress` for twenty-two hours, `#138` repeated it on the next
+merge, and `#174` was still in that state days later. The board genuinely was wrong, the workflow genuinely
+does fix that field, and the advice was written down in three places. What none of the three asked was what
+the workflow *cannot* do — it writes one field, so it cannot write Evidence, cannot stamp the closing
+`sprint:` label, and cannot choose between completed and not planned. Enabled, the issue reads `Done` with
+an empty Evidence section and nothing anywhere saying otherwise; disabled, it is visibly unfinished and
+costs one command. **The measurement established the problem and said nothing about which repair was
+better**, and the weaker repair was the one that silenced the symptom. Found by the owner asking, of a
+recommendation this tool had been printing for weeks, *isn't it better to leave it open and wait for a
+developer?* — **when a fix removes a signal, check what else that signal was carrying.** Here
+`closed but status is not Done` was standing in for *closed without going through `move`*, which is the
+same thing as *closed with no Evidence*.
+
+**An automatic repair and a manual one are not interchangeable just because both end in the right field.**
+`gh agile move X --status Done --evidence` writes the Evidence, the Status and the closing sprint label.
+The workflow writes the Status. Compared on the field they share they look equal, and on everything else
+the manual one is strictly better — so the real choice was never *right board now versus right board
+later*, it was *a wrong record for ever versus a correct one after one command*. **Compare repairs on what
+each leaves behind, not on the symptom each clears.**

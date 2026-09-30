@@ -36,6 +36,8 @@ def args_for(tool, tmp_path, **overrides):
 def run(monkeypatch, tool, tmp_path, capsys):
     """`cmd_init` with the project, setup and workflow reads stubbed."""
     def go(**overrides):
+        # `Item closed` is ON here on purpose: #186 made it a `by-hand` verdict,
+        # so a board with it enabled is one the table has to argue with.
         state = overrides.pop("_workflows", {"Item added to project": False,
                                              "Item closed": True,
                                              "Auto-add sub-issues to project": True})
@@ -190,15 +192,23 @@ class TestItEndsByNamingWhatItCannotDo:
         """`workflows(first: 20)` returns `enabled` even though nothing can set
         it, so nobody should be told to go and check."""
         _code, _calls, out, _args = run(project=7)
-        assert "[on]  enable    Item closed" in out
+        assert "[on]  by hand   Item closed" in out
         assert "[off] enable    Item added to project" in out
 
     def test_a_satisfied_step_does_not_repeat_its_cost(self, tool, run):
-        """A `never` or a pull-request one still explains itself even when
-        correct -- see #141 -- but a satisfied `enable` is simply working."""
+        """A `never`, a `by-hand` or a pull-request one still explains itself
+        even when correct -- see #141 and #186 -- but a satisfied `enable` is
+        simply working."""
         _code, _calls, out, _args = run(project=7)
-        after = out.split("[on]  enable    Item closed")[1].split("[")[0]
-        assert "Status does not follow a close" not in after
+        after = out.split("[on]  enable    Auto-add sub-issues to project")[1].split("[")[0]
+        assert "every story created" not in after
+
+    def test_a_by_hand_that_is_on_still_explains_itself(self, tool, run):
+        """The one somebody is most likely to have turned on, because it was
+        recommended until #186."""
+        _code, _calls, out, _args = run(project=7)
+        after = out.split("[on]  by hand   Item closed")[1].split("[")[0]
+        assert "writes Status and nothing else" in after
 
     def test_an_unreadable_workflow_list_is_not_fatal(self, tool, run):
         """A checklist is more useful than an error at the end of a successful
