@@ -273,6 +273,7 @@ Tidying it would clear every assignment on the board.
 | `POLICY.md` | The conventions `validate` enforces |
 | `GOLD_MODEL.md` | The silver→gold boundary, and what this repo does not write |
 | `USER_GUIDE.md` | The published guide; `make check-guide` keeps it honest |
+| `README.md` | **The release policy lives there**, under *Versions, and what installing gets you*: `main` is the release, tags name builds and nothing installs from one, and consumers are told not to pin. Stated where a consumer reads rather than here (#197) |
 
 Some of it is code rather than prose, and none of it is guessable from a file name:
 

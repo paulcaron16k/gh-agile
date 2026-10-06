@@ -11,6 +11,49 @@ gh agile validate          # do the conventions hold?
 gh agile export --csv      # backlog with status history
 ```
 
+## Versions, and what installing gets you
+
+```bash
+gh extension install paulcaron16k/gh-agile   # tracks main
+gh extension upgrade agile                   # whenever you like
+```
+
+**There are no pinned installs, and `main` is the release.** A `gh` script
+extension is a clone of the default branch — `install` clones it, `upgrade`
+fast-forwards it, and no tag is ever consulted. So what you run is whatever
+`main` was when you last upgraded, and a fix reaches you on your next upgrade
+without anyone cutting anything.
+
+That is a promise about `main` rather than an absence of process:
+
+- `make lint` and the full offline suite green on **every supported
+  interpreter**, 3.10 through 3.13, including the floor — a floor no job tests
+  is a promise nothing keeps
+- `make merge-check` runs the suite against the merge, not the branch, before
+  anything lands — two pull requests each green alone once left `main` red
+- anything that **writes** to a board is run live against the sandbox before it
+  merges
+
+**Tags exist so a build can be named, and nothing installs from one.** They are
+cut at points worth referring back to, so a bug report, a changelog entry or a
+`git describe` can say *which* build rather than quoting a commit:
+
+```
+v0.3.0-7-g440d984
+```
+
+The leading `0.` carries the only compatibility promise there is, which is none.
+The number is a counter rather than a measurement — it starts at `0.3.0` because
+nothing is gained by pretending the tool is younger than it is. **Do not pin to
+a tag.** `gh extension install --pin` works, and a pinned clone stops receiving
+fixes silently, which is how an installed extension ends up older than the git
+hook that calls it.
+
+**Status: near alpha, with issue tracking load-bearing.** Commands and flags are
+still added and occasionally renamed; the profile format and the export columns
+are the parts treated as contracts, and `github_catalog.json` is where the second
+of those is written down.
+
 ## The hierarchy
 
 Four levels, carried on **labels** because GitHub's own Issue Types are an
