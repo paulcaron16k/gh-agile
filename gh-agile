@@ -122,6 +122,7 @@ import csv
 import io
 import json
 import pathlib
+import platform
 import shutil
 import subprocess
 import sys
@@ -7626,6 +7627,102 @@ def require_interpreter() -> None:
         )
 
 
+#: Where the running copy of this tool lives. `gh extension install` clones the
+#: repository, so for an installed extension this is that clone and for a
+#: developer it is the working tree -- either way, a git checkout whose commit is
+#: the honest answer to *what is running*.
+TOOL_DIR = pathlib.Path(__file__).resolve().parent
+
+
+def checkout_version(directory: pathlib.Path = TOOL_DIR) -> tuple[str, str]:
+    """`(version, branch)` for a checkout, or `("unknown", "")` if it is not one.
+
+    **Derived, never declared.** A `VERSION = "0.3.1"` constant is a fact kept in
+    two places, and this repository has already watched that disagree with itself
+    -- `docs/tasks.md` is the single copy of live state for the same reason. The
+    checkout *is* the record, and `git describe` gives the same answer
+    `gh extension list` does, with the tag in front of it when there is one.
+
+    Degrades rather than fails: a file lifted out of its clone, or a machine with
+    no `git`, still gets the rest of the report. Nothing here is worth an error.
+    """
+    def ask(*command: str) -> str:
+        try:
+            result = subprocess.run(["git", "-C", str(directory), *command],
+                                    capture_output=True, text=True)
+        except OSError:
+            return ""
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    # `--always` falls back to the bare commit when no tag is reachable, which is
+    # the state every clone was in before #197 cut the first one. `--dirty` marks
+    # a working tree with edits, because "what is running" is then not any commit.
+    return ask("describe", "--tags", "--always", "--dirty") or "unknown", \
+        ask("rev-parse", "--abbrev-ref", "HEAD")
+
+
+def version_lines() -> list[str]:
+    """What `--version` prints: the build, the interpreter, and the profile.
+
+    Three facts, and each one has cost somebody an afternoon.
+
+    The **build**, because a script extension tracks `main` and every consumer is
+    on whatever it was at their last upgrade -- so a bug report, a pasted
+    measurement and a `validate` run were all anonymous as to which build
+    produced them.
+
+    The **interpreter**, because this runs under the user's `python3` and not a
+    venv: a `target-version` drift once passed lint and every test under 3.12 and
+    crashed on first use under the system 3.10. A floor nothing names is a floor
+    nobody checks.
+
+    The **profile**, because `config_from` means the file in front of you may not
+    be the file in use. The pointer is reported and deliberately **not followed**:
+    following it is an API call, and nothing in `--version` may need a network, a
+    token or a board.
+    """
+    version, branch = checkout_version()
+    out = [f"  gh-agile {version}" + (f"  ({branch})" if branch else "")]
+    out.append(f"  python {platform.python_version()}  (floor "
+               f"{'.'.join(str(n) for n in RUNTIME_FLOOR)}+), {sys.executable}")
+    path = find_config()
+    if path is None:
+        out.append(f"  profile: none found ({', '.join(CONFIG_PATHS)})")
+        return out
+    line = f"  profile: {path}"
+    try:
+        pointer = (json.loads(path.read_text()) or {}).get("config_from")
+    except (OSError, ValueError):
+        pointer = None
+        line += "  (unreadable)"
+    if pointer:
+        line += f"  -> config_from {pointer}, not followed here"
+    out.append(line)
+    return out
+
+
+class VersionAction(argparse.Action):
+    """`--version`, computed when it is asked for and not before.
+
+    argparse's own `action="version"` takes a finished string, so the build would
+    have to be worked out while the parser is being built -- a `git describe`
+    subprocess on every single invocation of every command, to serve one flag.
+    This fires only when the flag appears.
+
+    It also exits during parsing, which is what lets `--version` work although
+    the subcommand is `required=True`: there is no command to give, and asking
+    for one would make the flag useless exactly where it is most wanted.
+    """
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        for line in version_lines():
+            print(line)
+        parser.exit(0)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Every command and flag, built but not parsed.
 
@@ -7646,6 +7743,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", type=int,
                         help="project number; defaults to project.number in the profile")
     parser.add_argument("--config", help=f"profile path; searched: {', '.join(CONFIG_PATHS)}")
+    parser.add_argument("--version", action=VersionAction,
+                        help="the build, the interpreter and the profile in use")
     sub = parser.add_subparsers(dest="command", required=True)
 
     init = sub.add_parser(

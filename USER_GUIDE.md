@@ -15,6 +15,28 @@ you on your next upgrade. Tags are cut so a build can be *named* in a report,
 never installed from. The promise that makes this safe, and what a tag does and
 does not mean, are in the README under *Versions, and what installing gets you*.
 
+To say what you are running — and the first thing to paste into a bug report:
+
+```bash
+gh agile --version
+```
+
+> `gh-agile v0.3.0-2-ge160178  (main)`
+> `python 3.14.7  (floor 3.10+), /usr/local/bin/python3`
+> `profile: .github/agile.json`
+
+Three facts, and each has cost somebody an afternoon. The **build**, derived from
+the checkout rather than declared in the file, so it cannot drift. The
+**interpreter**, because the extension runs under your `python3` and not a
+virtualenv — a lint setting once rewrote code to a 3.11-only spelling, passed
+every test under 3.12, and crashed on first use under the system 3.10. The
+**profile** actually resolved, because `config_from` means the file in front of
+you may not be the file in use; the pointer is reported and deliberately not
+followed, since following it is an API call and `--version` has to work when the
+network or the token is what is broken.
+
+It needs no repository, no profile, no project and no network.
+
 ---
 
 ## 0. Start here: `gh agile init`
