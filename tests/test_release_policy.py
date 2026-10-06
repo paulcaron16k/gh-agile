@@ -74,11 +74,23 @@ class TestTheOtherTwoFilesAgree:
         assert "Do not pin" not in claude
 
 
-class TestNothingReadsTheTag:
-    def test_the_tool_does_not_parse_a_tag(self):
-        """Tags name builds and nothing depends on them. #196 derives a version
-        from the checkout, which works pinned or not -- if the tool ever starts
-        requiring a tag, this policy has quietly changed."""
+class TestNothingRequiresATag:
+    """Tags name builds; nothing depends on one existing.
+
+    This asserted that the tool never mentions `git describe` at all, which
+    #196 then broke by reading one for `--version` -- correctly. The invariant
+    was never *do not look at a tag*, it is **do not require one**: every clone
+    was untagged until #197, and an install that has not fetched tags still has
+    to report something.
+    """
+
+    def test_the_build_falls_back_when_no_tag_is_reachable(self):
+        """`--always` is what makes an untagged clone print its commit instead
+        of failing. `tests/test_version.py` holds the behaviour; this holds the
+        flag, because losing it would only show up on a clone nobody has."""
         tool = (ROOT / "gh-agile").read_text()
-        assert "git describe" not in tool
-        assert "--pin" not in tool
+        if "git" in tool and "describe" in tool:
+            assert "--always" in tool
+
+    def test_nothing_installs_from_a_tag(self):
+        assert "--pin" not in (ROOT / "gh-agile").read_text()
