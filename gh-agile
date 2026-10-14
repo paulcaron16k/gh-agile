@@ -1163,20 +1163,44 @@ def current_repo() -> str | None:
     return result.stdout.strip() or None if result.returncode == 0 else None
 
 
+def issue_url(text: str) -> tuple[str, int] | None:
+    """`https://github.com/o/r/issues/34` -> (`o/r`, 34); anything else -> None.
+
+    An issue's web address, as `gh issue view` accepts it. Any host, because
+    `gh` serves Enterprise hosts as well; a comment anchor or a query after the
+    number is the same issue. A pull request's address is not an issue's.
+    """
+    import urllib.parse
+
+    parts = urllib.parse.urlsplit(text)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    path = [p for p in parts.path.split("/") if p]
+    if len(path) != 4 or path[2] != "issues" or not path[3].isdigit():
+        return None
+    return f"{path[0]}/{path[1]}", int(path[3])
+
+
 def parse_issue_ref(value: str, config: dict, fallback_repo: str | None) -> tuple[str, int]:
-    """`ZMBNI-34` -> (owner/repo, 34); `34` -> (fallback_repo, 34).
+    """`ZMBNI-34` -> (owner/repo, 34); a URL -> (its repo, 34); `34` -> (fallback_repo, 34).
 
     The keyed form is unambiguous on its own, which is the whole point of having
-    a key: it names the repository as well as the number.
+    a key: it names the repository as well as the number. A URL is too, and it
+    is what `gh` itself accepts beside a number, so every issue argument and
+    every parent flag takes all three (#201).
     """
     text = str(value).strip()
     if text.isdigit():
         if not fallback_repo:
-            sys.exit(f"--issue {text} needs a repository: run inside one, or pass --repo/--key")
+            sys.exit(f"issue {text} needs a repository: run inside one, pass --repo, "
+                     f"or name it as KEY-{text}")
         return fallback_repo, int(text)
+    url = issue_url(text)
+    if url:
+        return url
     key, _, number = text.rpartition("-")
     if not key or not number.isdigit():
-        sys.exit(f"{value!r} is neither an issue number nor a KEY-NUMBER reference")
+        sys.exit(f"{value!r} is not an issue number, a KEY-NUMBER reference or an issue URL")
     repo = repo_for_key(config, key)
     if not repo:
         known = ", ".join(k["key"] for k in profile_keys(config)) or "none"
@@ -2506,7 +2530,7 @@ def looks_like_issue_ref(text: str, config: dict) -> bool:
     and number `12`, and a perfectly good slug would be read as a reference to
     an issue in no repository.
     """
-    if text.isdigit():
+    if text.isdigit() or issue_url(text):
         return True
     key, _, number = text.rpartition("-")
     return bool(key and number.isdigit() and repo_for_key(config, key))
@@ -2984,9 +3008,30 @@ def cmd_story(args) -> int:
     # orphan story is far more often an accident than an intention, so saying so
     # is required. POLICY.md §2.
     orphan = str(args.epic).strip().casefold() == "none"
-    if not orphan and not str(args.epic).strip().isdigit():
-        sys.exit(f"--epic {args.epic!r} is neither an epic's issue number nor `none`.\n"
-                 f"  `--epic none` files a story that stands alone.")
+    # Resolved and read before the story exists, as `task` does its `--story`:
+    # an issue number is never reused, so a mistyped parent must cost nothing.
+    # This used to create the story first and look the epic up afterwards, so
+    # `--epic 9999` left an orphan behind its own error. And it took digits
+    # only, so on a board spanning repositories `--epic ZMBNI-40` was refused
+    # while `task --story ZMBNI-40` worked (#201).
+    parent = None
+    if not orphan:
+        if not looks_like_issue_ref(str(args.epic).strip(), args._config):
+            sys.exit(f"--epic {args.epic!r} names no epic: give its number, KEY-NUMBER or "
+                     f"URL, or `none`.\n  `--epic none` files a story that stands alone.")
+        epic_repo, epic = parse_issue_ref(str(args.epic), args._config, args.repo)
+        try:
+            parent = json.loads(gh(["issue", "view", str(epic), "--repo", epic_repo,
+                                    "--json", "id,labels"]))
+        except SystemExit as exc:
+            sys.exit(f"--epic {args.epic!r} could not be read: {exc}\n"
+                     f"  Nothing was created. `--epic none` files a story that stands "
+                     f"alone.")
+        parent_type = next((lb["name"][len("type:"):] for lb in parent.get("labels") or []
+                            if lb["name"].startswith("type:")), None)
+        if parent_type and parent_type != "epic":
+            sys.exit(f"{epic_repo}#{epic} is a {parent_type}, and a story belongs to an "
+                     f"epic.\n  Nothing was created.")
     labels = ["type:story"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, node = create_issue(
@@ -3001,13 +3046,13 @@ def cmd_story(args) -> int:
     # Announced as soon as it exists, for the same reason as `epic`: everything
     # after this point can be refused independently of the issue creation that
     # already succeeded, and a story has two such steps rather than one.
-    where = "standing alone" if orphan else f"under epic #{args.epic}"
+    where = ("standing alone" if orphan else
+             f"under epic #{epic}" if epic_repo == args.repo else
+             f"under epic {epic_repo}#{epic}")
     print(f"  story #{number} {where}: {title}")
     print(f"  {url}")
 
-    if not orphan:
-        parent = json.loads(gh(["issue", "view", str(args.epic), "--repo", args.repo,
-                                "--json", "id"]))
+    if parent:
         graphql(
             "mutation($parent: ID!, $child: ID!) { addSubIssue(input: "
             "{issueId: $parent, subIssueId: $child}) { subIssue { number } } }",
@@ -3644,8 +3689,14 @@ def cmd_sprint(args) -> int:
         # ambiguous, which @current then resolves arbitrarily.
         import datetime as dt
 
+        #
+        # The latest *end*, not the last entry: `(active + completed)[-1]` was
+        # the last completed sprint whenever one existed, so the default start
+        # fell inside a live sprint and the overlap check refused it. Every
+        # `sprint create` without `--start` on a board with history failed,
+        # since the original commit; the dry run's test found it (#201).
         active, completed = iterations(args.owner, args.project)
-        last = (active + completed)[-1] if (active or completed) else None
+        last = max(active + completed, key=_iteration_end, default=None)
         if last:
             end = dt.date.fromisoformat(_iteration_end(last))
             start = (end + dt.timedelta(days=1)).isoformat()
@@ -3681,6 +3732,15 @@ def cmd_sprint(args) -> int:
 
     saved = sprint_assignments(args.owner, args.project)
     require_graphql_budget(len(saved), "creating a sprint")
+    # After every refusal -- the date, the overlap, the budget -- so a dry run
+    # that passes is one the real run would not refuse. The one write that
+    # clears every Sprint value on the board was the one write without a dry
+    # run (#201).
+    if getattr(args, "dry_run", False):
+        print(f"  would append {title}: {start}, {duration} day(s)")
+        print(f"  the write clears every item's Sprint value; {len(saved)} "
+              f"assignment(s) would be re-applied")
+        return 0
     entries.append(f'{{startDate: "{start}", duration: {duration}, title: {json.dumps(title)}}}')
     graphql(
         "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
@@ -5970,8 +6030,8 @@ def cmd_plan(args) -> int:
     return 0
 
 
-#: What `--add-assignee` means when it is absent or empty: whoever is running
-#: the command. `gh` resolves it against the token it owns, so the tool neither
+#: Who the implicit claim assigns, and what `--add-assignee @me` names: whoever
+#: is running the command. `gh` resolves it against the token it owns, so the tool neither
 #: sees a credential nor has to guess a username from a git config.
 CALLER = "@me"
 
@@ -5994,8 +6054,8 @@ def claim_issue(repo: str, issue: int, wanted: str, *, explicit: bool) -> str:
     sprint heal already follows. Starting work claims an issue nobody holds and
     leaves alone one that somebody does -- silently adding yourself to another
     person's work would make the convention argue with the team. `--add-assignee`
-    is how to say otherwise: passing it at all -- with a login, or bare for
-    yourself -- assigns whatever the status and whoever already holds it.
+    is how to say otherwise: passing it -- a login, or `@me` -- assigns whatever
+    the status and whoever already holds it.
     """
     if not explicit:
         held = issue_assignees(repo, issue)
@@ -6166,6 +6226,12 @@ def cmd_move(args) -> int:
     # --key, or the working directory.
     repo, issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
     args.issue = issue
+    # Refused before anything is written. An empty value used to mean the
+    # caller; `gh` has no such spelling, so it is now a mistake, and finding it
+    # after the Status write would leave half a move behind.
+    asked = getattr(args, "add_assignee", None)
+    if asked is not None and not asked.strip():
+        sys.exit('--add-assignee needs a login; "@me" assigns you.')
     # Canonicalised once, here, so everything downstream -- the evidence lookup,
     # the field write, the cycle-start and cycle-end comparisons and what gets
     # printed -- sees the spelling GitHub holds rather than the one that was
@@ -6324,7 +6390,7 @@ def cmd_move(args) -> int:
     # work in flight that reads unassigned is invisible to the one question a
     # board answers beside "what is in progress" -- who has it. Both are
     # automatic because a person doing three things by hand does two.
-    # Given at all -- even bare, even empty -- is somebody asking, so it is
+    # Given at all is somebody asking, so it is
     # honoured whatever the status. Absent, only starting work claims. The two
     # cases mean the same person and different things, which is why the flag has
     # no argparse default: `default=""` could not tell them apart.
@@ -7581,7 +7647,7 @@ MOVE_FIELDS = [
     ("--close", "flag", "optional", "close the issue as well"),
     ("--not-planned", "flag", "optional", "close as not planned rather than completed"),
     ("--add-assignee", "login", "optional",
-     "who to assign; empty or absent is you, and In Progress claims an unassigned issue"),
+     'who to assign; "@me" is you, and In Progress claims an unassigned issue'),
 ]
 
 
@@ -7734,15 +7800,7 @@ def build_parser() -> argparse.ArgumentParser:
     process reads it here.
     """
     parser = argparse.ArgumentParser(prog="gh agile", description=__doc__.splitlines()[0])
-    # No default, so "not given" is distinguishable from an explicit `@me`. Left
-    # unset it comes from `project.owner` in the profile and falls back to the
-    # caller; `@me` always means the caller, even when the profile names someone
-    # else.
-    parser.add_argument("--owner", help="project owner; defaults to project.owner in the "
-                                       'profile, then to you. "@me" forces you')
-    parser.add_argument("--project", type=int,
-                        help="project number; defaults to project.number in the profile")
-    parser.add_argument("--config", help=f"profile path; searched: {', '.join(CONFIG_PATHS)}")
+    add_global_flags(parser, default=None)
     parser.add_argument("--version", action=VersionAction,
                         help="the build, the interpreter and the profile in use")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -7779,19 +7837,19 @@ so they are flags, and a missing one is a refusal naming the flag rather than a
 default chosen for you.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     init.add_argument("--key", help="the key labelling every issue, e.g. AGILE")
-    init.add_argument("--title", help="the project's title")
+    init.add_argument("-t", "--title", help="the project's title")
     init.add_argument("--sprint-template", choices=sorted(SPRINT_TEMPLATES),
                       help="the sprint cadence")
     init.add_argument("--title-prefix", choices=sorted(TITLE_PREFIX_MODES),
                       default="off", help="what every issue is called")
-    init.add_argument("--repo", help="owner/name; defaults to the working directory")
+    init.add_argument("-R", "--repo", help="owner/name; defaults to the working directory")
     init.set_defaults(func=cmd_init)
 
     setup = sub.add_parser("setup", help="create the project's fields and labels, idempotently",
         epilog=field_help(SETUP_FIELDS) + """\n\nproject fields created:\n  Story Points  number                            the Gold model's story_points\n  Priority      single-select  lowest..highest    Gold priority_id\n  FR            text                              requirement traceability\n  Sprint        iteration                         Gold sprint_id; via GraphQL, gh cannot\n  Status        single-select  Todo..Done         Gold state_id; two options added to GitHub's three""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     setup.add_argument("--spec", help="JSON spec; the built-in default is used without one")
-    setup.add_argument("--repo", help="repository to create the type: labels in")
+    setup.add_argument("-R", "--repo", help="repository to create the type: labels in")
     setup.set_defaults(func=cmd_setup)
 
     initiative = sub.add_parser(
@@ -7824,7 +7882,7 @@ what an initiative is:
         "create", help="file the initiative issue, board it, and mint its slug")
     initiative_new.add_argument("title")
     initiative_new.add_argument("--slug", help="override the slug derived from the title")
-    initiative_new.add_argument("--repo")
+    initiative_new.add_argument("-R", "--repo")
     initiative_new.add_argument("--key", help="which key to label the issue with")
     initiative_new.add_argument("--start", metavar="YYYY-MM-DD",
                                 help="planned start; the DATE field GitHub's "
@@ -7846,14 +7904,14 @@ what an initiative is:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     initiative_fix.add_argument("ref")
     initiative_fix.add_argument("--dry-run", action="store_true")
-    initiative_fix.add_argument("--repo")
+    initiative_fix.add_argument("-R", "--repo")
     initiative.set_defaults(func=cmd_initiative)
 
     epic = sub.add_parser("epic", help="create an epic issue on the board",
         epilog=field_help(EPIC_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     epic.add_argument("title")
-    epic.add_argument("--repo")
+    epic.add_argument("-R", "--repo")
     epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     epic.add_argument("--initiative",
                       help="attach to an initiative: its number (35), a keyed reference "
@@ -7873,7 +7931,7 @@ what an initiative is:
         epilog=field_help(STORY_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     story.add_argument("title")
-    story.add_argument("--repo")
+    story.add_argument("-R", "--repo")
     story.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     # Still required, and `none` is how you say it deliberately. A bare omission
     # keeps refusing: an orphan story is usually an accident, and `story has no
@@ -7913,7 +7971,7 @@ what a task is, and is not:
     task.add_argument("title")
     task.add_argument("--story", required=True,
                       help="the story this task belongs to: a number, or KEY-NUMBER")
-    task.add_argument("--repo", help="owner/name")
+    task.add_argument("-R", "--repo", help="owner/name")
     task.add_argument("--key", help="which key to label the issue with")
     task.add_argument("--intent")
     task.add_argument("--acceptance")
@@ -7922,7 +7980,7 @@ what a task is, and is not:
     self_test = sub.add_parser(
         "self-test", help="stand up a scratch project, exercise everything, tear it down"
     )
-    self_test.add_argument("--repo", required=True, help="repository to create throwaway issues in")
+    self_test.add_argument("-R", "--repo", required=True, help="repository to create throwaway issues in")
     self_test.add_argument("--stamp", help="label for the scratch project's title")
     # Raised from 420. The old default was set against a measured lag of ~75s,
     # and on 2026-08-21 three runs in one afternoon exceeded 420s -- once on
@@ -7956,10 +8014,10 @@ why this is needed:
   never backfills. Hence sync.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sync.add_argument("--repo")
-    sync.add_argument("--state", default="open", choices=["open", "closed", "all"])
+    sync.add_argument("-R", "--repo")
+    sync.add_argument("-s", "--state", default="open", choices=["open", "closed", "all"])
     sync.add_argument("--query")
-    sync.add_argument("--limit", type=int, default=200)
+    sync.add_argument("-L", "--limit", type=int, default=200)
     sync.add_argument("--dry-run", action="store_true")
     sync.add_argument("--adopt", action="store_true",
                       help="set the key: label and Status=Todo on issues this run adds; "
@@ -8026,9 +8084,9 @@ why this is needed:
     )
     project_sub = project.add_subparsers(dest="project_command", required=True)
     project_new = project_sub.add_parser("create", help="create it")
-    project_new.add_argument("--title", required=True)
+    project_new.add_argument("-t", "--title", required=True)
     project_new.add_argument("--key")
-    project_new.add_argument("--repo")
+    project_new.add_argument("-R", "--repo")
     project_new.add_argument("--force", action="store_true")
     project_new.add_argument("--sprint-template", choices=sorted(SPRINT_TEMPLATES),
                              help="cadence, chosen once at creation; 'none' for kanban")
@@ -8146,11 +8204,14 @@ why this exists:
     sprint_new = sprint_sub.add_parser("create", help="append a sprint iteration")
     sprint_new.add_argument("--start", help="ISO date; defaults to the day after the last ends")
     sprint_new.add_argument("--weeks", type=int, help="length; defaults to the field's own duration")
-    sprint_new.add_argument("--title", help="defaults to 'Sprint <n>'")
+    sprint_new.add_argument("-t", "--title", help="defaults to 'Sprint <n>'")
+    sprint_new.add_argument("--dry-run", action="store_true",
+                            help="say what would be appended and what it would clear, "
+                                 "and write nothing")
     sprint.set_defaults(func=cmd_sprint)
 
     key = sub.add_parser("key", help="record a repository's key, e.g. ZMBNI, or list them")
-    key.add_argument("--repo", help="owner/name")
+    key.add_argument("-R", "--repo", help="owner/name")
     key.add_argument("--key", help="uppercase key; omit to list what is recorded")
     key.add_argument("--name", help="human-readable project name, written to shortDescription")
 
@@ -8166,16 +8227,17 @@ why this exists:
     move.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
     move.add_argument("--close", action="store_true", help="close the issue as well")
     move.add_argument("--not-planned", action="store_true", help="close as not planned")
-    # `nargs="?"` so `--add-assignee` with nothing after it is the caller rather
-    # than an argparse error, and `default=None` so "not given" stays tellable
-    # from "given empty". Both name the same person and mean different things:
-    # given is a request, honoured on any status and over an existing assignee;
-    # absent leaves the In Progress rule to decide. `default=""` would collapse
-    # them -- the same trap `--owner` documents a few lines into `main`.
-    move.add_argument("--add-assignee", nargs="?", const="", default=None,
-                      help="who to assign; empty or absent means you (@me). Moving to "
-                           "In Progress claims an unassigned issue either way")
-    move.add_argument("--repo", help="only needed if the item's repository cannot be read back")
+    # A login is required, `@me` written out, as `gh issue edit --add-assignee`
+    # takes it. It was `nargs="?"`, a bare flag meaning the caller -- a spelling
+    # `gh` does not have, and #201 retired it. `default=None` still keeps "not
+    # given" tellable from given: given is a request, honoured on any status and
+    # over an existing assignee; absent leaves the In Progress rule to decide.
+    # No short flag: in `gh`, `-a` is `--assignee` on create and list, and
+    # `--add-assignee` has none.
+    move.add_argument("--add-assignee", metavar="LOGIN", default=None,
+                      help='who to assign; "@me" for you. Moving to In Progress claims '
+                           "an unassigned issue without it")
+    move.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
     move.set_defaults(func=cmd_move)
 
     setter = sub.add_parser("set", help="set one field on an issue already on the board",
@@ -8202,7 +8264,7 @@ why this exists:
     planner.add_argument("--for", dest="span", metavar="SPAN",
                          help="size the span from the start instead of naming its "
                               "end: 6w, 10d, 3sprints. Calendar days, inclusive")
-    planner.add_argument("--repo", help="only needed if the item's repository "
+    planner.add_argument("-R", "--repo", help="only needed if the item's repository "
                                         "cannot be read back")
     planner.set_defaults(func=cmd_plan)
 
@@ -8264,9 +8326,49 @@ why this exists:
                           "decision")
     fix.add_argument("--dry-run", action="store_true",
                      help="say what would change and change nothing")
-    fix.add_argument("--repo", help="only needed if the item's repository cannot be read back")
+    fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
     fix.set_defaults(func=cmd_fix)
+    inherit_global_flags(parser)
     return parser
+
+
+def add_global_flags(parser: argparse.ArgumentParser, *, default) -> None:
+    """`--owner`, `--project` and `--config`: which project, wherever they are typed.
+
+    `--owner` has no default, so "not given" is distinguishable from an explicit
+    `@me`. Left unset it comes from `project.owner` in the profile and falls
+    back to the caller; `@me` always means the caller, even when the profile
+    names someone else.
+    """
+    parser.add_argument("--owner", default=default,
+                        help="project owner; defaults to project.owner in the "
+                             'profile, then to you. "@me" forces you')
+    parser.add_argument("--project", type=int, default=default,
+                        help="project number; defaults to project.number in the profile")
+    parser.add_argument("--config", default=default,
+                        help=f"profile path; searched: {', '.join(CONFIG_PATHS)}")
+
+
+def inherit_global_flags(parser: argparse.ArgumentParser) -> None:
+    """Accept the global flags after the subcommand as well as before it.
+
+    Measured: `gh agile board list --project 19` was `unrecognized arguments:
+    --project 19`, because argparse only parses a parser's own options before
+    its subcommand. `gh project list --owner X` puts the flag after the verb,
+    so that is where people type it (#201).
+
+    **`default=SUPPRESS` on every copy below the top**, which is what makes this
+    safe. A subparser writes all of its defaults into the shared namespace, so
+    an ordinary `None` there would overwrite `--project 4` typed before the
+    subcommand. Suppressed, a flag that was not typed at that level writes
+    nothing, and the one that was typed wins wherever it was.
+    """
+    for action in parser._actions:
+        if not isinstance(action, argparse._SubParsersAction):
+            continue
+        for child in action.choices.values():
+            add_global_flags(child, default=argparse.SUPPRESS)
+            inherit_global_flags(child)
 
 
 def main() -> int:
