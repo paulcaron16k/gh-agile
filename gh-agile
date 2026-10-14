@@ -1163,6 +1163,11 @@ def current_repo() -> str | None:
     return result.stdout.strip() or None if result.returncode == 0 else None
 
 
+#: How every issue argument's help names the grammar `parse_issue_ref` accepts,
+#: so the help cannot fall behind it in one place and not another (#201).
+ISSUE_REF_HELP = "an issue number, a KEY-NUMBER reference, or an issue URL"
+
+
 def issue_url(text: str) -> tuple[str, int] | None:
     """`https://github.com/o/r/issues/34` -> (`o/r`, 34); anything else -> None.
 
@@ -2557,7 +2562,7 @@ def resolve_initiative(config: dict, ref: str, fallback_repo: str | None) -> tup
         return found
     sys.exit(
         f"no initiative matches {ref!r}.\n"
-        f"  --initiative takes an issue number (35), a keyed reference (TEST-35),\n"
+        f"  --initiative takes an issue number (35), a keyed reference (TEST-35), a URL,\n"
         f"  or an initiative's slug (large-new-feature). No issue carries "
         f"`{INITIATIVE_LABEL}{text}`."
     )
@@ -7612,7 +7617,7 @@ EPIC_FIELDS = [
 STORY_FIELDS = [
     ("title", "text", "required", "the story's title; positional"),
     ("--repo", "owner/name", "required", "repository the issue is created in"),
-    ("--epic", "issue number", "required", "epic to attach to as a sub-issue"),
+    ("--epic", "N|KEY-N|URL", "required", "epic to attach to as a sub-issue"),
     ("--points", "number", "optional", "Story Points; the Gold model's story_points"),
     ("--priority", "lowest|low|medium|high|highest", "optional", "Priority field"),
     ("--status", "one of STATUSES", "optional", "Status field; defaults to Todo"),
@@ -7621,14 +7626,14 @@ STORY_FIELDS = [
 ]
 
 SET_FIELDS = [
-    ("--issue", "issue number", "required", "the issue, which must already be on the board"),
+    ("--issue", "N|KEY-N|URL", "required", "the issue, which must already be on the board"),
     ("--field", "field name", "required", 'e.g. Status, "Story Points", Priority, FR, Sprint'),
     ("--value", "text", "optional", "text, single-select option, sprint title, or @current"),
     ("--number", "number", "optional", "numeric value; use instead of --value for a number field"),
 ]
 
 PLAN_FIELDS = [
-    ("issue", "issue number", "required", "the epic or initiative; positional"),
+    ("issue", "N|KEY-N|URL", "required", "the epic or initiative; positional"),
     ("--start", "YYYY-MM-DD", "conditional", "when the work is planned to begin, "
                                              "or none to remove it"),
     ("--target", "YYYY-MM-DD", "conditional", "when it is planned to finish, "
@@ -7638,7 +7643,7 @@ PLAN_FIELDS = [
 ]
 
 MOVE_FIELDS = [
-    ("issue", "issue number", "required", "the issue; positional"),
+    ("issue", "N|KEY-N|URL", "required", "the issue; positional"),
     ("--status", "one of STATUSES", "required", "the status to move to"),
     ("--evidence", "text or -", "conditional", "required for Done, written on any "
                                                "status; - reads stdin"),
@@ -7915,7 +7920,7 @@ what an initiative is:
     epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     epic.add_argument("--initiative",
                       help="attach to an initiative: its number (35), a keyed reference "
-                           "(TEST-35), or its slug (large-new-feature)")
+                           "(TEST-35), its URL, or its slug (large-new-feature)")
     epic.add_argument("--start", metavar="YYYY-MM-DD",
                       help="planned start; a DATE field GitHub's roadmap can draw")
     epic.add_argument("--target", metavar="YYYY-MM-DD",
@@ -7937,7 +7942,7 @@ what an initiative is:
     # keeps refusing: an orphan story is usually an accident, and `story has no
     # epic` has caught real ones. Not `type=int`, so `none` reaches the command.
     story.add_argument("--epic", required=True,
-                       help="epic issue number, or `none` for a story that stands alone")
+                       help=f"the epic: {ISSUE_REF_HELP}; or `none` for a story that stands alone")
     story.add_argument("--points", type=float)
     story.add_argument("--priority")
     story.add_argument("--status", default="Todo")
@@ -7949,7 +7954,7 @@ what an initiative is:
         "task", help="create a task: story-internal housekeeping, counted by nothing",
         epilog=field_help([
             ("title", "text", "required", "the task; positional"),
-            ("--story", "issue number", "required", "the story it belongs to"),
+            ("--story", "N|KEY-N|URL", "required", "the story it belongs to"),
             ("--repo", "owner/name", "optional", "where the issue is filed"),
             ("--key", "KEY", "optional", "which key to label it with"),
             ("--intent", "text", "optional", "## Intent body section"),
@@ -7970,7 +7975,7 @@ what a task is, and is not:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     task.add_argument("title")
     task.add_argument("--story", required=True,
-                      help="the story this task belongs to: a number, or KEY-NUMBER")
+                      help=f"the story this task belongs to: {ISSUE_REF_HELP}")
     task.add_argument("-R", "--repo", help="owner/name")
     task.add_argument("--key", help="which key to label the issue with")
     task.add_argument("--intent")
@@ -8220,7 +8225,7 @@ why this exists:
     move = sub.add_parser("move", help="change status, with the evidence that status requires",
         epilog=field_help(MOVE_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    move.add_argument("issue", help="issue number, or a KEY-NUMBER reference")
+    move.add_argument("issue", help=ISSUE_REF_HELP)
     move.add_argument("--status", required=True, help=f"one of: {', '.join(STATUSES)}")
     move.add_argument("--evidence", help="section text, or - for stdin. Written whatever "
                                         "the status; required only for Done")
@@ -8244,7 +8249,7 @@ why this exists:
         epilog=field_help(SET_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     setter.add_argument("--issue", required=True,
-                        help="issue number, or a KEY-NUMBER reference")
+                        help=ISSUE_REF_HELP)
     setter.add_argument("--field", required=True, help='field name, e.g. "Story Points"')
     setter.add_argument("--value", help="text or single-select option")
     setter.add_argument("--number", type=float, help="numeric value")
@@ -8254,7 +8259,7 @@ why this exists:
         help="set or clear the dates on an epic or initiative that already exists",
         epilog=field_help(PLAN_FIELDS) + """""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    planner.add_argument("issue", help="issue number, or a KEY-NUMBER reference")
+    planner.add_argument("issue", help=ISSUE_REF_HELP)
     # No `type=`: the parsing belongs with the refusal that names the flag, and
     # both dates are parsed together so a bad one writes neither.
     planner.add_argument("--start", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
@@ -8313,13 +8318,13 @@ why this exists:
     export.set_defaults(func=cmd_export)
 
     validate = sub.add_parser("validate", help="check the conventions in POLICY.md")
-    validate.add_argument("--id", help="only this issue: a number, or a KEY-NUMBER reference. "
+    validate.add_argument("--id", help=f"only this issue: {ISSUE_REF_HELP}. "
                                       "Narrows the report, not the board read -- see `fix --id`")
     validate.set_defaults(func=cmd_validate)
 
     fix = sub.add_parser("fix", help="repair one issue's Sprint field from its sprint: labels")
     fix.add_argument("--id", required=True,
-                     help="issue number, or a KEY-NUMBER reference")
+                     help=ISSUE_REF_HELP)
     fix.add_argument("--overwrite", action="store_true",
                      help="also change a field that disagrees with its label; by default only "
                           "an empty field is repaired, because a disagreement is somebody's "
