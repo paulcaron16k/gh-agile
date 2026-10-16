@@ -75,12 +75,12 @@ class TestClaimIssue:
         tool.claim_issue("o/r", 7, "dev", explicit=True)
         assert [c for c in calls if c[:2] == ["issue", "view"]] == []
 
-    def test_an_explicit_empty_value_is_the_caller(self, tool, calls):
-        """A bare `--add-assignee` is somebody asking to be assigned. It names
-        the same person the implicit claim would, and unlike it, says so over an
+    def test_an_explicit_at_me_is_the_caller(self, tool, calls):
+        """`--add-assignee @me` is somebody asking to be assigned. It names the
+        same person the implicit claim would, and unlike it, says so over an
         existing assignee."""
         calls.assigned.append("someone-else")
-        message = tool.claim_issue("o/r", 7, "", explicit=True)
+        message = tool.claim_issue("o/r", 7, "@me", explicit=True)
         assert edits(calls)[0][-2:] == ["--add-assignee", "@me"]
         assert "assigned to @me" in message
 
@@ -130,17 +130,25 @@ class TestMoveClaimsTheIssue:
     def test_the_flag_claims_whatever_the_status(self, tool, move):
         assert move("Blocked", add_assignee="dev") == [("dev", True)]
 
-    def test_a_bare_flag_claims_whatever_the_status(self, tool, move):
-        """Given at all is somebody asking. Found live: this printed nothing at
-        all on `--status Blocked --add-assignee`, because "" was read as "not
-        given" rather than "given, meaning me"."""
-        assert move("Blocked", add_assignee="") == [("", True)]
+    def test_at_me_claims_whatever_the_status(self, tool, move):
+        """Given at all is somebody asking -- on Blocked as much as on In
+        Progress."""
+        assert move("Blocked", add_assignee="@me") == [("@me", True)]
 
-    def test_a_bare_flag_is_explicit_even_where_the_rule_would_have_claimed(self, tool, move):
-        assert move("In Progress", add_assignee="") == [("", True)]
+    def test_at_me_is_explicit_even_where_the_rule_would_have_claimed(self, tool, move):
+        assert move("In Progress", add_assignee="@me") == [("@me", True)]
 
-    def test_whitespace_is_not_a_login_but_is_still_a_request(self, tool, move):
-        assert move("In Progress", add_assignee="  ") == [("", True)]
+    @pytest.mark.parametrize("value", ["", "  "])
+    def test_an_empty_login_is_refused_before_anything_is_written(
+            self, tool, monkeypatch, move, value):
+        """It used to mean the caller. `gh` has no such spelling (#201), and
+        refusing it after the Status write would leave half a move behind."""
+        writes = []
+        monkeypatch.setattr(tool, "set_field", lambda *a, **k: writes.append(a))
+        with pytest.raises(SystemExit) as exit_info:
+            move("In Progress", add_assignee=value)
+        assert '"@me"' in str(exit_info.value)
+        assert writes == []
 
     def test_a_login_is_stripped(self, tool, move):
         assert move("In Progress", add_assignee=" dev ") == [("dev", True)]
@@ -159,8 +167,8 @@ def argparse_namespace(tool, **overrides):
 
 
 class TestTheFlagIsParsed:
-    """Through the real parser, because `nargs="?"` is the whole point: without
-    it a bare `--add-assignee` is an argparse error rather than "me"."""
+    """Through the real parser. A login is required, as in `gh issue edit`; the
+    bare flag that meant "me" was retired in #201."""
 
     @staticmethod
     def parsed(tool, monkeypatch, argv):
@@ -180,16 +188,17 @@ class TestTheFlagIsParsed:
 
     @pytest.mark.parametrize("extra,want", [
         ([], None),
-        (["--add-assignee"], ""),
         (["--add-assignee", "dev"], "dev"),
-        (["--add-assignee", ""], ""),
+        (["--add-assignee", "@me"], "@me"),
     ])
-    def test_absent_empty_and_named(self, tool, monkeypatch, extra, want):
+    def test_absent_and_named(self, tool, monkeypatch, extra, want):
         args = self.parsed(tool, monkeypatch,
                            ["move", "7", "--status", "In Progress", *extra])
         assert args.add_assignee == want
 
-    def test_a_bare_flag_does_not_swallow_the_next_option(self, tool, monkeypatch):
-        args = self.parsed(tool, monkeypatch,
-                           ["move", "7", "--add-assignee", "--status", "In Progress"])
-        assert args.add_assignee == "" and args.status == "In Progress"
+    def test_a_bare_flag_is_a_usage_error(self, tool, monkeypatch, capsys):
+        with pytest.raises(SystemExit) as exit_info:
+            self.parsed(tool, monkeypatch, ["move", "7", "--status", "In Progress",
+                                            "--add-assignee"])
+        assert exit_info.value.code == 2
+        assert "--add-assignee" in capsys.readouterr().err

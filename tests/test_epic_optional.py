@@ -87,7 +87,7 @@ class TestSayingItIsRequired:
         with pytest.raises(SystemExit) as exit_info:
             story("banana")
         message = str(exit_info.value)
-        assert "neither an epic's issue number nor `none`" in message
+        assert "names no epic: give its number, KEY-NUMBER or URL, or `none`" in message
         assert "--epic none" in message
 
     def test_nothing_is_created_when_it_is_refused(self, tool, story):

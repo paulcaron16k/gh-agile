@@ -317,11 +317,11 @@ convention argue with the team.
 ```bash
 gh agile move 53 --status "In Progress"                      # claims it for you
 gh agile move 53 --status "In Progress" --add-assignee dev   # or for someone
-gh agile move 53 --status Blocked --add-assignee             # bare: you
+gh agile move 53 --status Blocked --add-assignee @me         # or you, on any status
 ```
 
-`--add-assignee` is how to say otherwise. Passing it at all — with a login, or
-bare for yourself — assigns whatever the status and whoever already holds it. It
+`--add-assignee` is how to say otherwise. Passing it — a login, or `@me` for
+yourself, as `gh issue edit` takes it — assigns whatever the status and whoever already holds it. It
 *adds*, like `--add-label`, so two people on one issue is expressible and nobody
 is silently dropped. The caller is `@me`, which `gh` resolves against the token
 it owns: this tool never sees a credential and never guesses a username from a

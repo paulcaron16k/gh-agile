@@ -248,7 +248,15 @@ exits rather than guessing.
 | **Project** | `--project`, else `project.number` from the profile. Absent both, an error |
 | **Repository** | `--repo`, else the repo named by `--key`, else the repository you are running in |
 | **Key for a new issue** | `--key` — which must be listed for that repo — else the **first** key listed for that repo |
-| **Issue** | `--issue 34` uses the repository resolved above; `--issue ZMBNI-34` names it itself, and then `--repo`/`--key` are not needed |
+| **Issue** | `34` uses the repository resolved above; `ZMBNI-34` names it itself, and so does a URL, `https://github.com/owner/name/issues/34` — then `--repo`/`--key` are not needed. The same three spellings work wherever an issue is named, the parent flags `--epic`, `--story` and `--initiative` included |
+
+`--owner`, `--project` and `--config` may go before the subcommand or after it:
+`gh agile --project 5 board list` and `gh agile board list --project 5` are the
+same command, the second being where `gh project list --owner X` puts its flag.
+
+Short flags are `gh`'s own and mean what they mean there: `-R/--repo`,
+`-L/--limit`, `-s/--state` and `-t/--title`. There is no `-a` on `--add-assignee`,
+because in `gh` `-a` is `--assignee`, and `--add-assignee` has no short form.
 
 ### One project per main repository
 
@@ -1336,6 +1344,15 @@ gh agile sprint list
 Without `--start`, a new sprint begins the day after the last one ends, because
 overlapping sprints make "the current sprint" ambiguous.
 
+Creating a sprint writes the iteration configuration, which clears every item's
+`Sprint` value board-wide; the tool re-applies them afterwards (see *Which sprint
+was this worked in?*). `--dry-run` says what would be appended and how many
+assignments the write would have to re-apply, and writes nothing:
+
+```bash
+gh agile sprint create --dry-run
+```
+
 ### Keeping sprints stocked
 
 Creating a sprint by hand every fortnight is a rota, and a rota fails on the
@@ -2321,12 +2338,13 @@ gh agile move ZMBNI-32 --status "In Progress"
 #   #32 already assigned to a-teammate; left alone
 ```
 
-`--add-assignee` is how to say otherwise. Passing it at all — with a login, or
-bare for yourself — assigns whatever the status and whoever already holds it:
+`--add-assignee` is how to say otherwise. Passing it — a login, or `@me` for
+yourself, as `gh issue edit` takes it — assigns whatever the status and whoever
+already holds it:
 
 ```bash
 gh agile move ZMBNI-32 --status "In Progress" --add-assignee a-teammate
-gh agile move ZMBNI-32 --status Blocked --add-assignee     # bare: you
+gh agile move ZMBNI-32 --status Blocked --add-assignee @me
 ```
 
 It is `--add-assignee`, not `--assignee`, because it adds: two people on one
