@@ -7799,7 +7799,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     Separated from `main` so the parser can be walked in a test. It is the
     record of which commands exist and what each one takes, and two things
-    beside it have to agree with it -- `NEEDS_REPO`, and the guide -- so it has
+    beside it have to agree with it -- `apply_defaults`, and the guide -- so it has
     to be readable without running the tool. `scripts/check_guide.py` reads it
     through `--help` because it checks the published surface; a test inside the
     process reads it here.
@@ -7848,7 +7848,7 @@ default chosen for you.""",
     init.add_argument("--title-prefix", choices=sorted(TITLE_PREFIX_MODES),
                       default="off", help="what every issue is called")
     init.add_argument("-R", "--repo", help="owner/name; defaults to the working directory")
-    init.set_defaults(func=cmd_init)
+    init.set_defaults(func=cmd_init, needs_repo=True, projectless=True)
 
     setup = sub.add_parser("setup", help="create the project's fields and labels, idempotently",
         epilog=field_help(SETUP_FIELDS) + """\n\nproject fields created:\n  Story Points  number                            the Gold model's story_points\n  Priority      single-select  lowest..highest    Gold priority_id\n  FR            text                              requirement traceability\n  Sprint        iteration                         Gold sprint_id; via GraphQL, gh cannot\n  Status        single-select  Todo..Done         Gold state_id; two options added to GitHub's three""",
@@ -7910,7 +7910,7 @@ what an initiative is:
     initiative_fix.add_argument("ref")
     initiative_fix.add_argument("--dry-run", action="store_true")
     initiative_fix.add_argument("-R", "--repo")
-    initiative.set_defaults(func=cmd_initiative)
+    initiative.set_defaults(func=cmd_initiative, needs_repo=True)
 
     epic = sub.add_parser("epic", help="create an epic issue on the board",
         epilog=field_help(EPIC_FIELDS) + """""",
@@ -7930,7 +7930,7 @@ what an initiative is:
                            "3sprints. Calendar days, inclusive")
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
-    epic.set_defaults(func=cmd_epic)
+    epic.set_defaults(func=cmd_epic, needs_repo=True)
 
     story = sub.add_parser("story", help="create a story, attach it to its epic, set its fields",
         epilog=field_help(STORY_FIELDS) + """""",
@@ -7948,7 +7948,7 @@ what an initiative is:
     story.add_argument("--status", default="Todo")
     story.add_argument("--intent")
     story.add_argument("--acceptance")
-    story.set_defaults(func=cmd_story)
+    story.set_defaults(func=cmd_story, needs_repo=True)
 
     task = sub.add_parser(
         "task", help="create a task: story-internal housekeeping, counted by nothing",
@@ -7980,7 +7980,7 @@ what a task is, and is not:
     task.add_argument("--key", help="which key to label the issue with")
     task.add_argument("--intent")
     task.add_argument("--acceptance")
-    task.set_defaults(func=cmd_task)
+    task.set_defaults(func=cmd_task, needs_repo=True, projectless=True)
 
     self_test = sub.add_parser(
         "self-test", help="stand up a scratch project, exercise everything, tear it down"
@@ -7998,7 +7998,7 @@ what a task is, and is not:
                                 "seen from ~75s to over 420s)")
     self_test.add_argument("--gap", type=int, default=20,
                            help="seconds between the two status transitions")
-    self_test.set_defaults(func=cmd_self_test)
+    self_test.set_defaults(func=cmd_self_test, projectless=True)
 
     sync = sub.add_parser(
         "sync", help="add issues that belong on the board and are not on it",
@@ -8030,7 +8030,7 @@ why this is needed:
     sync.add_argument("--yes", action="store_true",
                       help=f"confirm an --adopt that would write to more than "
                            f"{ADOPT_CONFIRM_ABOVE} issues")
-    sync.set_defaults(func=cmd_sync)
+    sync.set_defaults(func=cmd_sync, needs_repo=True)
 
     board = sub.add_parser(
         "board", help="scrum, kanban, backlog or roadmap boards over one project",
@@ -8128,7 +8128,7 @@ optional `Epic: ` -- and nothing else. A title that merely begins like one,
                "the one account that happens to hold that number.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    project.set_defaults(func=cmd_project)
+    project.set_defaults(func=cmd_project, needs_repo=True, projectless=True)
 
     sprint = sub.add_parser("sprint", help="list or create sprint iterations")
     sprint_sub = sprint.add_subparsers(dest="sprint_command", required=True)
@@ -8220,7 +8220,7 @@ why this exists:
     key.add_argument("--key", help="uppercase key; omit to list what is recorded")
     key.add_argument("--name", help="human-readable project name, written to shortDescription")
 
-    key.set_defaults(func=cmd_key)
+    key.set_defaults(func=cmd_key, needs_repo=True, projectless=True)
 
     move = sub.add_parser("move", help="change status, with the evidence that status requires",
         epilog=field_help(MOVE_FIELDS) + """""",
@@ -8243,7 +8243,7 @@ why this exists:
                       help='who to assign; "@me" for you. Moving to In Progress claims '
                            "an unassigned issue without it")
     move.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
-    move.set_defaults(func=cmd_move)
+    move.set_defaults(func=cmd_move, needs_repo=True)
 
     setter = sub.add_parser("set", help="set one field on an issue already on the board",
         epilog=field_help(SET_FIELDS) + """""",
@@ -8253,7 +8253,7 @@ why this exists:
     setter.add_argument("--field", required=True, help='field name, e.g. "Story Points"')
     setter.add_argument("--value", help="text or single-select option")
     setter.add_argument("--number", type=float, help="numeric value")
-    setter.set_defaults(func=cmd_set)
+    setter.set_defaults(func=cmd_set, needs_repo=True)
 
     planner = sub.add_parser("plan",
         help="set or clear the dates on an epic or initiative that already exists",
@@ -8271,7 +8271,7 @@ why this exists:
                               "end: 6w, 10d, 3sprints. Calendar days, inclusive")
     planner.add_argument("-R", "--repo", help="only needed if the item's repository "
                                         "cannot be read back")
-    planner.set_defaults(func=cmd_plan)
+    planner.set_defaults(func=cmd_plan, needs_repo=True)
 
     unfinished = sub.add_parser(
         "unfinished",
@@ -8284,7 +8284,7 @@ why this exists:
 
     hooks = sub.add_parser(
         "hooks", help="install the post-merge hook into this clone")
-    hooks.set_defaults(func=cmd_hooks)
+    hooks.set_defaults(func=cmd_hooks, projectless=True)
 
     export = sub.add_parser("export", help="items, field values and status history")
     export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
@@ -8332,7 +8332,7 @@ why this exists:
     fix.add_argument("--dry-run", action="store_true",
                      help="say what would change and change nothing")
     fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
-    fix.set_defaults(func=cmd_fix)
+    fix.set_defaults(func=cmd_fix, needs_repo=True)
     inherit_global_flags(parser)
     return parser
 
@@ -8438,23 +8438,6 @@ def resolve_owner(args, config: dict) -> None:
         )
 
 
-#: The commands that legitimately run with no project number, and why each one
-#: does. Everything else is refused rather than allowed to carry a `None` into a
-#: GraphQL variable -- including commands added later, which is why this is the
-#: exemption list and not a requirement list.
-#:
-#:   project     the bootstrap. `project create` is what *writes* `project.number`
-#:               to the profile, and `title-prefix`, `owner` and `sprint-template`
-#:               only ever touch the profile. Demanding a number here would mean
-#:               needing a board before you could record the board.
-#:   key         lists or records a key in the profile. It reaches the project
-#:               only to write `shortDescription`, already guarded by `if
-#:               args.project`.
-#:   self-test   stands up its own scratch project, and is exempt from the
-#:               `--project` defaulting above for the same reason.
-PROJECTLESS = {"project", "key", "self-test", "task", "init", "hooks"}
-
-
 def missing_project_message(explicit: str | None) -> str:
     """No board to act on: say which of the two reasons it is.
 
@@ -8499,21 +8482,6 @@ def missing_project_message(explicit: str | None) -> str:
     )
 
 
-#: Every command that can touch an issue needs a repository, whether or not it
-#: declares a `--repo` flag. `set --issue 26` had none to attach to, so the
-#: attribute never existed and a bare issue number could not be resolved even
-#: from inside the repository it belongs to -- and `plan` repeated it exactly,
-#: minutes after being written.
-#:
-#: **Hand-maintained, so something checks it against the parser.** A command that
-#: names an issue and is missing here does not fail loudly: it refuses a bare
-#: number with *run inside one* from inside one, which reads like the caller's
-#: mistake. `tests/test_plan_command.py` compares this set with the commands that
-#: actually take an issue.
-NEEDS_REPO = {"initiative", "epic", "story", "task", "set", "move", "plan",
-              "sync", "key", "project", "fix", "init"}
-
-
 def apply_defaults(args) -> None:
     """Fill --project, --repo and --key from the profile and the working directory.
 
@@ -8554,12 +8522,32 @@ def apply_defaults(args) -> None:
     # argparse default, so "not given and not in the profile" left `args.project`
     # as None all the way to the query, where it surfaced as a project that could
     # not be found -- see `missing_project_message`.
-    if args.project is None and args.command not in PROJECTLESS:
+    #
+    # **Each command declares it on its own parser: `projectless=True`.** The
+    # exemptions, and why each holds: `project` is the bootstrap -- `project
+    # create` *writes* `project.number`, and its other subcommands only touch the
+    # profile, so demanding a number would mean needing a board to record the
+    # board. `key` lists or records a key in the profile and reaches the project
+    # only for `shortDescription`, already guarded. `self-test` stands up its own
+    # scratch project. Everything else is refused, including commands added
+    # later, which is why this is an exemption and not a requirement.
+    #
+    # It was a set of top-level names. Under `issue move` and `epic list` the
+    # top-level name no longer says what one subcommand needs (#202), and a
+    # declaration beside the parser cannot name a command that does not exist.
+    if args.project is None and not getattr(args, "projectless", False):
         sys.exit(missing_project_message(getattr(args, "config", None)))
 
     key = getattr(args, "key", None)
     repo = getattr(args, "repo", None)
-    if repo is None and args.command in NEEDS_REPO:
+    # **`needs_repo=True` on every parser that can touch an issue**, whether or
+    # not it has a `--repo` flag. `set --issue 26` had none to attach to, so a
+    # bare number could not be resolved even from inside its own repository, and
+    # `plan` repeated it minutes after being written: it refuses with *run inside
+    # one* from inside one, which reads like the caller's mistake.
+    # `tests/test_plan_command.py` walks the parser for commands that take an
+    # issue and lack the declaration.
+    if repo is None and getattr(args, "needs_repo", False):
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)
             if not repo:

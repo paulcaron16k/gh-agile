@@ -207,27 +207,32 @@ class TestSetRefusesTheSameThing:
 
 
 class TestEveryIssueCommandCanResolveARepository:
-    """A command that names an issue and is not in `NEEDS_REPO` cannot take a
-    bare number, even from inside the right clone.
+    """A command that names an issue and does not declare `needs_repo=True`
+    cannot take a bare number, even from inside the right clone.
 
     `plan` shipped that way for an hour: `plan 19` answered *needs a
     repository: run inside one*, from inside one. `set --issue 26` had the same
-    hour years earlier, which is what put the comment above that set. The set is
-    hand-maintained and the parser is the record of which commands touch an
-    issue, so this compares the two rather than trusting either.
+    hour years earlier. The declaration is hand-written beside each parser --
+    it was a central set of names until #202 -- so this walks the parser for
+    every command taking an issue and checks it, rather than trusting either.
     """
 
     def leaves(self, tool):
-        """`(name, parser)` for every subcommand, including nested ones."""
+        """`(name, parser, needs_repo)` for every subcommand, nested ones too.
+
+        `needs_repo` is the effective value: a group's declaration reaches its
+        subcommands, so `issue` declaring it covers `issue move`.
+        """
         import argparse
         found = []
 
-        def walk(parser, prefix=""):
+        def walk(parser, prefix="", inherited=False):
             for action in parser._actions:
                 if isinstance(action, argparse._SubParsersAction):
                     for name, sub in action.choices.items():
-                        walk(sub, prefix or name)
-                        found.append((prefix or name, sub))
+                        needs = inherited or bool(sub.get_default("needs_repo"))
+                        walk(sub, prefix or name, needs)
+                        found.append((prefix or name, sub, needs))
         walk(tool.build_parser())
         return found
 
@@ -236,12 +241,11 @@ class TestEveryIssueCommandCanResolveARepository:
         assert len(self.leaves(tool)) > 10
 
     def test_every_command_naming_an_issue_needs_a_repo(self, tool):
-        needs = tool.NEEDS_REPO
         # `issue` only, not `--id`: `validate --id 24` filters the board read and
         # never resolves a repository, which the walk reported the first time this
         # ran. The dest under test is the one that becomes an issue reference.
         missing = sorted({
-            name for name, parser in self.leaves(tool)
-            if any(a.dest == "issue" for a in parser._actions) and name not in needs
+            name for name, parser, needs in self.leaves(tool)
+            if any(a.dest == "issue" for a in parser._actions) and not needs
         })
-        assert missing == [], f"not in NEEDS_REPO: {missing}"
+        assert missing == [], f"no needs_repo=True: {missing}"
