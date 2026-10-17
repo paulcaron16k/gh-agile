@@ -71,7 +71,7 @@ class TestGlobalFlagsEitherSide:
 #: Every short flag, and the long flag it must stand for. Each one is `gh`'s
 #: own, meaning the same thing there.
 GH_SHORT_FLAGS = {"-h": "--help", "-R": "--repo", "-L": "--limit", "-s": "--state",
-                  "-t": "--title"}
+                  "-t": "--title", "-r": "--reason", "-c": "--comment"}
 
 
 class TestShortFlagsAreGhs:

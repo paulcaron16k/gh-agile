@@ -698,7 +698,7 @@ nothing at all.
 
 It happens when a pull request's `Closes #n` closes the issue — that automation
 sets the issue's state and **nothing else**, so Status stays where it was last
-put. Finishing with `gh agile issue move <n> Done --close` cannot produce it.
+put. Finishing with `gh agile issue close <n>` cannot produce it.
 
 **The filter comes from the view, not from you.** That is the point: the board
 was defined once, in the profile and on GitHub, and this renders *that*
@@ -941,7 +941,7 @@ Measured on two live projects, which is where the recommendation comes from:
 | **Auto-add sub-issues to project** | **yes** (on by default) | Every story created under a boarded epic would need a `sync` |
 | **Item closed** → Status = Done | **no** — see below | Nothing it can fix. Status does not follow a close, so finished work sits in the In Progress column looking live — but this workflow writes Status and *nothing else*, so it replaces a visibly unfinished issue with one that reads Done and is not. The post-merge hook asks a person instead |
 | **Item added to project** → Status = Todo | **yes** | An item arriving by any other route has no Status, which puts it in no column of any board |
-| **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `move` can set the reason. That is how `--not-planned` lost its reason on the sandbox |
+| **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `move` can set the reason. That is how `not planned` lost its reason on the sandbox |
 | Pull request merged · Pull request linked to issue | not for a board of issues | They act on **pull-request items**. This board holds 65 items and every one is an issue, so both would do nothing |
 
 **Project → ⋯ (top right) → Workflows.** It is a setting on the **project**, not
@@ -968,7 +968,7 @@ That command is strictly better than the workflow, not merely equal:
 gh agile issue move AGILE-187 Done --evidence "..."
 ```
 
-No `--close`, because the issue is already closed and closing one twice is a
+`issue move`, not `issue close`, because the issue is already closed and closing one twice is a
 no-op that exits 0 — which is how a close reason gets lost. It writes the
 Evidence, sets the Status, **and** stamps the closing sprint. The workflow
 produces none of those three.
@@ -1038,8 +1038,8 @@ commands.** GitHub may close it and leave the board behind:
         #187 AGILE-187 A planner types a duration, not an end : 'In Progress'
 
       finish it:  gh agile issue move 187 Done --evidence "..."
-      no --close: it is already closed, and closing an issue twice is a
-      no-op that exits 0 -- which is how a close reason gets lost.
+      `issue move`, not `issue close`: it is already closed, and closing an issue
+      twice is a no-op that exits 0 -- which is how a close reason gets lost.
 ```
 
 or — just as often — not close it at all:
@@ -1047,9 +1047,9 @@ or — just as often — not close it at all:
 ```
   #186 is still open, although a merged pull request in this range says it closes it.
 
-      finish it:  gh agile issue move 186 Done --close --evidence "..."
-      --close, because nothing else has closed it and the reason is this tool's
-      to choose -- `completed`, or `--not-planned` if that is what happened.
+      finish it:  gh agile issue close 186 --evidence "..."
+      `issue close`, because nothing else has closed it and the reason is this
+      tool's to choose -- completed, or `-r "not planned"` if that is what happened.
 ```
 
 **Do not assume `Closes #n` closes the issue.** Measured across five consecutive
@@ -1073,7 +1073,7 @@ It does not restate what a finished issue looks like: it asks `gh agile validate
 is one that can disagree with the first.
 
 **`Auto-close issue` is the one to actively avoid.** It is the mirror image and it
-races this tool: `issue move ISSUE Done --not-planned --close` sets Status first, the
+races this tool: `issue close ISSUE -r "not planned"` sets Status first, the
 workflow closes the issue as *completed*, and the tool's own close then finds it
 already closed and changes nothing. Measured; `gh issue close --reason` on an
 already-closed issue exits 0 and does nothing, so the reason was silently lost.
@@ -1532,7 +1532,7 @@ one label per sprint it lived in:
 
 ```bash
 gh agile issue move 53 "In Progress"     #  #53 + sprint:2026-08-10
-gh agile issue move 53 Done --close      #  #53 + sprint:2026-08-24
+gh agile issue close 53      #  #53 + sprint:2026-08-24
 ```
 
 The export carries both, beside the live field:
@@ -1564,11 +1564,11 @@ close instead, through the same rule `sprint backfill --source timeline` applies
 so the live stamp and the repair pass cannot disagree:
 
 ```bash
-gh agile issue move 53 Done --evidence "..." --close   #  #53 + sprint:2026-08-31
+gh agile issue close 53 --evidence "..."   #  #53 + sprint:2026-08-31
 ```
 
 **An abandoned issue is given no derived label.** `sprint:` means *the sprint this
-was worked in*, and work closed with `--not-planned` was worked in none —
+was worked in*, and work closed with `-r "not planned"` was worked in none —
 deriving one would stamp every abandoned issue into whichever sprint it was
 abandoned in and pad that sprint with work nobody did. `validate` does not ask an
 abandoned issue for a label, and `sprint backfill` does not supply one, because a
@@ -2419,7 +2419,7 @@ with nothing supplied at all:
 
 ```bash
 gh agile issue move ZMBNI-32 "In Review" --evidence "the probe table, the numbers"
-gh agile issue move ZMBNI-32 Done --close
+gh agile issue close ZMBNI-32
 #   #32 Evidence already in the body
 #   #32 Status = Done
 ```
@@ -2450,7 +2450,7 @@ the issue body does not carry what a move to Done requires:
 **5 — fixed, with evidence**
 
 ```bash
-gh agile issue move ZMBNI-32 Done --evidence-file evidence.md --close
+gh agile issue close ZMBNI-32 --evidence-file evidence.md
 ```
 
 where `evidence.md` is:
@@ -2479,16 +2479,26 @@ the body is not complete:
   - ## Evidence is still _TBD_
 ```
 
-`--close` closes the issue as completed; `--not-planned` closes it as not
-planned, so work that stopped for another reason stays distinguishable in the
-export.
+`gh agile issue close` closes the issue as completed, and is the Done path entire:
+the same evidence rule, the closing `sprint:` label. `-r "not planned"` closes it as
+not planned, so work that stopped for another reason stays distinguishable in the
+export; that needs no evidence and stamps no label, because nothing was done in any
+sprint. Either way Status becomes `Done`, since a closed issue on any other Status
+reads as live work to every board. `-c` leaves a closing comment, as in
+`gh issue close`, and `gh agile issue reopen` reverses it, moving Status back to
+`Todo` unless `--status` names another:
+
+```bash
+gh agile issue close ZMBNI-185 -r "not planned" -c "created by mistake"
+gh agile issue reopen ZMBNI-32 --status "In Progress"
+```
 
 **The close happens before the status is written, and that ordering is load-bearing.**
 A project can carry a built-in *auto-close when Status is Done* workflow, and it
 closes the issue as **completed** — attributed to you, not to the automation, so
 the timeline gives no hint. `gh issue close --reason` on an issue that is already
 closed changes nothing and still exits 0, and the reason cannot be corrected
-afterwards. Going first is the only way `--not-planned` survives on such a
+afterwards. Going first is the only way `not planned` survives on such a
 project, and the tool checks what GitHub actually recorded rather than trusting
 the exit code:
 
@@ -2503,7 +2513,7 @@ If the reason comes back wrong anyway, it says so on stderr rather than printing
 **6 — close the epic**
 
 ```bash
-gh agile issue move ZMBNI-31 Done --evidence-file epic-evidence.md --close
+gh agile issue close ZMBNI-31 --evidence-file epic-evidence.md
 ```
 
 Close it when its stories are closed. `gh agile validate` reports an epic marked
@@ -2541,7 +2551,7 @@ cat > /tmp/evidence.md <<'EOF'
 after the fix, verified by running the 25-line case against both.
 EOF
 
-gh agile issue move "$ISSUE" Done --evidence-file /tmp/evidence.md --close
+gh agile issue close "$ISSUE" --evidence-file /tmp/evidence.md
 ```
 
 Two rules worth encoding in whatever drives it:
@@ -2808,6 +2818,7 @@ gh agile issue move --help
 | `initiative create` / `epic create` / `story create` | Create work items with their parent, labels and fields; the title is `-t`, as in `gh issue create` |
 | `issue edit` | Set one field on an item already on the board |
 | `issue move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
+| `issue close` / `issue reopen` | Close as completed (needs Evidence) or `-r "not planned"`, setting Status to `Done`; reopen and move Status back |
 | `issue reconcile` | Repair one issue's Sprint field from its `sprint:` labels |
 | `validate` | Check the conventions a machine can check |
 | `export` | Issues and events, full or incremental, to stdout or timestamped files |

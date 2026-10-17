@@ -102,7 +102,7 @@ Commands
     gh agile sprint create|list
     gh agile epic  create -t "Title" [--key ...]
     gh agile story create -t "Title" --epic 4 [--points 3] [--priority high]
-    gh agile issue move ZMBNI-34 Done --evidence-file notes.md --close
+    gh agile issue close ZMBNI-34 --evidence-file notes.md
     gh agile issue edit ZMBNI-34 --field Sprint --value @current
     gh agile sync [--dry-run]
     gh agile validate
@@ -3088,7 +3088,10 @@ def cmd_story(args) -> int:
 
     with board_write_reported(number, url, args.project):
         item = add_to_project(args.owner, args.project, url)
-        set_field(args.owner, args.project, item, "Status", canonical_status(args.status))
+        # Always `Todo`. `--status` went in #202: it was a second route to Done
+        # that asked for no evidence, and every other status is a start of work,
+        # which `issue move` is for -- claiming the issue, assigning the sprint.
+        set_field(args.owner, args.project, item, "Status", "Todo")
         if args.points is not None:
             set_field(args.owner, args.project, item, "Story Points", args.points)
         if args.priority:
@@ -5885,6 +5888,14 @@ def cmd_set(args) -> int:
     hit between two field writes -- could only be fixed by hand, which is what
     this tool exists to avoid.
     """
+    # **Status has one door, and it is `issue move`.** That is where Done asks for
+    # evidence, starting work claims the issue and assigns the sprint, and the
+    # `sprint:` label is stamped. A field write here skipped all of it -- the
+    # second route to Done that #202 closes. Refused before anything is read.
+    if args.field.strip().casefold() == "status":
+        sys.exit("Status changes through `gh agile issue move ISSUE STATUS`, which asks "
+                 "for the evidence\n  Done needs and claims the issue and its sprint when "
+                 "work starts; closing is\n  `gh agile issue close ISSUE`.")
     repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
     item = board_item_for(args.owner, args.project, repo, args.issue)
     if not item:
@@ -6106,7 +6117,8 @@ def claim_issue(repo: str, issue: int, wanted: str, *, explicit: bool) -> str:
 CLOSE_REASONS = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
 
 
-def close_issue(repo: str, issue: int, *, not_planned: bool) -> None:
+def close_issue(repo: str, issue: int, *, not_planned: bool,
+                comment: str | None = None) -> None:
     """Close the issue, and check GitHub recorded the reason that was asked for.
 
     **The exit code cannot be trusted here.** `gh issue close --reason` on an
@@ -6123,7 +6135,8 @@ def close_issue(repo: str, issue: int, *, not_planned: bool) -> None:
     sprint* label on an issue nobody worked.
     """
     wanted = "not planned" if not_planned else "completed"
-    gh(["issue", "close", str(issue), "--repo", repo, "--reason", wanted])
+    gh(["issue", "close", str(issue), "--repo", repo, "--reason", wanted]
+       + (["--comment", comment] if comment else []))
     recorded = json.loads(gh(["issue", "view", str(issue), "--repo", repo,
                               "--json", "state,stateReason"]))
     reason = (recorded.get("stateReason") or "").upper()
@@ -6143,10 +6156,10 @@ def close_issue(repo: str, issue: int, *, not_planned: bool) -> None:
 def abandoning(args) -> bool:
     """Whether this run is closing the issue as *not planned*.
 
-    Both flags, because `--not-planned` alone changes nothing: `cmd_move` reads
-    it only inside `if args.close`, so without `--close` it is a stated intention
-    that never reaches GitHub, and a sprint label must not be withheld on the
-    strength of one.
+    Both attributes, because `not_planned` alone changes nothing: `cmd_move`
+    reads it only inside `if args.close`. They were `move --close --not-planned`,
+    and `--not-planned` without `--close` was parsed, accepted and dropped. Since
+    #202 only `issue close -r "not planned"` sets them, and it sets both.
     """
     return bool(getattr(args, "not_planned", False) and getattr(args, "close", False))
 
@@ -6248,6 +6261,45 @@ def promote_parents(args, repo: str, issue: int) -> None:
               f"Status = {CYCLE_START}")
 
 
+def cmd_close(args) -> int:
+    """Close an issue, as `gh issue close` does, and bring its Status with it.
+
+    `move --close --not-planned` was the only close, and `--not-planned` without
+    `--close` silently did nothing. The cleanup of ZMBNI-185 was
+    `gh issue close 185 -r "not planned" -c ...`, so that is the spelling (#202).
+
+    Both reasons end at Status `Done`, because a closed issue on any other Status
+    is live work to every board filter. **Completed is the Done path entire** --
+    the evidence rule, the closing `sprint:` label. **Not planned** needs no
+    evidence and stamps no label, because a `sprint:` label asserts the sprint
+    work was *done in*. Closed first, then Status, for the reason `cmd_move`
+    gives where it does it.
+    """
+    args.status = CYCLE_END
+    args.close = True
+    args.not_planned = args.reason == "not planned"
+    args.add_assignee = None
+    return cmd_move(args)
+
+
+def cmd_reopen(args) -> int:
+    """Reopen an issue, as `gh issue reopen` does, and put its Status back.
+
+    `Todo` unless `--status` names another: a reopened issue is waiting to be
+    picked up again, and moving it through `cmd_move` means `--status
+    "In Progress"` claims it and assigns the sprint as any start of work does.
+    Its `sprint:` labels stay -- they record where it was worked, which reopening
+    does not undo.
+    """
+    repo, number = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
+    gh(["issue", "reopen", str(number), "--repo", repo]
+       + (["--comment", args.comment] if args.comment else []))
+    print(f"  #{number} reopened")
+    args.issue, args.repo = str(number), repo
+    args.evidence = args.evidence_file = args.add_assignee = None
+    return cmd_move(args)
+
+
 def cmd_move(args) -> int:
     """Change an issue's status, requiring the evidence that status implies.
 
@@ -6271,7 +6323,11 @@ def cmd_move(args) -> int:
     # printed -- sees the spelling GitHub holds rather than the one that was
     # typed. `In-Review` and `in review` are the same transition.
     args.status = canonical_status(args.status)
-    required = tuple(REQUIRED_FOR.get(args.status.casefold(), ()))
+    # Nothing was done, so there is nothing to evidence: a close as not planned
+    # reaches Done -- a closed issue on any other Status reads as live work on
+    # the board (`stale_status`) -- without the section Done otherwise demands.
+    # Offered text is still written; `-c` is where the reason belongs.
+    required = () if abandoning(args) else tuple(REQUIRED_FOR.get(args.status.casefold(), ()))
     # Read whenever the text was offered, not only when the status demands it.
     # This was `if required else {}`, so on every status but the cycle end the
     # flags were parsed, accepted and thrown away: no warning, exit 0, and the
@@ -6344,8 +6400,9 @@ def cmd_move(args) -> int:
     # There is no repair afterwards; the reason cannot be changed on a closed
     # issue. Closing first, then setting Status, keeps `NOT_PLANNED` -- measured
     # on the same project that loses it the other way round.
-    if args.close:
-        close_issue(repo, args.issue, not_planned=args.not_planned)
+    if getattr(args, "close", False):
+        close_issue(repo, args.issue, not_planned=args.not_planned,
+                    comment=getattr(args, "comment", None))
     set_field(args.owner, args.project, item["id"], "Status", args.status)
     print(f"  #{args.issue} Status = {args.status}")
 
@@ -6940,13 +6997,13 @@ def closing_issues(pull_request: int) -> list[tuple[str, int]] | None:
 #: `--not-planned` its reason in #96.
 STILL_OPEN = (
     "is still open, although a merged pull request in this range says it closes it.",
-    "--close, because nothing else has closed it and the reason is this tool's\n"
-    "      to choose -- `completed`, or `--not-planned` if that is what happened.",
+    "`issue close`, because nothing else has closed it and the reason is this\n"
+    "      tool's to choose -- completed, or `-r \"not planned\"` if that is what happened.",
 )
 CLOSED_NOT_DONE = (
     "was closed by this merge, and the board has not caught up:",
-    "no --close: it is already closed, and closing an issue twice is a\n"
-    "      no-op that exits 0 -- which is how a close reason gets lost.",
+    "`issue move`, not `issue close`: it is already closed, and closing an issue\n"
+    "      twice is a no-op that exits 0 -- which is how a close reason gets lost.",
 )
 
 
@@ -6986,7 +7043,7 @@ def outstanding(args, board: list[dict], repo: str, issue: int) -> str | None:
         detail, why = STILL_OPEN
         return render_unfinished(
             issue, detail,
-            f'gh agile issue move {issue} Done --close --evidence "..."', why)
+            f'gh agile issue close {issue} --evidence "..."', why)
     said, found = io.StringIO(), 0
     # `SystemExit` suppressed for the same reason: `validate --id` refuses a bare
     # number that two repositories share, and a refusal here would take the pull
@@ -7657,7 +7714,6 @@ STORY_FIELDS = [
     ("--epic", "N|KEY-N|URL", "required", "epic to attach to as a sub-issue"),
     ("--points", "number", "optional", "Story Points; the Gold model's story_points"),
     ("--priority", "lowest|low|medium|high|highest", "optional", "Priority field"),
-    ("--status", "one of STATUSES", "optional", "Status field; defaults to Todo"),
     ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
     ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
 ]
@@ -7667,6 +7723,15 @@ SET_FIELDS = [
     ("--field", "field name", "required", 'e.g. Status, "Story Points", Priority, FR, Sprint'),
     ("--value", "text", "optional", "text, single-select option, sprint title, or @current"),
     ("--number", "number", "optional", "numeric value; use instead of --value for a number field"),
+]
+
+CLOSE_FIELDS = [
+    ("issue", "N|KEY-N|URL", "required", "the issue; positional"),
+    ("-r/--reason", "completed|not planned", "optional", "default completed"),
+    ("-c/--comment", "text", "optional", "a closing comment, as gh issue close -c"),
+    ("--evidence", "text or -", "conditional", "required for completed, unless the "
+                                               "body has it"),
+    ("--evidence-file", "path or -", "conditional", "file of ## Heading sections"),
 ]
 
 PLAN_FIELDS = [
@@ -7686,8 +7751,6 @@ MOVE_FIELDS = [
                                                "status; - reads stdin"),
     ("--evidence-file", "path or -", "conditional", "file of ## Heading sections; "
                                                     "- reads stdin"),
-    ("--close", "flag", "optional", "close the issue as well"),
-    ("--not-planned", "flag", "optional", "close as not planned rather than completed"),
     ("--add-assignee", "login", "optional",
      'who to assign; "@me" is you, and In Progress claims an unassigned issue'),
 ]
@@ -7988,7 +8051,6 @@ default chosen for you.""",
                        help=f"the epic: {ISSUE_REF_HELP}; or `none` for a story that stands alone")
     story.add_argument("--points", type=float)
     story.add_argument("--priority")
-    story.add_argument("--status", default="Todo")
     story.add_argument("--intent")
     story.add_argument("--acceptance")
     story.set_defaults(func=cmd_story, needs_repo=True)
@@ -8272,7 +8334,8 @@ why this exists:
     # way `gh issue` holds them (#202). `move`, `set` and `fix` were top-level;
     # each now takes the issue as its first positional, as every targeted `gh`
     # command does.
-    issue_group = sub.add_parser("issue", help="any work item: move, edit, reconcile")
+    issue_group = sub.add_parser("issue", help="any work item: move, edit, close, "
+                                                "reopen, reconcile")
     issue_sub = issue_group.add_subparsers(dest="issue_command", required=True)
     move = issue_sub.add_parser(
         "move", help="change status, with the evidence that status requires",
@@ -8288,8 +8351,6 @@ why this exists:
     move.add_argument("--evidence", help="section text, or - for stdin. Written whatever "
                                         "the status; required only for Done")
     move.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
-    move.add_argument("--close", action="store_true", help="close the issue as well")
-    move.add_argument("--not-planned", action="store_true", help="close as not planned")
     # A login is required, `@me` written out, as `gh issue edit --add-assignee`
     # takes it. It was `nargs="?"`, a bare flag meaning the caller -- a spelling
     # `gh` does not have, and #201 retired it. `default=None` still keeps "not
@@ -8312,6 +8373,32 @@ why this exists:
     setter.add_argument("--value", help="text or single-select option")
     setter.add_argument("--number", type=float, help="numeric value")
     setter.set_defaults(func=cmd_set, needs_repo=True)
+    closer = issue_sub.add_parser(
+        "close", help="close it, as gh issue close does, and set Status to Done",
+        epilog=field_help(CLOSE_FIELDS),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    closer.add_argument("issue", help=ISSUE_REF_HELP)
+    closer.add_argument("-r", "--reason", choices=list(CLOSE_REASONS), default="completed",
+                        help="completed (the default) needs Evidence, as Done does; "
+                             "not planned needs none")
+    closer.add_argument("-c", "--comment", help="leave a closing comment")
+    closer.add_argument("--evidence", help="section text, or - for stdin")
+    closer.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
+    closer.add_argument("-R", "--repo", help="only needed if the item's repository "
+                                             "cannot be read back")
+    closer.set_defaults(func=cmd_close, needs_repo=True)
+
+    reopener = issue_sub.add_parser(
+        "reopen", help="reopen it, as gh issue reopen does, and move Status back")
+    reopener.add_argument("issue", help=ISSUE_REF_HELP)
+    reopener.add_argument("--status", default="Todo",
+                          help="where it goes back to (default %(default)s); In Progress "
+                               "claims it and its sprint")
+    reopener.add_argument("-c", "--comment", help="leave a comment")
+    reopener.add_argument("-R", "--repo", help="only needed if the item's repository "
+                                               "cannot be read back")
+    reopener.set_defaults(func=cmd_reopen, needs_repo=True)
+
     fix = issue_sub.add_parser(
         "reconcile", help="repair one issue's Sprint field from its sprint: labels")
     fix.add_argument("issue", help=ISSUE_REF_HELP)
@@ -8486,6 +8573,16 @@ def retired_spelling(argv: list[str]) -> str | None:
         return None
     command, tail = rest[0], rest[1:]
     if command in WORK_ITEM_GROUPS:
+        if command == "story" and tail[:1] == ["create"]:
+            # `--status` went from `story create` in #202, so a correct verb and
+            # title can still carry it.
+            status, after = _pull_flag(tail[1:], "--status")
+            if status is not None:
+                if after and not after[0].startswith("-"):
+                    after = ["-t", *after]
+                new = shlex.join(["gh", "agile", *head, "story", "create", *after])
+                return (f"`story create` has no --status: a story starts in Todo.\n  {new}"
+                        + _status_after_create(status))
         if tail and tail[0] == "create" and len(tail) > 1 and not tail[1].startswith("-"):
             # `initiative create "Title"`: the verb was right, the title was not.
             title, after, was = tail[1], tail[2:], f"{command} create TITLE"
@@ -8494,26 +8591,29 @@ def retired_spelling(argv: list[str]) -> str | None:
             title, after, was = tail[0], tail[1:], f"{command} TITLE"
         else:
             return None
+        status, after = _pull_flag(after, "--status")
         new = shlex.join(["gh", "agile", *head, command, "create", "-t", title, *after])
-        return (f"`{was}` is now `{command} create -t TITLE`, as "
+        hint = (f"`{was}` is now `{command} create -t TITLE`, as "
                 f"`gh issue create -t` takes it:\n  {new}")
+        return hint + _status_after_create(status)
+    if command == "move" and "--close" in tail:
+        # `move X --status Done --close [--not-planned]` is `issue close X`, the
+        # way `gh issue close -r` spells the reason.
+        _status, after = _pull_flag(tail, "--status")
+        abandoned = "--not-planned" in after
+        after = [t for t in after if t not in ("--close", "--not-planned")]
+        issue = _first_positional(after)
+        reason = ["-r", "not planned"] if abandoned else []
+        new = shlex.join(["gh", "agile", *head, "issue", "close",
+                          *([issue] if issue else []), *reason, *after])
+        return (f"`move --close` is now `issue close`, as `gh issue close` takes it, "
+                f"with the reason as -r:\n  {new}")
     if command in MOVED_UNDER_ISSUE:
         verb, flag = MOVED_UNDER_ISSUE[command]
         value, after = _pull_flag(tail, flag)
         if command == "move":
-            # The issue was already positional; the status joins it. Found by
-            # skipping every flag's value, or `--evidence "text" 12` would read
-            # the evidence as the issue.
-            index, first = 0, None
-            while index < len(after):
-                token = after[index]
-                if token in MOVE_VALUE_FLAGS or token in GLOBAL_VALUE_FLAGS:
-                    index += 2
-                    continue
-                if not token.startswith("-"):
-                    first = after.pop(index)
-                    break
-                index += 1
+            # The issue was already positional; the status joins it.
+            first = _first_positional(after)
             positionals = [p for p in (first, value) if p is not None]
         else:
             positionals = [value] if value is not None else []
@@ -8521,6 +8621,39 @@ def retired_spelling(argv: list[str]) -> str | None:
         return (f"`{command}` is now `issue {verb}`, with the issue first as every "
                 f"targeted `gh` command takes it:\n  {new}")
     return None
+
+
+def _first_positional(tokens: list[str]) -> str | None:
+    """Remove and return `move`'s issue: the first token that is no flag's value.
+
+    Every flag's value is skipped, or `--evidence "text" 12` would read the
+    evidence as the issue.
+    """
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in MOVE_VALUE_FLAGS or token in GLOBAL_VALUE_FLAGS:
+            index += 2
+            continue
+        if not token.startswith("-"):
+            return tokens.pop(index)
+        index += 1
+    return None
+
+
+def _status_after_create(status: str | None) -> str:
+    """The second command, when a retired `--status` asked to start the work."""
+    if status is None or same_status(status, "Todo"):
+        return ""
+    return ("\n  then move it, which asks for what that status needs and claims the issue "
+            "when work starts:\n"
+            f"  gh agile issue move <number> {shlex_quote(canonical_status(status))}")
+
+
+def shlex_quote(text: str) -> str:
+    import shlex
+
+    return shlex.quote(text)
 
 
 def _pull_flag(tokens: list[str], flag: str) -> tuple[str | None, list[str]]:

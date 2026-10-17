@@ -117,7 +117,7 @@ class TestTheCommandsThatMovedUnderIssue:
 
     @pytest.mark.parametrize("argv,suggested", [
         (["move", "ZMBNI-34", "--status", "Done", "--evidence-file", "notes.md", "--close"],
-         "gh agile issue move ZMBNI-34 Done --evidence-file notes.md --close"),
+         "gh agile issue close ZMBNI-34 --evidence-file notes.md"),
         (["move", "12", "--status=In Progress"],
          "gh agile issue move 12 'In Progress'"),
         (["move", "--evidence", "some text", "12", "--status", "Done"],

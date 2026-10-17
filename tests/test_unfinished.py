@@ -137,7 +137,7 @@ class TestTheTwoStatesAMergeLeaves:
         how `--not-planned` lost its reason."""
         monkeypatch.setattr(hook, "cmd_validate", lambda a: print("x") or 1)
         text = hook.outstanding(args_for(hook), board(n174="CLOSED"), REPO, 174)
-        assert "no --close" in text and "exits 0" in text
+        assert "not `issue close`" in text and "exits 0" in text
 
     def test_it_carries_what_validate_said(self, hook, monkeypatch):
         monkeypatch.setattr(hook, "cmd_validate",
@@ -157,11 +157,11 @@ class TestTheTwoStatesAMergeLeaves:
 
     def test_and_reports_the_close_command(self, hook):
         text = hook.outstanding(args_for(hook), board(n186="OPEN"), REPO, 186)
-        assert "gh agile issue move 186 Done --close --evidence" in text
+        assert "gh agile issue close 186 --evidence" in text
 
     def test_and_says_why_the_reason_matters(self, hook):
         text = hook.outstanding(args_for(hook), board(n186="OPEN"), REPO, 186)
-        assert "not-planned" in text
+        assert '-r "not planned"' in text
 
     def test_validate_is_never_asked_about_an_open_issue(self, hook, monkeypatch):
         """An open issue whose pull request merged is not a convention
@@ -179,9 +179,9 @@ class TestTheTwoStatesAMergeLeaves:
         """One pull request can close several, and they need not agree."""
         monkeypatch.setattr(hook, "cmd_validate", lambda a: print("stale") or 1)
         shared = board(n186="OPEN", n174="CLOSED")
-        assert "--close" in hook.outstanding(
+        assert "issue close" in hook.outstanding(
             args_for(hook), shared, REPO, 186).split("finish it:")[1].splitlines()[0]
-        assert "--close" not in hook.outstanding(
+        assert "issue close" not in hook.outstanding(
             args_for(hook), shared, REPO, 174).split("finish it:")[1].splitlines()[0]
 
 

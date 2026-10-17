@@ -520,7 +520,7 @@ across a boundary carries both:
 
 ```
 gh agile issue move 53 "In Progress"       #53 + sprint:2026-08-10
-gh agile issue move 53 Done --close        #53 + sprint:2026-08-24
+gh agile issue close 53        #53 + sprint:2026-08-24
 ```
 
 Issues that predate the stamping are recovered with `gh agile sprint backfill`,
@@ -878,7 +878,7 @@ and *nothing else* — so without this workflow, finished work keeps its old Sta
 and sits in the In Progress column looking live.
 
 **Do not enable `Auto-close issue`.** It closes the issue the moment Status
-becomes `Done`, which beats `gh agile issue move ISSUE Done --not-planned --close` to the close and
+becomes `Done`, which beats `gh agile issue close ISSUE -r "not planned"` to the close and
 silently costs the reason.
 
 These **can be read and cannot be written**. `projectV2.workflows` returns each
