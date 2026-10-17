@@ -1627,10 +1627,24 @@ def fields_of(login: str, number: int, *, refresh: bool = False) -> dict[str, di
 #: creating a board, not two.
 STARTER_BOARDS = [
     {"name": "Sprint board", "type": "scrum"},
-    {"name": "Engineering: all work", "type": "kanban"},
     {"name": "Backlog", "type": "backlog"},
     {"name": "Roadmap", "type": "roadmap"},
 ]
+
+#: The cross-team view: every key's work in flight on one board, while each
+#: team's scrum board slices its own out with `label:key:...`. It earns its
+#: place only when the profile spans more than one key -- several repositories,
+#: or a mono-repo carrying several. On one key it repeats the Sprint board and
+#: the Backlog, and a starter board nobody uses teaches people to ignore boards.
+#: Reported by the first adopter outside this repo, a one-key project (#211).
+CROSS_TEAM_BOARD = {"name": "Engineering: all work", "type": "kanban"}
+
+
+def starter_boards(config: dict) -> list[dict]:
+    """The boards `init` records for this profile: the cross-team one only if it
+    has more than one key to cross."""
+    several = len(profile_keys(config)) > 1
+    return STARTER_BOARDS + ([CROSS_TEAM_BOARD] if several else [])
 
 #: A verdict for **every** built-in workflow, because three of six is not advice.
 #:
@@ -1888,7 +1902,12 @@ def cmd_init(args) -> int:
         cmd_project(argparse.Namespace(
             project_command="create", title=args.title, key=args.key,
             repo=args.repo, owner=args.owner, project=None, force=False,
-            sprint_template=None, _config=config,
+            # Passed through, not `None`. `project create` refuses without a
+            # template unless the profile already has one, and `init` records
+            # its own only in step 2 -- so a fresh clone was refused despite
+            # `--sprint-template`, with a message telling the person to write the
+            # profile by hand. Found by the first adopter outside this repo (#210).
+            sprint_template=args.sprint_template, _config=config,
             config=getattr(args, "config", None)))
         config = read_config(getattr(args, "config", None))
         args._config = config
@@ -1904,13 +1923,16 @@ def cmd_init(args) -> int:
     config.setdefault("project", {})["issue_title_prefix"] = args.title_prefix
     if args.sprint_template:
         write_sprint_template(config, args.sprint_template, target)
-    for board in STARTER_BOARDS:
+    # Only ever added, never removed: a profile that already carries a board --
+    # the cross-team one on a one-key project included -- keeps it.
+    boards = starter_boards(config)
+    for board in boards:
         if not any(b.get("name") == board["name"]
                    for b in (config.get("boards") or [])):
             config.setdefault("boards", []).append(dict(board))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-    print(f"  keys, cadence and {len(STARTER_BOARDS)} board(s) recorded")
+    print(f"  keys, cadence and {len(boards)} board(s) recorded")
 
     # 3. Fields, labels and the boards -- `setup` converges all three, so there
     #    is one mechanism for creating a board rather than two.
@@ -5761,6 +5783,13 @@ def cmd_key(args) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
     print(f"  {args.key} -> {args.repo}  (in {target})")
+    # Said, not done: a board is a view on a shared project, and creating one
+    # because a key was recorded is a write nobody asked for (#211).
+    if len(entries) > 1 and not any(b.get("type") == "kanban"
+                                    for b in config.get("boards") or []):
+        print(f"\n  {len(entries)} keys now, so a cross-team board has something to show:\n"
+              f"    gh agile board create --name \"{CROSS_TEAM_BOARD['name']}\" "
+              f"--type kanban --save")
 
     # Only when the key being recorded *is* this project's key. A key's name
     # describes the key -- "Zamboni Iceberg table maintainer" for ZMBNI -- and
@@ -7829,7 +7858,8 @@ project, a key and a cadence needs none of them.
 
 what it does, in order:
   1. creates the project and writes the profile -- number, owner, name, key
-  2. records the cadence, the title prefix and four starter boards
+  2. records the cadence, the title prefix and the starter boards: Sprint
+     board, Backlog and Roadmap, and Engineering: all work across several keys
   3. runs `setup`: the fields, the type: and key: labels, and those boards
   4. prints the web-UI steps the API cannot take, with their current state
 
