@@ -303,7 +303,7 @@ Two different questions, and only one of them is the assignee.
 developer while a story is in progress, then often a reviewer, then QA — so it
 is what a board needs and what a report cannot use.
 
-Starting work sets it. `move --status "In Progress"` assigns the issue to the
+Starting work sets it. `issue move ISSUE "In Progress"` assigns the issue to the
 caller if nobody holds it, alongside setting `Sprint`, because work in flight
 that reads unassigned is invisible to the one question a board answers beside
 *what is in progress*.
@@ -315,9 +315,9 @@ alone, since silently adding yourself to another person's work would make the
 convention argue with the team.
 
 ```bash
-gh agile move 53 --status "In Progress"                      # claims it for you
-gh agile move 53 --status "In Progress" --add-assignee dev   # or for someone
-gh agile move 53 --status Blocked --add-assignee @me         # or you, on any status
+gh agile issue move 53 "In Progress"                      # claims it for you
+gh agile issue move 53 "In Progress" --add-assignee dev   # or for someone
+gh agile issue move 53 Blocked --add-assignee @me         # or you, on any status
 ```
 
 `--add-assignee` is how to say otherwise. Passing it — a login, or `@me` for
@@ -519,8 +519,8 @@ start date is the sprint's identity, and because dates sort.
 across a boundary carries both:
 
 ```
-gh agile move 53 --status "In Progress"       #53 + sprint:2026-08-10
-gh agile move 53 --status Done --close        #53 + sprint:2026-08-24
+gh agile issue move 53 "In Progress"       #53 + sprint:2026-08-10
+gh agile issue move 53 Done --close        #53 + sprint:2026-08-24
 ```
 
 Issues that predate the stamping are recovered with `gh agile sprint backfill`,
@@ -570,7 +570,7 @@ fortnight. Field for the board, labels for the record.
 |---|---|---|
 | `Sprint` field | `setup` | `duration` = `cadence_days`, converged on every run — existing sprints keep their dates, only later ones use a changed cadence. **`startDay` is left alone**: the configuration input does not accept it, and GitHub does not derive it from a start date — sending a Monday left the field reporting Sunday. It only affects what the web UI suggests, so `start_day` governs what this tool aligns, not what GitHub stores |
 | Iteration | `sprint create`, `sprint ensure`, `move` | `title` from `name_template`, `startDate` aligned to `start_day`, `duration` = `cadence_days` |
-| Item `Sprint` value | `set --field Sprint`, `move` to `In Progress` | The iteration's id, resolved from a title or `@current`. Cleared by any iteration write — live state, not history |
+| Item `Sprint` value | `issue edit ISSUE --field Sprint`, `move` to `In Progress` | The iteration's id, resolved from a title or `@current`. Cleared by any iteration write — live state, not history |
 | `sprint:YYYY-MM-DD` label | `move` at `In Progress` and at `Done` | The sprint's start date. On the issue, immutable, one per sprint the issue lived in |
 | Scrum board | `setup`, `board create --type scrum` | `filter: sprint:@current`, which is what makes a board scrum rather than kanban |
 
@@ -599,7 +599,7 @@ Profile settings, all under `sprint`:
 | 7 | No two sprints overlap | Placement tests **intersection**, not containment. An early version tested containment, read a partial overlap as uncovered, and created three overlapping sprints on a live board — which makes `@current` ambiguous, the one thing it exists to resolve |
 | 8 | `ensure` is idempotent | It computes the shortfall against what exists. An early version created `ahead + 1` every run |
 | 9 | Assignments survive a configuration change | Read before, re-applied after — see above. Anything that could not be re-applied is named on stderr |
-| 10 | Starting work assigns the current sprint, and claims the issue | `move --status "In Progress"` sets `Sprint` if the item has none, and assigns the issue if nobody holds it. Otherwise in-progress work sits outside every sprint and the sprint report quietly omits it, or reads unassigned and the board cannot say who has it. Both fill a gap and neither overrules a decision: an issue somebody already holds is reported and left alone, and `--add-assignee` is how to say otherwise |
+| 10 | Starting work assigns the current sprint, and claims the issue | `issue move ISSUE "In Progress"` sets `Sprint` if the item has none, and assigns the issue if nobody holds it. Otherwise in-progress work sits outside every sprint and the sprint report quietly omits it, or reads unassigned and the board cannot say who has it. Both fill a gap and neither overrules a decision: an issue somebody already holds is reported and left alone, and `--add-assignee` is how to say otherwise |
 | 11 | The sprint an issue was worked in **survives** | A `sprint:YYYY-MM-DD` label on the issue. The `Sprint` field cannot be relied on for history: any iteration write clears it board-wide, including for closed issues in completed sprints |
 | 12 | The field is repaired, not just reported | `gh agile sprint reconcile` sets each item's `Sprint` from its labels, latest winning. Safe to automate: it copies a recorded fact back into a field GitHub cleared, and invents nothing |
 | 13 | Carryover is visible | An issue worked across a boundary carries a label per sprint. The field holds only the latest |
@@ -823,8 +823,8 @@ Three tiers follow from that, and they are what to grant against:
 
 | Tier | Commands | Needs |
 |---|---|---|
-| Read | `export`, `validate`, `sprint list`, `board list`, `fix --dry-run` | project **read**, and `project.owner` in the profile |
-| Day to day | `epic`, `story`, `set`, `move`, `sync`, `fix`, `sprint backfill`, `sprint reconcile` | project **write** + repo **push** (for labels and issue bodies) |
+| Read | `export`, `validate`, `sprint list`, `board list`, `issue reconcile --dry-run` | project **read**, and `project.owner` in the profile |
+| Day to day | `epic create`, `story create`, `issue edit`, `issue move`, `issue reconcile`, `sync`, `sprint backfill`, `sprint reconcile` | project **write** + repo **push** (for labels and issue bodies) |
 | Admin | `setup` (creates *fields*), `project create`, `sprint create`, `sprint ensure` | project **admin** — these change the project's schema |
 
 `key` with no arguments is a local file read and works for anyone with a clone.
@@ -878,7 +878,7 @@ and *nothing else* — so without this workflow, finished work keeps its old Sta
 and sits in the In Progress column looking live.
 
 **Do not enable `Auto-close issue`.** It closes the issue the moment Status
-becomes `Done`, which beats `gh agile move --not-planned --close` to the close and
+becomes `Done`, which beats `gh agile issue move ISSUE Done --not-planned --close` to the close and
 silently costs the reason.
 
 These **can be read and cannot be written**. `projectV2.workflows` returns each

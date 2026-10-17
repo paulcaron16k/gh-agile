@@ -95,7 +95,7 @@ Six workarounds exist for this one field, and they are not optional:
 3. **`sprint:YYYY-MM-DD` labels** on the issue are the real record. Dated, not named: a title is cosmetic and
    editable, a start date is identity, and dates sort.
 4. **`sprint backfill`** recovers history for issues predating the labels, from Status transitions.
-5. **`sprint reconcile`** sets the field from the labels, board-wide; **`fix --id`** is the same repair aimed at
+5. **`sprint reconcile`** sets the field from the labels, board-wide; **`issue reconcile`** is the same repair aimed at
    one issue, at 3 GraphQL points against a whole-board read.
 6. **`heal_sprint_fields`** runs that reconcile automatically after `restore_assignments` in all three destructive
    paths.
@@ -247,7 +247,7 @@ Tidying it would clear every assignment on the board.
   spelling, and that is the only thing ever written to the field, because GitHub holds the option name.
 - **A machine may not infer a type.** Nothing in an issue distinguishes an epic from a story from a bug, so
   `sync --adopt` sets `key:` and Status but never `type:`. `validate` reports the gap and a person decides.
-- **Starting work is one call.** `move --status "In Progress"` sets Status, assigns the current sprint when the
+- **Starting work is one call.** `issue move ISSUE "In Progress"` sets Status, assigns the current sprint when the
   field is empty, stamps the `sprint:` label, and claims the issue for the caller when nobody holds it. Each of
   those fills a gap and none overrules a decision — *an unassigned issue is a gap, an assigned one is a
   decision*, the same rule the sprint heal follows, so an issue somebody already holds is reported and left

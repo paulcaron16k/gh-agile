@@ -129,7 +129,7 @@ class TestTheTwoStatesAMergeLeaves:
         monkeypatch.setattr(hook, "cmd_validate",
                             lambda a: print("closed but status is not Done") or 1)
         text = hook.outstanding(args_for(hook), board(n174="CLOSED"), REPO, 174)
-        assert "gh agile move 174 --status Done --evidence" in text
+        assert "gh agile issue move 174 Done --evidence" in text
         assert "--close" not in text.split("finish it:")[1].splitlines()[0]
 
     def test_and_says_why_not(self, hook, monkeypatch):
@@ -157,7 +157,7 @@ class TestTheTwoStatesAMergeLeaves:
 
     def test_and_reports_the_close_command(self, hook):
         text = hook.outstanding(args_for(hook), board(n186="OPEN"), REPO, 186)
-        assert "gh agile move 186 --status Done --close --evidence" in text
+        assert "gh agile issue move 186 Done --close --evidence" in text
 
     def test_and_says_why_the_reason_matters(self, hook):
         text = hook.outstanding(args_for(hook), board(n186="OPEN"), REPO, 186)

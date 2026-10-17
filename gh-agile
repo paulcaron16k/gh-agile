@@ -102,8 +102,8 @@ Commands
     gh agile sprint create|list
     gh agile epic  create -t "Title" [--key ...]
     gh agile story create -t "Title" --epic 4 [--points 3] [--priority high]
-    gh agile move  ZMBNI-34 --status Done --evidence-file notes.md --close
-    gh agile set   --issue ZMBNI-34 --field Sprint --value @current
+    gh agile issue move ZMBNI-34 Done --evidence-file notes.md --close
+    gh agile issue edit ZMBNI-34 --field Sprint --value @current
     gh agile sync [--dry-run]
     gh agile validate
     gh agile export [--csv] [--out-dir DIR] [--since ...]
@@ -1659,7 +1659,7 @@ WORKFLOW_ADVICE = {
         "by-hand",
         "it writes Status and nothing else -- no Evidence, no closing sprint: "
         "label, no completed-or-not-planned -- so an issue it touches reads Done "
-        "while being unfinished. `move --status Done --evidence` writes all "
+        "while being unfinished. `issue move ISSUE Done --evidence` writes all "
         "three, and the post-merge hook asks for it at the terminal (#186)",
     ),
     "Item added to project": (
@@ -5290,7 +5290,7 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
                    f"showing finished work as live.")
         for row in stale:
             out.append(f"    {row['key']}  Status: {row['status'] or '(none)'}  "
-                       f"->  gh agile move {row['number']} --status {CYCLE_END}")
+                       f"->  gh agile issue move {row['number']} {CYCLE_END}")
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -6000,7 +6000,7 @@ def cmd_plan(args) -> int:
             f"  A story's dates are its sprint -- #115 is the rule that a level "
             f"which spans\n  sprints holds none, which is why these two fields "
             f"exist for the levels above.\n"
-            f"  Move the story with `gh agile set --issue {args.issue} --field "
+            f"  Move the story with `gh agile issue edit {args.issue} --field "
             f"Sprint --value ...`."
         )
     item = board_item_for(args.owner, args.project, repo, args.issue)
@@ -6793,7 +6793,7 @@ def cmd_fix(args) -> int:
     for the first draft of this command, which went through `board_items`. See
     the table on `ISSUE_ITEM_QUERY`.
     """
-    repo, issue = parse_issue_ref(args.id, args._config, getattr(args, "repo", None))
+    repo, issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
     item_id, labels, current = issue_project_item(repo, issue, args.project)
 
     active, completed = iterations(args.owner, args.project)
@@ -6957,7 +6957,7 @@ def outstanding(args, board: list[dict], repo: str, issue: int) -> str | None:
         detail, why = STILL_OPEN
         return render_unfinished(
             issue, detail,
-            f'gh agile move {issue} --status Done --close --evidence "..."', why)
+            f'gh agile issue move {issue} Done --close --evidence "..."', why)
     said, found = io.StringIO(), 0
     # `SystemExit` suppressed for the same reason: `validate --id` refuses a bare
     # number that two repositories share, and a refusal here would take the pull
@@ -6972,7 +6972,7 @@ def outstanding(args, board: list[dict], repo: str, issue: int) -> str | None:
     detail, why = CLOSED_NOT_DONE
     return render_unfinished(
         issue, f"{detail}\n{said.getvalue().strip()}",
-        f'gh agile move {issue} --status Done --evidence "..."', why)
+        f'gh agile issue move {issue} Done --evidence "..."', why)
 
 
 #: The line that marks a hook as this tool's, so `hooks` knows what it may
@@ -7634,7 +7634,7 @@ STORY_FIELDS = [
 ]
 
 SET_FIELDS = [
-    ("--issue", "N|KEY-N|URL", "required", "the issue, which must already be on the board"),
+    ("issue", "N|KEY-N|URL", "required", "the issue, on the board already; positional"),
     ("--field", "field name", "required", 'e.g. Status, "Story Points", Priority, FR, Sprint'),
     ("--value", "text", "optional", "text, single-select option, sprint title, or @current"),
     ("--number", "number", "optional", "numeric value; use instead of --value for a number field"),
@@ -7652,7 +7652,7 @@ PLAN_FIELDS = [
 
 MOVE_FIELDS = [
     ("issue", "N|KEY-N|URL", "required", "the issue; positional"),
-    ("--status", "one of STATUSES", "required", "the status to move to"),
+    ("status", "one of STATUSES", "required", "the status to move to; positional"),
     ("--evidence", "text or -", "conditional", "required for Done, written on any "
                                                "status; - reads stdin"),
     ("--evidence-file", "path or -", "conditional", "file of ## Heading sections; "
@@ -8238,11 +8238,23 @@ why this exists:
 
     key.set_defaults(func=cmd_key, needs_repo=True, projectless=True)
 
-    move = sub.add_parser("move", help="change status, with the evidence that status requires",
-        epilog=field_help(MOVE_FIELDS) + """""",
+    # `issue` holds the verbs that act on any work item, whatever its type, the
+    # way `gh issue` holds them (#202). `move`, `set` and `fix` were top-level;
+    # each now takes the issue as its first positional, as every targeted `gh`
+    # command does.
+    issue_group = sub.add_parser("issue", help="any work item: move, edit, reconcile")
+    issue_sub = issue_group.add_subparsers(dest="issue_command", required=True)
+    move = issue_sub.add_parser(
+        "move", help="change status, with the evidence that status requires",
+        epilog=field_help(MOVE_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     move.add_argument("issue", help=ISSUE_REF_HELP)
-    move.add_argument("--status", required=True, help=f"one of: {', '.join(STATUSES)}")
+    # A second positional, not `--status`: a required second value on a
+    # targeted `gh` command is one -- `gh issue transfer <issue> <repo>` -- as
+    # in jira-cli's `issue move KEY STATE`. Statuses take a hyphen, so
+    # `issue move 12 in-progress` needs no quotes.
+    move.add_argument("status", help=f"one of: {', '.join(STATUSES)}; a hyphen for "
+                                     "the space")
     move.add_argument("--evidence", help="section text, or - for stdin. Written whatever "
                                         "the status; required only for Done")
     move.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
@@ -8261,15 +8273,26 @@ why this exists:
     move.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
     move.set_defaults(func=cmd_move, needs_repo=True)
 
-    setter = sub.add_parser("set", help="set one field on an issue already on the board",
-        epilog=field_help(SET_FIELDS) + """""",
+    setter = issue_sub.add_parser(
+        "edit", help="set one field on an issue already on the board",
+        epilog=field_help(SET_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    setter.add_argument("--issue", required=True,
-                        help=ISSUE_REF_HELP)
+    setter.add_argument("issue", help=ISSUE_REF_HELP)
     setter.add_argument("--field", required=True, help='field name, e.g. "Story Points"')
     setter.add_argument("--value", help="text or single-select option")
     setter.add_argument("--number", type=float, help="numeric value")
     setter.set_defaults(func=cmd_set, needs_repo=True)
+    fix = issue_sub.add_parser(
+        "reconcile", help="repair one issue's Sprint field from its sprint: labels")
+    fix.add_argument("issue", help=ISSUE_REF_HELP)
+    fix.add_argument("--overwrite", action="store_true",
+                     help="also change a field that disagrees with its label; by default only "
+                          "an empty field is repaired, because a disagreement is somebody's "
+                          "decision")
+    fix.add_argument("--dry-run", action="store_true",
+                     help="say what would change and change nothing")
+    fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
+    fix.set_defaults(func=cmd_fix, needs_repo=True)
 
     planner = sub.add_parser("plan",
         help="set or clear the dates on an epic or initiative that already exists",
@@ -8335,20 +8358,9 @@ why this exists:
 
     validate = sub.add_parser("validate", help="check the conventions in POLICY.md")
     validate.add_argument("--id", help=f"only this issue: {ISSUE_REF_HELP}. "
-                                      "Narrows the report, not the board read -- see `fix --id`")
+                                      "Narrows the report, not the board read -- see `issue reconcile`")
     validate.set_defaults(func=cmd_validate)
 
-    fix = sub.add_parser("fix", help="repair one issue's Sprint field from its sprint: labels")
-    fix.add_argument("--id", required=True,
-                     help=ISSUE_REF_HELP)
-    fix.add_argument("--overwrite", action="store_true",
-                     help="also change a field that disagrees with its label; by default only "
-                          "an empty field is repaired, because a disagreement is somebody's "
-                          "decision")
-    fix.add_argument("--dry-run", action="store_true",
-                     help="say what would change and change nothing")
-    fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
-    fix.set_defaults(func=cmd_fix, needs_repo=True)
     inherit_global_flags(parser)
     return parser
 
@@ -8405,6 +8417,15 @@ GH_VERBS = frozenset({
     "move", "reconcile",
 })
 
+#: Top-level commands that moved under `issue`: the new verb, and the flag whose
+#: value became a positional. `move ISSUE --status S` is `issue move ISSUE S`;
+#: `set --issue N` is `issue edit N`; `fix --id N` is `issue reconcile N`.
+MOVED_UNDER_ISSUE = {"move": ("move", "--status"), "set": ("edit", "--issue"),
+                     "fix": ("reconcile", "--id")}
+
+#: `move`'s flags that take a value, so the issue is not mistaken for one.
+MOVE_VALUE_FLAGS = ("--evidence", "--evidence-file", "--add-assignee", "-R", "--repo")
+
 #: Global flags that take a value, so the command can be found after them.
 GLOBAL_VALUE_FLAGS = ("--owner", "--project", "--config")
 
@@ -8446,7 +8467,44 @@ def retired_spelling(argv: list[str]) -> str | None:
         new = shlex.join(["gh", "agile", *head, command, "create", "-t", title, *after])
         return (f"`{was}` is now `{command} create -t TITLE`, as "
                 f"`gh issue create -t` takes it:\n  {new}")
+    if command in MOVED_UNDER_ISSUE:
+        verb, flag = MOVED_UNDER_ISSUE[command]
+        value, after = _pull_flag(tail, flag)
+        if command == "move":
+            # The issue was already positional; the status joins it. Found by
+            # skipping every flag's value, or `--evidence "text" 12` would read
+            # the evidence as the issue.
+            index, first = 0, None
+            while index < len(after):
+                token = after[index]
+                if token in MOVE_VALUE_FLAGS or token in GLOBAL_VALUE_FLAGS:
+                    index += 2
+                    continue
+                if not token.startswith("-"):
+                    first = after.pop(index)
+                    break
+                index += 1
+            positionals = [p for p in (first, value) if p is not None]
+        else:
+            positionals = [value] if value is not None else []
+        new = shlex.join(["gh", "agile", *head, "issue", verb, *positionals, *after])
+        return (f"`{command}` is now `issue {verb}`, with the issue first as every "
+                f"targeted `gh` command takes it:\n  {new}")
     return None
+
+
+def _pull_flag(tokens: list[str], flag: str) -> tuple[str | None, list[str]]:
+    """`flag`'s value, and the tokens without it: `--flag v` or `--flag=v`."""
+    rest = list(tokens)
+    for index, token in enumerate(rest):
+        if token == flag and index + 1 < len(rest):
+            value = rest[index + 1]
+            del rest[index:index + 2]
+            return value, rest
+        if token.startswith(flag + "="):
+            del rest[index]
+            return token[len(flag) + 1:], rest
+    return None, rest
 
 
 def main() -> int:

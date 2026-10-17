@@ -109,3 +109,52 @@ class TestTheNewShape:
     def test_create_still_reaches_its_command(self, tool):
         args = tool.build_parser().parse_args(["epic", "create", "-t", "T"])
         assert args.func is tool.cmd_epic and args.needs_repo is True
+
+
+class TestTheCommandsThatMovedUnderIssue:
+    """`move`, `set` and `fix` act on any work item, so they live where `gh`
+    keeps such verbs: under `issue`, the issue first."""
+
+    @pytest.mark.parametrize("argv,suggested", [
+        (["move", "ZMBNI-34", "--status", "Done", "--evidence-file", "notes.md", "--close"],
+         "gh agile issue move ZMBNI-34 Done --evidence-file notes.md --close"),
+        (["move", "12", "--status=In Progress"],
+         "gh agile issue move 12 'In Progress'"),
+        (["move", "--evidence", "some text", "12", "--status", "Done"],
+         "gh agile issue move 12 Done --evidence 'some text'"),
+        (["set", "--issue", "ZMBNI-34", "--field", "Sprint", "--value", "@current"],
+         "gh agile issue edit ZMBNI-34 --field Sprint --value @current"),
+        (["--project", "4", "fix", "--id", "26", "--dry-run"],
+         "gh agile --project 4 issue reconcile 26 --dry-run"),
+    ])
+    def test_it_names_the_new_spelling(self, tool, monkeypatch, capsys, argv, suggested):
+        code, err = run(tool, monkeypatch, capsys, *argv)
+        assert code == 2
+        assert suggested in err
+
+    def test_an_evidence_value_is_not_taken_for_the_issue(self, tool, monkeypatch, capsys):
+        """The issue is found by skipping every flag's value."""
+        _code, err = run(tool, monkeypatch, capsys,
+                         "move", "--evidence", "AGILE-9", "12", "--status", "Done")
+        assert "issue move 12 Done --evidence AGILE-9" in err
+
+    @pytest.mark.parametrize("argv,func,dest", [
+        (["issue", "move", "12", "in-progress"], "cmd_move", "status"),
+        (["issue", "edit", "12", "--field", "FR", "--value", "x"], "cmd_set", "field"),
+        (["issue", "reconcile", "12", "--dry-run"], "cmd_fix", "dry_run"),
+    ])
+    def test_each_reaches_its_command(self, tool, argv, func, dest):
+        args = tool.build_parser().parse_args(argv)
+        assert args.func is getattr(tool, func)
+        assert args.issue == "12" and getattr(args, dest)
+        assert args.needs_repo is True
+
+    def test_the_status_is_the_second_positional(self, tool):
+        """As `gh issue transfer <issue> <repo>` takes a required second value."""
+        args = tool.build_parser().parse_args(["issue", "move", "AGILE-3", "In Progress"])
+        assert (args.issue, args.status) == ("AGILE-3", "In Progress")
+
+    @pytest.mark.parametrize("old", ["move", "set", "fix"])
+    def test_the_old_top_level_command_is_gone(self, tool, old):
+        with pytest.raises(SystemExit):
+            tool.build_parser().parse_args([old, "1"])

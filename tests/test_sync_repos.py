@@ -33,9 +33,9 @@ PROFILE = {
 #: One command line per command that names an issue.
 EPIC = ["epic", "create", "-t", "a title"]
 STORY = ["story", "create", "-t", "a title", "--epic", "none"]
-SET = ["set", "--issue", "1", "--field", "FR", "--value", "x"]
-MOVE = ["move", "1", "--status", "Todo"]
-FIX = ["fix", "--id", "1"]
+SET = ["issue", "edit", "1", "--field", "FR", "--value", "x"]
+MOVE = ["issue", "move", "1", "Todo"]
+FIX = ["issue", "reconcile", "1"]
 
 
 @pytest.fixture
