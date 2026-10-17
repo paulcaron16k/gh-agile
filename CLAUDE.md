@@ -239,7 +239,7 @@ Tidying it would clear every assignment on the board.
 - **Read the board with hand-written GraphQL, never `gh project item-list` or `field-list`.** Measured: those
   two cost ~102–106 GraphQL points against 1 for the same request written out, and `field-list`'s cost does not
   even move with `-L`. `paged_project_items` takes a selection so there is one pager and two selections rather
-  than two mechanisms. `fetch_items` **must stay uncached** — `move` writes a Sprint value and
+  than two mechanisms. `fetch_items` **must stay uncached** — `issue move` writes a Sprint value and
   `record_sprint_label` reads it back, so a cache there silently stops the `sprint:` label being written.
   See `docs/lessons.md`.
 - **Statuses accept a hyphen.** `In-Review` and `In Progress` are the same transition, so nobody has to quote
@@ -262,7 +262,7 @@ Tidying it would clear every assignment on the board.
 - Non-obvious workarounds carry a comment saying *why*, with the measurement where there was one. Several look
   like removable dead code otherwise — they are not.
 - Refuse rather than guess when the cost lands on someone else later: an illegal `issue_title_prefix` stops every
-  command, an unchosen sprint cadence blocks `epic`/`story`/`ensure`, a key must match Jira's rules.
+  command, an unchosen sprint cadence blocks `epic create`/`story create`/`sprint ensure`, a key must match Jira's rules.
 
 ## Where the rest of it is written down
 

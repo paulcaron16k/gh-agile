@@ -90,7 +90,7 @@ so, with the command to add it; nothing creates a board unasked, and `init` neve
 removes one a profile already has.
 
 **It refuses what the rest of the tool refuses.** A key must match Jira's rules,
-a sprint cadence decides when every sprint begins and blocks `epic`, `story` and
+a sprint cadence decides when every sprint begins and blocks `epic create`, `story create` and
 `ensure` until chosen, and `--title-prefix` is written into every issue title.
 Those are flags, and a missing one is a refusal naming the flag — not a default
 chosen on your behalf, because the cost of that guess lands on somebody else
@@ -198,7 +198,7 @@ an issue number is.
 ### How an issue's key is decided, and where it is stored
 
 **Explicitly, on the issue, as a label — `key:ZMBNI`.** Written at creation by
-`epic` and `story`, so it is recorded rather than inferred.
+`epic create` and `story create`, so it is recorded rather than inferred.
 
 GitHub Issue Fields would be the natural home and are unavailable:
 `createIssueField` requires an **Organization** owner and refuses a user
@@ -514,7 +514,7 @@ marking it would mark nearly every row and teach people to ignore the column.
 have someone*, and a container should not: it holds stories worked by several
 people, so there is no single answer to "who has this". Filling it from whoever
 started the first story is a guess that is only right on a team of one, so
-`move` never claims one implicitly and `validate` never demands one. Setting an
+`issue move` never claims one implicitly and `validate` never demands one. Setting an
 assignee on an epic is still allowed and still meaningful — `--add-assignee`
 does it at any level — it is simply never expected.
 
@@ -941,7 +941,7 @@ Measured on two live projects, which is where the recommendation comes from:
 | **Auto-add sub-issues to project** | **yes** (on by default) | Every story created under a boarded epic would need a `sync` |
 | **Item closed** → Status = Done | **no** — see below | Nothing it can fix. Status does not follow a close, so finished work sits in the In Progress column looking live — but this workflow writes Status and *nothing else*, so it replaces a visibly unfinished issue with one that reads Done and is not. The post-merge hook asks a person instead |
 | **Item added to project** → Status = Todo | **yes** | An item arriving by any other route has no Status, which puts it in no column of any board |
-| **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `move` can set the reason. That is how `not planned` lost its reason on the sandbox |
+| **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `issue move` can set the reason. That is how `not planned` lost its reason on the sandbox |
 | Pull request merged · Pull request linked to issue | not for a board of issues | They act on **pull-request items**. This board holds 65 items and every one is an issue, so both would do nothing |
 
 **Project → ⋯ (top right) → Workflows.** It is a setting on the **project**, not
@@ -1229,7 +1229,7 @@ runs continuously on their side and is configured in the web UI.
 | | Needs sync? |
 |---|---|
 | Status, points, sprint, assignee on an item **already on the board** | **No.** Read live — a change shows immediately |
-| Issues created by `gh agile epic` / `story` | **No.** Added at creation |
+| Issues created by `gh agile epic create` / `story create` | **No.** Added at creation |
 | Sub-issues of an epic already on the board | **No** — the built-in *Auto-add sub-issues* workflow is enabled by default |
 | An issue filed in the web UI, or by `gh issue create`, or by any other tool | **Yes.** It is simply not on the board |
 
@@ -1393,7 +1393,7 @@ from `Sprint 2` to `Sprint 5`, which is the honest record that nobody worked in
 
 ### Choose the cadence before creating work
 
-**A sprint cadence must be chosen deliberately, and `epic`, `story` and
+**A sprint cadence must be chosen deliberately, and `epic create`, `story create` and
 `sprint ensure` refuse until it is.** Not ceremony: defaults used to apply
 silently, so the first sprint was created with whatever the tool assumed and the
 cadence was discovered afterwards — by which point sprints existed under it.
@@ -1431,7 +1431,7 @@ Configuration lives in the profile:
 | `cadence_days` | `14` | Sprint length, 1–30. `"2-week"` is accepted and normalised |
 | `start_day` | `"monday"` | Weekday new sprints begin on |
 | `ahead` | `2` | Future sprints `ensure` keeps |
-| `autocreate` | `true` | Whether `move` may create one as a fallback |
+| `autocreate` | `true` | Whether `issue move` may create one as a fallback |
 | `name_template` | `"{key} Sprint {n}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
 | `record_label` | `true` | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes |
 
@@ -1486,7 +1486,7 @@ assigned by count, so a sprint placed before the series can be numbered after
 it. The dates are the truth; renaming would clear every assignment, since
 iterations carry no id.
 
-**If `ensure` has not run, `move` covers for it.** Moving a story to
+**If `ensure` has not run, `issue move` covers for it.** Moving a story to
 `In Progress` with no active sprint creates one and says so; set
 `autocreate: false` to have it warn and leave the field empty instead.
 
@@ -1526,7 +1526,7 @@ sprint:2026-08-10
 ```
 
 Dated rather than named: a sprint's title is cosmetic and can be changed, while
-its start date is its identity, and dates sort. `move` writes it when work
+its start date is its identity, and dates sort. `issue move` writes it when work
 starts and again when it finishes, so an item carried across a boundary carries
 one label per sprint it lived in:
 
@@ -1601,7 +1601,7 @@ the last sprint it lived in.
 cadence converging in `setup`, `sprint ensure`, `sprint create` — restores from
 a snapshot taken moments before and then heals from the labels, in that order
 and in the same run. The snapshot covers items the labels know nothing about,
-such as one assigned by hand and never moved through `move`; the heal covers
+such as one assigned by hand and never moved through `issue move`; the heal covers
 what the snapshot could not put back, including a run that died partway. It is
 silent when there is nothing to repair, which is the normal case.
 
@@ -1791,7 +1791,7 @@ configuration:
 
 **Do in the tool, not the web UI:**
 
-- Creating sprints — `gh agile sprint ensure`, or let `move` create one.
+- Creating sprints — `gh agile sprint ensure`, or let `issue move` create one.
 - Renaming or re-dating a sprint. There is no safe web-UI path: it clears
   assignments board-wide. Prefer changing `name_template`, which affects only
   sprints created afterwards.
@@ -2012,7 +2012,7 @@ gh agile plan AGILE-173 --for 8w
 
 `--for` and `--target` together are refused. They answer the same question and
 they can disagree — pass `--target` for a date somebody fixed, `--for` for a
-span you are sizing. `epic` and `initiative` take `--for` at creation for the
+span you are sizing. `epic create` and `initiative create` take `--for` at creation for the
 same reason they take `--start`.
 
 **Nothing is derived from the work beneath.** Not story points, not velocity,
@@ -2021,7 +2021,7 @@ is what keeps the result a plan rather than a forecast wearing a plan's clothes
 — and it is why `Target date` can be compared against what actually happened.
 
 **Both dates are one decision, which is why this is one command.** The precedent
-is `move`: starting work is one call because Status, Sprint, the label and the
+is `issue move`: starting work is one call because Status, Sprint, the label and the
 assignee all follow from it. `gh agile issue edit ISSUE --field "Start date"` still works and
 writes one field per invocation, so re-planning through it is two commands, two
 board writes, and a window where the plan is half one thing and half another.
@@ -2323,7 +2323,7 @@ project.issue_title_prefix is 'key-type', which is not one of the three legal va
   issue is called, so a guess here is a guess written into issue titles:
 ```
 
-It is checked on every command, not only on `epic` and `story`, so a typo is
+It is checked on every command, not only on `epic create` and `story create`, so a typo is
 reported the first time anything runs rather than on the day someone creates an
 epic. `true` and `false` are accepted as hand-edits and read as `key` and `off`.
 

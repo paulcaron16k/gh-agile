@@ -51,7 +51,7 @@ the author's business, nesting is allowed, and prose between the boxes is
 allowed — nothing here parses it.
 
 **An absent section is the normal case.** Most stories need no breakdown, and
-`story` does not create the heading: an empty `## Tasks` on every issue is the
+`story create` does not create the heading: an empty `## Tasks` on every issue is the
 ceremony this row exists to avoid. Add it when you have something to put in it.
 
 | **Bug** | An issue labelled `type:bug`; may or may not have an epic | Bugs arrive without asking whether they fit a plan |
