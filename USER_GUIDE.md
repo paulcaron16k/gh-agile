@@ -52,7 +52,7 @@ gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an exis
 ```
   profile: .github/agile.json
   project #7 created: https://github.com/users/you/projects/7
-  keys, cadence and 4 board(s) recorded
+  keys, cadence and 3 board(s) recorded
   field 'Story Points' created
   ...
   board 'Sprint board' created [scrum]
@@ -78,9 +78,16 @@ gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an exis
   Then: gh agile validate
 ```
 
-It creates the project, writes the profile, records the cadence and four starter
+It creates the project, writes the profile, records the cadence and the starter
 boards, then runs `setup` — the fields, the `type:` and `key:` labels, and those
 boards.
+
+The starter boards are **Sprint board**, **Backlog** and **Roadmap**. A profile
+listing more than one key — several repositories, or a mono-repo carrying several
+— also gets **Engineering: all work**, the kanban view across every team, which on
+a single key would only repeat the other two. Recording a second key later says
+so, with the command to add it; nothing creates a board unasked, and `init` never
+removes one a profile already has.
 
 **It refuses what the rest of the tool refuses.** A key must match Jira's rules,
 a sprint cadence decides when every sprint begins and blocks `epic`, `story` and

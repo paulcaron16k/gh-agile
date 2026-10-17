@@ -248,3 +248,109 @@ class TestTheWorkflowRead:
         assert len(tool.WORKFLOW_ADVICE) == 6
         assert all(why and len(why) > 20
                    for _verdict, why in tool.WORKFLOW_ADVICE.values())
+
+
+class TestAFreshCloneIsNotRefused:
+    """#210: `init --sprint-template 2-week` on a clone with no profile was
+    refused, and told the person to write the profile by hand.
+
+    Step 1 created the project through `cmd_project` with `sprint_template=None`,
+    and `project create` refuses without a template unless the profile already
+    has one. `init` recorded its own only in step 2. Every test above stubs
+    `cmd_project`, which is how it shipped -- so this one runs the real one and
+    stubs only `gh`.
+    """
+
+    @pytest.fixture
+    def fresh(self, monkeypatch, tool, tmp_path, capsys):
+        calls = {"gh": [], "setup": []}
+
+        def fake_gh(argv, **kwargs):
+            calls["gh"].append(argv)
+            if argv[:2] == ["project", "create"]:
+                return json.dumps({"number": 12, "url": "https://github.com/users/o/projects/12"})
+            raise AssertionError(f"unexpected gh call: {argv}")
+
+        monkeypatch.setattr(tool, "gh", fake_gh)
+        monkeypatch.setattr(tool, "cmd_setup", lambda a: calls["setup"].append(a) or 0)
+        monkeypatch.setattr(tool, "project_workflows", lambda *a: {})
+        monkeypatch.setattr(tool, "pull_request_items", lambda *a: 0)
+
+        def go(**overrides):
+            args = args_for(tool, tmp_path, **overrides)
+            code = tool.cmd_init(args)
+            return code, calls, capsys.readouterr().out
+        return go
+
+    def test_it_creates_the_project(self, tool, fresh, tmp_path):
+        code, calls, _out = fresh()
+        assert code == 0
+        assert [c[:2] for c in calls["gh"]] == [["project", "create"]]
+        assert written(tmp_path)["project"]["number"] == 12
+
+    def test_and_records_the_cadence_it_was_given(self, tool, fresh, tmp_path):
+        fresh(sprint_template="1-week")
+        assert written(tmp_path)["sprint"]["template"] == "1-week"
+
+    def test_and_setup_runs(self, tool, fresh):
+        _code, calls, _out = fresh()
+        assert len(calls["setup"]) == 1
+
+    def test_without_a_cadence_it_still_refuses_before_creating(self, tool, fresh, tmp_path):
+        with pytest.raises(SystemExit) as exit_info:
+            fresh(sprint_template=None)
+        assert "--sprint-template is required" in str(exit_info.value)
+        assert written(tmp_path) is None
+
+
+class TestTheCrossTeamBoard:
+    """#211: Engineering: all work is the view across teams, so a one-key
+    project does not get it. Reported by the first adopter outside this repo."""
+
+    def names(self, tmp_path):
+        return {b["name"] for b in written(tmp_path)["boards"]}
+
+    def test_one_key_gets_three_boards(self, tool, run, tmp_path):
+        run(project=7)
+        assert self.names(tmp_path) == {"Sprint board", "Backlog", "Roadmap"}
+
+    def test_several_keys_get_it(self, tool, run, tmp_path):
+        run(project=7, _config={"keys": [{"key": "ZMBNI", "repo": "o/zamboni"}]})
+        assert tool.CROSS_TEAM_BOARD["name"] in self.names(tmp_path)
+        assert len(self.names(tmp_path)) == 4
+
+    def test_one_already_there_is_kept(self, tool, run, tmp_path):
+        """`init` adds boards and never removes one."""
+        run(project=7, _config={"boards": [dict(tool.CROSS_TEAM_BOARD)]})
+        assert tool.CROSS_TEAM_BOARD["name"] in self.names(tmp_path)
+
+    def test_the_count_printed_is_the_count_recorded(self, tool, run):
+        _code, _calls, out, _args = run(project=7)
+        assert "3 board(s) recorded" in out
+
+
+class TestASecondKeySaysSo:
+    """Recording a second key is the moment the cross-team board makes sense.
+    Said, with the command, and not done: nobody asked for a board."""
+
+    @pytest.fixture
+    def record(self, tool, tmp_path, capsys):
+        def go(config):
+            args = argparse.Namespace(key="ZMBNI", repo="o/zamboni", name=None,
+                                      project=None, owner="o", _config=config,
+                                      config=str(tmp_path / "agile.json"))
+            tool.cmd_key(args)
+            return capsys.readouterr().out
+        return go
+
+    def test_the_second_key_names_the_board(self, tool, record):
+        out = record({"keys": [{"key": "AGILE", "repo": "o/agile"}]})
+        assert 'board create --name "Engineering: all work" --type kanban --save' in out
+
+    def test_the_first_key_does_not(self, tool, record):
+        assert "board create" not in record({})
+
+    def test_nor_when_a_kanban_board_is_already_there(self, tool, record):
+        out = record({"keys": [{"key": "AGILE", "repo": "o/agile"}],
+                      "boards": [{"name": "Flow", "type": "kanban"}]})
+        assert "board create" not in out
