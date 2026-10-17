@@ -160,7 +160,7 @@ UNDOCUMENTED_OK = {
     ("self-test",):
         "a maintainer target, not a user command: it stands up and tears down a "
         "scratch project and is driven by `make self-test`",
-    ("task",):
+    ("task", "create"):
         "filing tasks as GitHub issues is deliberately not promoted -- POLICY.md "
         "§2 still recommends a markdown checklist inside the story, and the "
         "command exists so a team doing it anyway is not punished by `validate`. "

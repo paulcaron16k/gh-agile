@@ -1874,11 +1874,11 @@ On a project spanning repositories a bare number can match more than one issue.
 ## 5. Creating an epic and a story
 
 ```bash
-gh agile epic "Snapshot expiry and orphan removal" \
+gh agile epic create -t "Snapshot expiry and orphan removal" \
   --intent "Nothing reclaims storage; 120 files on disk and 1 live after five days." \
   --acceptance "expire and remove-orphans delete only unreferenced files, and abort otherwise."
 
-gh agile story "Compute the reachable file set" --epic 31 \
+gh agile story create -t "Compute the reachable file set" --epic 31 \
   --points 5 --priority highest \
   --intent "Both operations depend on it; an omission here deletes live data." \
   --acceptance "Every referenced file across all six metadata categories is returned."
@@ -1894,8 +1894,8 @@ complains.
 ### Dates on an epic, for GitHub's own roadmap
 
 ```bash
-gh agile epic "Initiatives above epics" --start 2026-09-01 --target 2026-10-31
-gh agile initiative create "Hierarchy visibility" --start 2026-09-01 --target 2026-12-31
+gh agile epic create -t "Initiatives above epics" --start 2026-09-01 --target 2026-10-31
+gh agile initiative create -t "Hierarchy visibility" --start 2026-09-01 --target 2026-12-31
 ```
 
 **Both container levels take them**, because both are on the roadmap and neither
@@ -1927,7 +1927,7 @@ too, but only after `epic` had already made the issue, and an issue number is
 never reused.
 
 ```bash
-gh agile epic "Q4 migration" --start soon
+gh agile epic create -t "Q4 migration" --start soon
 #   --start 'soon' is not a date. Use YYYY-MM-DD, in UTC -- 2026-09-29 is today.
 ```
 
@@ -2054,11 +2054,11 @@ then have nowhere to put the plan. GitHub's sub-issues nest, and **across
 repositories**, so the level costs a label and a command here.
 
 ```bash
-gh agile initiative create "Large new feature" --intent "..." --acceptance "..."
+gh agile initiative create -t "Large new feature" --intent "..." --acceptance "..."
 #   initiative #91: AGILE-91 Large new feature
 #   initiative:large-new-feature
 
-gh agile epic "Ingest side" --initiative large-new-feature --intent "..." --acceptance "..."
+gh agile epic create -t "Ingest side" --initiative large-new-feature --intent "..." --acceptance "..."
 #   epic #92: AGILE-92 Ingest side
 #   #92 under initiative paulcaron16k/gh-agile#91  (initiative:large-new-feature)
 ```
@@ -2066,9 +2066,9 @@ gh agile epic "Ingest side" --initiative large-new-feature --intent "..." --acce
 **`--initiative` takes three forms**, whichever you have to hand:
 
 ```bash
-gh agile epic "..." --initiative 91                  # the issue number
-gh agile epic "..." --initiative AGILE-91            # a keyed reference
-gh agile epic "..." --initiative large-new-feature   # the slug
+gh agile epic create -t "..." --initiative 91                  # the issue number
+gh agile epic create -t "..." --initiative AGILE-91            # a keyed reference
+gh agile epic create -t "..." --initiative large-new-feature   # the slug
 ```
 
 A bare number means *in this repository*, as everywhere else in this tool; on a
@@ -2100,7 +2100,7 @@ you nothing. It is minted from the title and carried on the initiative issue, so
 that issue is the single authority for what the slug means:
 
 ```
-$ gh agile initiative "Large New Feature"
+$ gh agile initiative create -t "Large New Feature"
 initiative slug 'large-new-feature' is already taken by paulcaron16k/gh-agile#91.
   Two initiatives answering to one slug put both trees behind one board filter.
   Pass --slug to choose another.
@@ -2296,14 +2296,14 @@ non-interactive, so an agent can run the same sequence.
 **1 — the epic exists**
 
 ```bash
-gh agile epic "Snapshot expiry and orphan removal" --intent "..." --acceptance "..."
+gh agile epic create -t "Snapshot expiry and orphan removal" --intent "..." --acceptance "..."
 #   epic #31: Snapshot expiry and orphan removal
 ```
 
 **2 — a story under it**
 
 ```bash
-gh agile story "Compute the reachable file set" --epic 31 \
+gh agile story create -t "Compute the reachable file set" --epic 31 \
   --points 5 --priority highest --intent "..." --acceptance "..."
 #   story #32 under epic #31    (labelled key:ZMBNI, so it is ZMBNI-32)
 ```
@@ -2360,7 +2360,7 @@ gh agile set --issue ZMBNI-32 --field Sprint --value "Sprint 2"
 parent:
 
 ```bash
-gh agile story "Bump the pinned ruff" --epic none --intent "..." --acceptance "..."
+gh agile story create -t "Bump the pinned ruff" --epic none --intent "..." --acceptance "..."
 #   story #58 standing alone: ZMBNI-58 Bump the pinned ruff
 ```
 
@@ -2786,7 +2786,7 @@ Every command lists its own fields with type, obligation and description:
 
 ```bash
 gh agile setup --help
-gh agile story --help
+gh agile story create --help
 gh agile move --help
 ```
 
@@ -2798,7 +2798,7 @@ gh agile move --help
 | `board list` / `board show` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint create` | Show or append iterations |
-| `epic` / `story` | Create work items with their parent, labels and fields |
+| `initiative create` / `epic create` / `story create` | Create work items with their parent, labels and fields; the title is `-t`, as in `gh issue create` |
 | `set` | Set one field on an item already on the board |
 | `move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
 | `validate` | Check the conventions a machine can check |

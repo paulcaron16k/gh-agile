@@ -31,8 +31,8 @@ PROFILE = {
 
 
 #: One command line per command that names an issue.
-EPIC = ["epic", "a title"]
-STORY = ["story", "a title", "--epic", "none"]
+EPIC = ["epic", "create", "-t", "a title"]
+STORY = ["story", "create", "-t", "a title", "--epic", "none"]
 SET = ["set", "--issue", "1", "--field", "FR", "--value", "x"]
 MOVE = ["move", "1", "--status", "Todo"]
 FIX = ["fix", "--id", "1"]

@@ -100,8 +100,8 @@ Commands
     gh agile key --key ZMBNI [--repo ...]   record or list repository keys
     gh agile board create --name "..." --type scrum|kanban|backlog|roadmap
     gh agile sprint create|list
-    gh agile epic  "Title" [--key ...]
-    gh agile story "Title" --epic 4 [--points 3] [--priority high]
+    gh agile epic  create -t "Title" [--key ...]
+    gh agile story create -t "Title" --epic 4 [--points 3] [--priority high]
     gh agile move  ZMBNI-34 --status Done --evidence-file notes.md --close
     gh agile set   --issue ZMBNI-34 --field Sprint --value @current
     gh agile sync [--dry-run]
@@ -7607,15 +7607,23 @@ SETUP_FIELDS = [
     ("--spec", "path", "optional", "JSON field spec; the built-in default is used without one"),
 ]
 
+#: The title of a new work item: a flag, as `gh issue create -t` takes it, never
+#: a positional. `gh issue create "x"` is `unknown argument "x"`, and the
+#: positional is what made `gh agile epic list` file an epic called "list"
+#: (ZMBNI-185, #202).
+def add_title(parser: argparse.ArgumentParser, what: str) -> None:
+    parser.add_argument("-t", "--title", required=True, help=f"the {what}'s title")
+
+
 EPIC_FIELDS = [
-    ("title", "text", "required", "the epic's title; positional"),
+    ("-t/--title", "text", "required", "the epic's title"),
     ("--repo", "owner/name", "required", "repository the issue is created in"),
     ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
     ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
 ]
 
 STORY_FIELDS = [
-    ("title", "text", "required", "the story's title; positional"),
+    ("-t/--title", "text", "required", "the story's title"),
     ("--repo", "owner/name", "required", "repository the issue is created in"),
     ("--epic", "N|KEY-N|URL", "required", "epic to attach to as a sub-issue"),
     ("--points", "number", "optional", "Story Points; the Gold model's story_points"),
@@ -7858,34 +7866,34 @@ default chosen for you.""",
     setup.set_defaults(func=cmd_setup)
 
     initiative = sub.add_parser(
-        "initiative", help="create an initiative: the plan and WBS for a large feature",
-        epilog=field_help([
-            ("title", "text", "required", "the initiative; positional"),
-            ("--slug", "text", "optional", "the label's readable half; default is the title, "
-                                           "slugified"),
-            ("--repo", "owner/name", "optional", "where the issue is filed"),
-            ("--key", "KEY", "optional", "which key to label it with"),
-            ("--intent", "text", "optional", "the plan: what changes for whom, and why"),
-            ("--acceptance", "text", "optional", "what finished looks like"),
-        ]) + """
-
-what an initiative is:
+        "initiative", help="initiatives: the plan and WBS for a large feature",
+        epilog="""what an initiative is:
   A level above epic -- the set of epics a large new feature requires, with
   somewhere to write the plan and the WBS down. Jira's standard hierarchy stops
   at Epic and charges for the levels above it; GitHub's sub-issues nest, and
   across repositories, so the level costs a label and a command here.
 
   The issue is the authority: it holds the plan, it closes, and it rolls up.
-  Epics join it with `gh agile epic ... --initiative <slug|KEY-n>`, which makes
-  the sub-issue edge *and* applies `initiative:<slug>` -- both, because a board
-  filter cannot traverse the hierarchy and the label is what it can see.
+  Epics join it with `gh agile epic create ... --initiative <slug|KEY-n>`, which
+  makes the sub-issue edge *and* applies `initiative:<slug>` -- both, because a
+  board filter cannot traverse the hierarchy and the label is what it can see.
 
   Optional, always. An epic under no initiative is ordinary, not a finding.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     initiative_sub = initiative.add_subparsers(dest="initiative_command", required=True)
     initiative_new = initiative_sub.add_parser(
-        "create", help="file the initiative issue, board it, and mint its slug")
-    initiative_new.add_argument("title")
+        "create", help="file the initiative issue, board it, and mint its slug",
+        epilog=field_help([
+            ("-t/--title", "text", "required", "the initiative's title"),
+            ("--slug", "text", "optional", "the label's readable half; default is the title, "
+                                           "slugified"),
+            ("--repo", "owner/name", "optional", "where the issue is filed"),
+            ("--key", "KEY", "optional", "which key to label it with"),
+            ("--intent", "text", "optional", "the plan: what changes for whom, and why"),
+            ("--acceptance", "text", "optional", "what finished looks like"),
+        ]),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_title(initiative_new, "initiative")
     initiative_new.add_argument("--slug", help="override the slug derived from the title")
     initiative_new.add_argument("-R", "--repo")
     initiative_new.add_argument("--key", help="which key to label the issue with")
@@ -7903,7 +7911,7 @@ what an initiative is:
     initiative_fix = initiative_sub.add_parser(
         "reconcile", help="bring initiative:<slug> into line with the hierarchy",
         epilog=field_help([
-            ("ref", "number|KEY-n|slug", "required", "the initiative; positional"),
+            ("ref", "N|KEY-N|URL|slug", "required", "the initiative; positional"),
             ("--dry-run", "flag", "optional", "list what would change and change nothing"),
         ]) + RECONCILE_WHY,
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -7912,10 +7920,12 @@ what an initiative is:
     initiative_fix.add_argument("-R", "--repo")
     initiative.set_defaults(func=cmd_initiative, needs_repo=True)
 
-    epic = sub.add_parser("epic", help="create an epic issue on the board",
-        epilog=field_help(EPIC_FIELDS) + """""",
+    epic_group = sub.add_parser("epic", help="epics: a body of work, under an initiative or none")
+    epic_sub = epic_group.add_subparsers(dest="epic_command", required=True)
+    epic = epic_sub.add_parser("create", help="file an epic and put it on the board",
+        epilog=field_help(EPIC_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    epic.add_argument("title")
+    add_title(epic, "epic")
     epic.add_argument("-R", "--repo")
     epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     epic.add_argument("--initiative",
@@ -7932,10 +7942,13 @@ what an initiative is:
     epic.add_argument("--acceptance")
     epic.set_defaults(func=cmd_epic, needs_repo=True)
 
-    story = sub.add_parser("story", help="create a story, attach it to its epic, set its fields",
-        epilog=field_help(STORY_FIELDS) + """""",
+    story_group = sub.add_parser("story", help="stories: the unit of work a sprint plans")
+    story_sub = story_group.add_subparsers(dest="story_command", required=True)
+    story = story_sub.add_parser(
+        "create", help="file a story, attach it to its epic, and set its fields",
+        epilog=field_help(STORY_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    story.add_argument("title")
+    add_title(story, "story")
     story.add_argument("-R", "--repo")
     story.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     # Still required, and `none` is how you say it deliberately. A bare omission
@@ -7950,18 +7963,9 @@ what an initiative is:
     story.add_argument("--acceptance")
     story.set_defaults(func=cmd_story, needs_repo=True)
 
-    task = sub.add_parser(
-        "task", help="create a task: story-internal housekeeping, counted by nothing",
-        epilog=field_help([
-            ("title", "text", "required", "the task; positional"),
-            ("--story", "N|KEY-N|URL", "required", "the story it belongs to"),
-            ("--repo", "owner/name", "optional", "where the issue is filed"),
-            ("--key", "KEY", "optional", "which key to label it with"),
-            ("--intent", "text", "optional", "## Intent body section"),
-            ("--acceptance", "text", "optional", "## Acceptance body section"),
-        ]) + """
-
-what a task is, and is not:
+    task_group = sub.add_parser(
+        "task", help="tasks: story-internal housekeeping, counted by nothing",
+        epilog="""what a task is, and is not:
   A task is how one person is organising their own story. POLICY.md §2 still
   recommends a markdown checklist for this, and still says promoting one to an
   issue buys ceremony and costs signal -- but GitHub's sub-issues make it two
@@ -7973,7 +7977,19 @@ what a task is, and is not:
   counts stories, and is not exported. `--story` is required and there is no
   `none`: a parentless task is not a thin task, it is a mislabelled issue.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    task.add_argument("title")
+    task_sub = task_group.add_subparsers(dest="task_command", required=True)
+    task = task_sub.add_parser(
+        "create", help="file a task under its story",
+        epilog=field_help([
+            ("-t/--title", "text", "required", "the task's title"),
+            ("--story", "N|KEY-N|URL", "required", "the story it belongs to"),
+            ("--repo", "owner/name", "optional", "where the issue is filed"),
+            ("--key", "KEY", "optional", "which key to label it with"),
+            ("--intent", "text", "optional", "## Intent body section"),
+            ("--acceptance", "text", "optional", "## Acceptance body section"),
+        ]),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_title(task, "task")
     task.add_argument("--story", required=True,
                       help=f"the story this task belongs to: {ISSUE_REF_HELP}")
     task.add_argument("-R", "--repo", help="owner/name")
@@ -8376,8 +8392,69 @@ def inherit_global_flags(parser: argparse.ArgumentParser) -> None:
             inherit_global_flags(child)
 
 
+#: The work-item types whose title used to be a positional: `epic "Title"`.
+WORK_ITEM_GROUPS = ("initiative", "epic", "story", "task")
+
+#: Every verb `gh issue` and `gh pr` have. **Never read as a title**, whether or
+#: not this tool has the verb yet: suggesting `epic create -t list` for
+#: `epic list` would be ZMBNI-185 again, offered as advice.
+GH_VERBS = frozenset({
+    "create", "list", "status", "view", "edit", "close", "reopen", "comment",
+    "delete", "develop", "lock", "unlock", "pin", "unpin", "transfer", "checkout",
+    "checks", "diff", "merge", "ready", "review", "revert", "update-branch",
+    "move", "reconcile",
+})
+
+#: Global flags that take a value, so the command can be found after them.
+GLOBAL_VALUE_FLAGS = ("--owner", "--project", "--config")
+
+
+def retired_spelling(argv: list[str]) -> str | None:
+    """The replacement for a spelling AGILE-200 retired, or None.
+
+    **Every retired spelling already fails at argument parsing** -- nothing is
+    reinterpreted as something else -- which is safe and not yet kind: argparse
+    says `invalid choice: 'My title'`, and leaves the person to work out that the
+    title wants `create -t`. `main` is the release (README, *Versions*), so the
+    break reaches every install at its next upgrade, and the error has to name
+    the new spelling rather than wait for the release note (#202; the table is
+    #206's to finish and, a release later, to remove).
+
+    Rebuilt from what was typed, so the suggestion runs as given.
+    """
+    import shlex
+
+    rest = list(argv)
+    head = []
+    while rest and rest[0].startswith("-"):
+        flag = rest.pop(0)
+        head.append(flag)
+        if flag in GLOBAL_VALUE_FLAGS and rest:
+            head.append(rest.pop(0))
+    if not rest:
+        return None
+    command, tail = rest[0], rest[1:]
+    if command in WORK_ITEM_GROUPS:
+        if tail and tail[0] == "create" and len(tail) > 1 and not tail[1].startswith("-"):
+            # `initiative create "Title"`: the verb was right, the title was not.
+            title, after, was = tail[1], tail[2:], f"{command} create TITLE"
+        elif tail and tail[0] not in GH_VERBS and not tail[0].startswith("-"):
+            # `epic "Title"`: no verb at all.
+            title, after, was = tail[0], tail[1:], f"{command} TITLE"
+        else:
+            return None
+        new = shlex.join(["gh", "agile", *head, command, "create", "-t", title, *after])
+        return (f"`{was}` is now `{command} create -t TITLE`, as "
+                f"`gh issue create -t` takes it:\n  {new}")
+    return None
+
+
 def main() -> int:
     require_interpreter()
+    retired = retired_spelling(sys.argv[1:])
+    if retired:
+        print(f"gh agile: {retired}", file=sys.stderr)
+        return 2
     args = build_parser().parse_args()
     # The one place a `MissingScope` is turned back into an exit. It travels
     # from `gh` untouched precisely because nothing on the way catches it, so
