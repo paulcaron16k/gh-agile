@@ -35,9 +35,14 @@ GUIDE = ROOT / "USER_GUIDE.md"
 TOOL = ROOT / "gh-agile"
 
 #: Executed for real. Everything else is checked for existence only.
+#:
+#: The work-item lists are here and their views are not: a list reads whatever
+#: board the profile names, and a view names one issue, which on another board
+#: is somebody else's issue or none -- the reason `board show` is absent too.
 SAFE = {
     ("key",), ("board", "list"), ("sprint", "list"),
     ("validate",), ("sync",), ("export",),
+    ("initiative", "list"), ("epic", "list"), ("story", "list"), ("issue", "list"),
 }
 
 #: Flags on the root parser rather than on a subcommand, so they are legal
@@ -56,11 +61,13 @@ GLOBAL_FLAGS = {"--owner": True, "--project": True, "--config": True, "--help": 
 #: `export --out-dir exports/` created a directory. A checker with side effects
 #: is worse than no checker -- it makes the thing it checks wrong.
 #:
+#: `--web` and `-w` open a browser, which is a side effect on whoever runs this.
+#:
 #: `--adopt` is listed even though `run_safe` appends `--dry-run` to every sync,
 #: which already suppresses it. Relying on that interaction means a label is
 #: written to a live repository the day the two are decoupled.
 NEVER_RUN = ("--key ", "--out-dir", "--save", "--evidence", "--close", "--force",
-             "--adopt", "--yes")
+             "--adopt", "--yes", "--web", " -w")
 
 #: Placeholders. A guide has to name a repository somewhere, and owner/repo is
 #: not one; running it is a guaranteed failure that says nothing.
@@ -166,6 +173,9 @@ UNDOCUMENTED_OK = {
         "command exists so a team doing it anyway is not punished by `validate`. "
         "Documenting it in the guide would read as a recommendation. Revisit when "
         "the task model is settled",
+    ("task", "list"):
+        "the same reason as `task create`: documenting how to list tasks reads as "
+        "recommending them",
 }
 
 

@@ -68,7 +68,7 @@ class TestTheOldTitleSpelling:
 class TestAVerbIsNeverATitle:
     """The hint must not be ZMBNI-185 offered as advice."""
 
-    @pytest.mark.parametrize("verb", ["list", "view", "edit", "close", "status"])
+    @pytest.mark.parametrize("verb", ["edit", "close", "status", "delete"])
     def test_no_create_is_suggested(self, tool, monkeypatch, capsys, verb):
         code, err = run(tool, monkeypatch, capsys, "epic", verb)
         assert code == 2

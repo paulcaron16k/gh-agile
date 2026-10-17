@@ -102,6 +102,7 @@ Commands
     gh agile sprint create|list
     gh agile epic  create -t "Title" [--key ...]
     gh agile story create -t "Title" --epic 4 [--points 3] [--priority high]
+    gh agile epic  list | view N                  likewise story, initiative, issue
     gh agile issue close ZMBNI-34 --evidence-file notes.md
     gh agile issue edit ZMBNI-34 --field Sprint --value @current
     gh agile sync [--dry-run]
@@ -5403,15 +5404,26 @@ def cmd_board_show(args) -> int:
     replacing it, because a board's own filter is the part that must not be lost.
     """
     view = find_view(args.owner, args.project, args.name)
-    kind = board_kind(view, args._config)
+    return show_board(args, view, board_kind(view, args._config), args.filter)
+
+
+def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
+               limit: int | None = None, announce_unfiltered: bool = True) -> int:
+    """Read the board once, select by `view`'s filter plus `typed_filter`, render.
+
+    `board show` passes a real view. The work-item `list` commands pass one made
+    up for the occasion -- `label:type:epic` -- so a list reads the board the way
+    a board does, through one query and one filter evaluator, and prints the same
+    columns (#202). `limit` keeps the first N rows, as `gh issue list -L` does.
+    """
     own = view.get("filter") or ""
     # Only what the caller typed: the view's own filter already carries the
     # expanded `label:initiative:<slug>` form, written by `board create`.
-    extra = resolve_filter_initiatives(args._config, args.filter, current_repo())
+    extra = resolve_filter_initiatives(args._config, typed_filter, current_repo())
     combined = " ".join(c for c in (own, extra) if c)
     terms = parse_filter(combined)
 
-    if not terms:
+    if not terms and announce_unfiltered:
         # **A board that excludes nothing is not a board**, and the reader is
         # usually being misled by its name rather than by this tool. On the
         # Zamboni project a view renamed `Backlog` in the web UI had never been
@@ -5451,6 +5463,8 @@ def cmd_board_show(args) -> int:
               and not i.get("isArchived")]
     shown = [i for i in issues if item_matches(i, terms, current_sprint=current)]
     rows = [board_row(i, keys) for i in shown]
+    if limit is not None:
+        rows = rows[:limit]
     grouping = LAYOUT_SECTIONS.get(view["layout"], "status")
     if grouping == "start":
         # Needs the whole board, not the filtered rows: a roadmap shows epics and
@@ -5467,7 +5481,7 @@ def cmd_board_show(args) -> int:
     containers = board_containers(issues, shown, keys) if kind == "scrum" else []
 
     stamp = _now()
-    if args.format == "jsonl":
+    if getattr(args, "format", None) == "jsonl":
         body = board_jsonl(view, kind, rows, sections, args, combined, len(issues),
                            stamp, containers)
         suffix = "jsonl"
@@ -5475,12 +5489,12 @@ def cmd_board_show(args) -> int:
         # A file gets the fixed width whatever the terminal is doing: `--out-dir`
         # writes a record, and a record that is 203 columns on one machine and 80
         # on the next is a diff nobody can read.
-        width = BOARD_WIDTH if args.out_dir else display_width()
+        width = BOARD_WIDTH if getattr(args, "out_dir", None) else display_width()
         body = render_board(view, kind, rows, sections, args.owner, args.project,
                             len(issues), combined, width, containers)
         suffix = "txt"
 
-    if args.out_dir:
+    if getattr(args, "out_dir", None):
         directory = pathlib.Path(args.out_dir)
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"board_{kind}_{slug(view['name'])}_{file_stamp(stamp)}.{suffix}"
@@ -5488,6 +5502,336 @@ def cmd_board_show(args) -> int:
         print(f"  {path}  ({len(rows)} item(s))")
     else:
         sys.stdout.write(body)
+    return 0
+
+
+#: What each work-item `list` selects, as a filter the board already understands.
+#: `None` is `issue list`: every work item on the board, whatever its type.
+TYPE_FILTERS = {"initiative": "label:type:initiative", "epic": "label:type:epic",
+                "story": "label:type:story", None: ""}
+
+#: `-s/--state`, as `gh issue list -s` takes it.
+STATE_FILTERS = {"open": "is:open", "closed": "is:closed", "all": ""}
+
+#: The heading each list prints, in place of a board's name.
+LIST_NAMES = {"initiative": "Initiatives", "epic": "Epics", "story": "Stories",
+              None: "Work items"}
+
+
+def cmd_list(args) -> int:
+    """`initiative|epic|story|issue list`: the board, narrowed to one type.
+
+    `gh agile epic list` used to file an epic called "list" (ZMBNI-185). This is
+    the command that was expected. **It is a board read, not a search**: a work
+    item's Status, Sprint and points live on the project item, so only the board
+    can say them, and a list that disagreed with `board show` about what an epic
+    is would be a second source of truth. So it reuses `show_board` with a filter
+    of its own -- one query, the same evaluator, the same columns.
+    """
+    if args.web:
+        gh(["project", "view", str(args.project), "--owner", args.owner, "--web"])
+        return 0
+    kind = args.item_type
+    view = {"name": LIST_NAMES[kind], "layout": "BOARD_LAYOUT",
+            "filter": " ".join(f for f in (TYPE_FILTERS[kind], STATE_FILTERS[args.state])
+                               if f)}
+    return show_board(args, view, "list", args.search, limit=args.limit,
+                      announce_unfiltered=False)
+
+
+#: Tasks, by search. **Not from the board, because a task is never on it** --
+#: that is the definition (POLICY.md §2), so the board read every other list
+#: uses would find none. One query per repository, with each task's story.
+TASK_SEARCH_QUERY = """
+query($q: String!, $n: Int!) {
+  search(query: $q, type: ISSUE, first: $n) {
+    nodes {
+      ... on Issue {
+        number title state url
+        repository { nameWithOwner }
+        parent { number repository { nameWithOwner } }
+      }
+    }
+  }
+}"""
+
+
+def cmd_task_list(args) -> int:
+    """`task list`: tasks in the profile's repositories, each with its story."""
+    repos = [args.repo] if args.repo else list(dict.fromkeys(
+        e.get("repo") for e in profile_keys(args._config) if e.get("repo")))
+    if not repos:
+        sys.exit("no repository to list tasks in: run inside one, or pass --repo")
+    if args.web:
+        gh(["issue", "list", "--repo", repos[0], "--label", f"type:{TASK_TYPE}", "--web"])
+        return 0
+    keys = {}
+    for entry in profile_keys(args._config):
+        keys.setdefault(entry.get("repo"), entry.get("key"))
+    rows = []
+    for repo in repos:
+        query = " ".join(t for t in (f"repo:{repo}", "is:issue", f"label:type:{TASK_TYPE}",
+                                     STATE_FILTERS[args.state], args.search or "") if t)
+        data = graphql(TASK_SEARCH_QUERY, q=query, n=args.limit)
+        for node in ((data.get("data") or {}).get("search") or {}).get("nodes") or []:
+            if not node:
+                continue
+            here = (node.get("repository") or {}).get("nameWithOwner")
+            parent = node.get("parent") or {}
+            rows.append({
+                "key": issue_key(here, node["number"], keys),
+                "number": node["number"], "repository": here,
+                "state": node.get("state"), "title": node.get("title") or "",
+                "url": node.get("url") or "",
+                "story": issue_key((parent.get("repository") or {}).get("nameWithOwner"),
+                                   parent["number"], keys) if parent else None,
+            })
+    rows = rows[:args.limit]
+    if args.format == "jsonl":
+        sys.stdout.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+        return 0
+    if not rows:
+        print("  no tasks" if args.state == "all" else f"  no {args.state} tasks")
+        return 0
+    width = max(len(r["key"]) for r in rows)
+    story = max(len(r["story"] or "-") for r in rows)
+    print(f"  {'key':<{width}}  {'state':<6}  {'story':<{story}}  title")
+    for r in rows:
+        print(f"  {r['key']:<{width}}  {r['state'].lower():<6}  {r['story'] or '-':<{story}}"
+              f"  {r['title']}")
+    return 0
+
+
+#: One work item from the issue's side, for `view`: what a person opening it
+#: wants, in one query -- its board fields, its parent, and its children with
+#: theirs. From the issue rather than the board for the reason
+#: `ISSUE_ITEM_QUERY` gives: an issue names its own repository, so nothing can
+#: collide, and it costs a point or two rather than a board read.
+_VIEW_FIELDS = """
+          status: fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name } }
+          points: fieldValueByName(name: "Story Points") {
+            ... on ProjectV2ItemFieldNumberValue { number } }"""
+ISSUE_VIEW_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number title url state stateReason body
+      repository { nameWithOwner }
+      labels(first: 50) { nodes { name } }
+      assignees(first: 10) { nodes { login } }
+      parent {
+        number title repository { nameWithOwner } labels(first: 20) { nodes { name } }
+      }
+      subIssuesSummary { total completed }
+      subIssues(first: 100) {
+        nodes {
+          number title state repository { nameWithOwner }
+          labels(first: 20) { nodes { name } }
+          projectItems(first: 10) { nodes { project { number }%(fields)s } }
+        }
+      }
+      projectItems(first: 20) {
+        nodes {
+          project { number }%(fields)s
+          sprint: fieldValueByName(name: "Sprint") {
+            ... on ProjectV2ItemFieldIterationValue { title } }
+          priority: fieldValueByName(name: "Priority") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name } }
+          start: fieldValueByName(name: "Start date") {
+            ... on ProjectV2ItemFieldDateValue { date } }
+          target: fieldValueByName(name: "Target date") {
+            ... on ProjectV2ItemFieldDateValue { date } }
+        }
+      }
+    }
+  }
+}""" % {"fields": _VIEW_FIELDS}
+
+#: What a level's children are called, in `view`.
+CHILDREN = {"initiative": "epics", "epic": "stories", "story": "tasks"}
+
+#: The levels with a `view` of their own. `issue view` takes any of them.
+VIEWABLE = ("initiative", "epic", "story")
+
+
+def _a(level: str) -> str:
+    """`an epic`, `an initiative`, `a story`."""
+    return f"{'an' if level[0] in 'aeiou' else 'a'} {level}"
+
+
+def _labels(node: dict) -> list[str]:
+    return [n["name"] for n in (node.get("labels") or {}).get("nodes") or []]
+
+
+def _type_of(labels: list[str]) -> str | None:
+    return next((lb.split(":", 1)[1] for lb in labels if lb.startswith("type:")), None)
+
+
+def _on_project(node: dict, project: int) -> dict:
+    return next((n for n in (node.get("projectItems") or {}).get("nodes") or []
+                 if (n.get("project") or {}).get("number") == project), {})
+
+
+def _value(item: dict, alias: str, key: str):
+    return (item.get(alias) or {}).get(key)
+
+
+def view_facts(node: dict, project: int, keys: dict[str, str]) -> dict:
+    """The issue as `view` reports it, pure, so it is tested without GitHub."""
+    repo = (node.get("repository") or {}).get("nameWithOwner")
+    labels = _labels(node)
+    item = _on_project(node, project)
+    parent = node.get("parent")
+    children = []
+    for child in (node.get("subIssues") or {}).get("nodes") or []:
+        child_item = _on_project(child, project)
+        children.append({
+            "key": issue_key((child.get("repository") or {}).get("nameWithOwner"),
+                             child["number"], keys),
+            "type": _type_of(_labels(child)), "state": child.get("state"),
+            "status": _value(child_item, "status", "name"),
+            "story_points": _value(child_item, "points", "number"),
+            "title": child.get("title") or "",
+        })
+    summary = node.get("subIssuesSummary") or {}
+    return {
+        "key": issue_key(repo, node["number"], keys), "number": node["number"],
+        "repository": repo, "title": node.get("title") or "", "url": node.get("url") or "",
+        "type": _type_of(labels), "state": node.get("state"),
+        "state_reason": node.get("stateReason"),
+        "on_board": bool(item), "status": _value(item, "status", "name"),
+        "sprint": _value(item, "sprint", "title"),
+        "story_points": _value(item, "points", "number"),
+        "priority": _value(item, "priority", "name"),
+        "start": _value(item, "start", "date"), "target": _value(item, "target", "date"),
+        "assignees": [n["login"] for n in (node.get("assignees") or {}).get("nodes") or []],
+        "labels": labels,
+        "sprint_labels": sorted(lb[len("sprint:"):] for lb in labels
+                                if lb.startswith("sprint:")),
+        "parent": {
+            "key": issue_key((parent.get("repository") or {}).get("nameWithOwner"),
+                             parent["number"], keys),
+            "type": _type_of(_labels(parent)), "title": parent.get("title") or "",
+        } if parent else None,
+        "children": children,
+        "children_total": summary.get("total") or len(children),
+        "children_closed": summary.get("completed") or 0,
+        "body": node.get("body") or "",
+    }
+
+
+def render_view(facts: dict, checks: str | None) -> str:
+    """The text `view`: what it is, where it stands, what it is part of and holds,
+    whether it passes `validate`, and then its body -- the order `gh issue view`
+    puts metadata before the body in."""
+    state = (facts["state"] or "").lower()
+    if facts["state_reason"] == ABANDONED:
+        state += " (not planned)"
+    head = " · ".join(p for p in (facts["key"], facts["type"] or "untyped", state,
+                                  facts["status"]) if p)
+    out = [head, facts["title"], facts["url"]]
+    meta: list[str] = []
+
+    def line(name, value):
+        if value not in (None, "", []):
+            meta.append(f"  {name:<10} {value}")
+
+    if not facts["on_board"]:
+        line("board", "not on this project -- `gh agile sync` adds it")
+    line("sprint", facts["sprint"])
+    line("points", render_points(facts["story_points"])
+         if facts["story_points"] is not None else None)
+    line("priority", facts["priority"])
+    if facts["start"] or facts["target"]:
+        line("dates", f"{facts['start'] or '?'} .. {facts['target'] or '?'}")
+    line("assignees", ", ".join(facts["assignees"]))
+    if facts["parent"]:
+        parent = facts["parent"]
+        line("parent", f"{parent['key']}  {parent['type'] or '-'}  {parent['title']}")
+    line("worked in", ", ".join(facts["sprint_labels"]))
+    other = [lb for lb in facts["labels"]
+             if not lb.startswith(("type:", "key:", "sprint:"))]
+    line("labels", ", ".join(other))
+    if meta:
+        out.append("")
+        out.extend(meta)
+    if facts["children"]:
+        name = CHILDREN.get(facts["type"], "sub-issues")
+        out.append("")
+        out.append(f"  {name}: {facts['children_closed']}/{facts['children_total']} closed")
+        width = max(len(c["key"]) for c in facts["children"])
+        for child in facts["children"]:
+            status = child["status"] or ("closed" if child["state"] == "CLOSED" else "-")
+            out.append(f"    {child['key']:<{width}}  {child['type'] or '-':<10} "
+                       f"{status:<12} {child['title']}")
+    if checks is not None:
+        out.append("")
+        out.append("  checks")
+        out.extend(f"    {ln.strip()}" for ln in checks.strip().splitlines() if ln.strip())
+    if facts["body"].strip():
+        out.append("")
+        out.append(facts["body"].rstrip())
+    return "\n".join(out) + "\n"
+
+
+def issue_checks(args, facts: dict) -> str | None:
+    """`validate`'s findings for this one issue, which is where `validate --id`
+    went (#202): somebody looking at one issue is in `view` already.
+
+    `validate` narrows its report, not its read, so this costs a board read on
+    top of the view's own query. Suppressed rather than fatal, as in the
+    post-merge hook: a view that cannot check still shows the issue.
+    """
+    if not facts["on_board"]:
+        return None
+    said = io.StringIO()
+    with contextlib.suppress(SystemExit), contextlib.redirect_stdout(said):
+        cmd_validate(argparse.Namespace(owner=args.owner, project=args.project,
+                                        id=facts["key"] if "-" in facts["key"]
+                                        else str(facts["number"]),
+                                        repo=facts["repository"], _config=args._config))
+    return said.getvalue()
+
+
+def cmd_view(args) -> int:
+    """`initiative|epic|story|issue view`: one work item, as `gh issue view` shows one.
+
+    **A type's `view` refuses another type and names the right command**, as
+    `gh pr view` refuses an issue: `epic view 12` on a story would otherwise
+    render a story under an epic's headings. `issue view` takes any of them.
+    """
+    if args.item_type == "initiative":
+        # An initiative is also named by its slug, as `--initiative` takes it.
+        repo, number = resolve_initiative(args._config, args.issue, args.repo)
+    else:
+        repo, number = parse_issue_ref(args.issue, args._config, args.repo)
+    if args.web:
+        gh(["issue", "view", str(number), "--repo", repo, "--web"])
+        return 0
+    owner, _, name = repo.partition("/")
+    try:
+        data = graphql(ISSUE_VIEW_QUERY, owner=owner, name=name, number=number)
+    except SystemExit as exc:
+        sys.exit(f"could not read issue {repo}#{number}: {exc}")
+    node = ((data.get("data") or {}).get("repository") or {}).get("issue")
+    if not node:
+        sys.exit(f"no issue {repo}#{number}")
+    keys = {}
+    for entry in profile_keys(args._config):
+        keys.setdefault(entry.get("repo"), entry.get("key"))
+    facts = view_facts(node, args.project, keys)
+    wanted, actual = args.item_type, facts["type"]
+    if wanted and actual != wanted:
+        right = (f"gh agile {actual} view {args.issue}" if actual in VIEWABLE
+                 else f"gh agile issue view {args.issue}")
+        what = _a(actual) if actual else "untyped, with no type: label"
+        sys.exit(f"{facts['key']} is {what}, not {_a(wanted)}:\n  {right}")
+    checks = issue_checks(args, facts)
+    if args.format == "json":
+        print(json.dumps({**facts, "checks": checks}, indent=2, sort_keys=True))
+        return 0
+    sys.stdout.write(render_view(facts, checks))
     return 0
 
 
@@ -7701,6 +8045,41 @@ def add_title(parser: argparse.ArgumentParser, what: str) -> None:
     parser.add_argument("-t", "--title", required=True, help=f"the {what}'s title")
 
 
+def add_list(group, item_type: str | None, what: str) -> None:
+    """`list`, with `gh issue list`'s flags for the same things."""
+    lister = group.add_parser("list", help=f"list {what} on the board, by Status")
+    lister.add_argument("-s", "--state", choices=list(STATE_FILTERS), default="open",
+                        help="open (the default), closed or all")
+    lister.add_argument("-L", "--limit", type=int, default=30,
+                        help="at most this many (default %(default)s)")
+    lister.add_argument("-S", "--search", metavar="TERMS",
+                        help="extra filter terms, ANDed on, as `board show --filter`")
+    lister.add_argument("--format", choices=["jsonl"],
+                        help="one JSON object per line instead of the text table")
+    lister.add_argument("-w", "--web", action="store_true", help="open the board instead")
+    if item_type == TASK_TYPE:
+        lister.add_argument("-R", "--repo", help="one repository; default every one "
+                                                 "in the profile")
+        lister.set_defaults(func=cmd_task_list, projectless=True)
+    else:
+        lister.set_defaults(func=cmd_list, item_type=item_type)
+
+
+def add_view(group, item_type: str | None, what: str) -> None:
+    """`view`, the issue first, as `gh issue view` takes it."""
+    viewer = group.add_parser("view", help=f"view {what}, its children and its checks")
+    viewer.add_argument("issue", metavar="initiative" if item_type == "initiative"
+                        else "issue",
+                        help=f"{ISSUE_REF_HELP}"
+                             + (", or the initiative's slug" if item_type == "initiative"
+                                else ""))
+    viewer.add_argument("-R", "--repo", help="only needed for a bare number outside "
+                                             "its repository")
+    viewer.add_argument("--format", choices=["json"], help="JSON instead of text")
+    viewer.add_argument("-w", "--web", action="store_true", help="open it in the browser")
+    viewer.set_defaults(func=cmd_view, item_type=item_type, needs_repo=True)
+
+
 EPIC_FIELDS = [
     ("-t/--title", "text", "required", "the epic's title"),
     ("--repo", "owner/name", "required", "repository the issue is created in"),
@@ -8001,6 +8380,8 @@ default chosen for you.""",
                                      "6w, 10d, 3sprints. Calendar days, inclusive")
     initiative_new.add_argument("--intent")
     initiative_new.add_argument("--acceptance")
+    add_list(initiative_sub, "initiative", "initiatives")
+    add_view(initiative_sub, "initiative", "one initiative")
     initiative_fix = initiative_sub.add_parser(
         "reconcile", help="bring initiative:<slug> into line with the hierarchy",
         epilog=field_help([
@@ -8034,6 +8415,8 @@ default chosen for you.""",
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
     epic.set_defaults(func=cmd_epic, needs_repo=True)
+    add_list(epic_sub, "epic", "epics")
+    add_view(epic_sub, "epic", "one epic")
 
     story_group = sub.add_parser("story", help="stories: the unit of work a sprint plans")
     story_sub = story_group.add_subparsers(dest="story_command", required=True)
@@ -8054,6 +8437,8 @@ default chosen for you.""",
     story.add_argument("--intent")
     story.add_argument("--acceptance")
     story.set_defaults(func=cmd_story, needs_repo=True)
+    add_list(story_sub, "story", "stories")
+    add_view(story_sub, "story", "one story")
 
     task_group = sub.add_parser(
         "task", help="tasks: story-internal housekeeping, counted by nothing",
@@ -8089,6 +8474,7 @@ default chosen for you.""",
     task.add_argument("--intent")
     task.add_argument("--acceptance")
     task.set_defaults(func=cmd_task, needs_repo=True, projectless=True)
+    add_list(task_sub, TASK_TYPE, "tasks")
 
     self_test = sub.add_parser(
         "self-test", help="stand up a scratch project, exercise everything, tear it down"
@@ -8334,9 +8720,11 @@ why this exists:
     # way `gh issue` holds them (#202). `move`, `set` and `fix` were top-level;
     # each now takes the issue as its first positional, as every targeted `gh`
     # command does.
-    issue_group = sub.add_parser("issue", help="any work item: move, edit, close, "
-                                                "reopen, reconcile")
+    issue_group = sub.add_parser("issue", help="any work item: list, view, move, "
+                                                "edit, close, reopen, reconcile")
     issue_sub = issue_group.add_subparsers(dest="issue_command", required=True)
+    add_list(issue_sub, None, "every work item")
+    add_view(issue_sub, None, "any work item")
     move = issue_sub.add_parser(
         "move", help="change status, with the evidence that status requires",
         epilog=field_help(MOVE_FIELDS),
@@ -8474,8 +8862,6 @@ why this exists:
     export.set_defaults(func=cmd_export)
 
     validate = sub.add_parser("validate", help="check the conventions in POLICY.md")
-    validate.add_argument("--id", help=f"only this issue: {ISSUE_REF_HELP}. "
-                                      "Narrows the report, not the board read -- see `issue reconcile`")
     validate.set_defaults(func=cmd_validate)
 
     inherit_global_flags(parser)
@@ -8608,6 +8994,13 @@ def retired_spelling(argv: list[str]) -> str | None:
                           *([issue] if issue else []), *reason, *after])
         return (f"`move --close` is now `issue close`, as `gh issue close` takes it, "
                 f"with the reason as -r:\n  {new}")
+    if command == "validate" and any(t == "--id" or t.startswith("--id=") for t in tail):
+        # `validate` is general and board-wide; one issue's findings are in its
+        # `view`, which is where somebody looking at one issue already is.
+        value, after = _pull_flag(tail, "--id")
+        new = shlex.join(["gh", "agile", *head, "issue", "view",
+                          *([value] if value else []), *after])
+        return f"`validate --id` is now `issue view`, which shows the issue's checks:\n  {new}"
     if command in MOVED_UNDER_ISSUE:
         verb, flag = MOVED_UNDER_ISSUE[command]
         value, after = _pull_flag(tail, flag)

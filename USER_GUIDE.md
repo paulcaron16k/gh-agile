@@ -1853,30 +1853,23 @@ knows about — a detached subtree whose label was never cleaned up. Both point 
 labels against the hierarchy in both directions and `--dry-run` reports without
 changing anything.
 
-`--id` narrows the report to one issue, for when you already have a suspect:
+One issue's findings are in its `view`, for when you already have a suspect:
 
 ```bash
-gh agile validate --id 24
-gh agile validate --id AGILE-24
+gh agile issue view 24
+gh agile issue view AGILE-24
 ```
 
-Two things to know about it. It **narrows the report, not the work** — the
-projects API cannot fetch one item by issue number, only by project item id,
-which is the thing that has to be looked up first, so the board is read either
-way. If you want the cheap per-issue path, that is `issue reconcile`. And it skips the
-sprint-overlap check, because overlap is a property of the iteration series
-rather than of any issue, and reporting it from a command aimed at one issue
-would read as a finding about that issue.
-
-On a project spanning repositories a bare number can match more than one issue.
-`validate --id` lists both and stops rather than picking one:
-
-```
-#12 is on this project from more than one repository:
-    owner/repo-a#12  A's twelfth
-    owner/repo-b#12  B's twelfth
-  Name one with a KEY-NUMBER reference, e.g. AGILE-12, so there is no guess.
-```
+It was `validate --id`; `validate` is now the board-wide check only, because a
+command that is sometimes about one issue and sometimes about all of them is the
+shape `gh` never takes. Two things to know about the checks in a view. They
+**narrow the report, not the work** — the projects API cannot fetch one item by
+issue number, only by project item id, which is the thing that has to be looked
+up first, so the board is read either way. If you want the cheap per-issue
+repair, that is `issue reconcile`. And they skip the sprint-overlap check,
+because overlap is a property of the iteration series rather than of any issue,
+and reporting it from a command aimed at one issue would read as a finding about
+that issue.
 
 ## 5. Creating an epic and a story
 
@@ -2185,6 +2178,47 @@ definition rather than something retyped beside it. The shorthand is expanded on
 the way in; you can write either.
 
 **Optional, always.** An epic under no initiative is ordinary, not a finding.
+
+### Reading work items: `list` and `view`
+
+Each level lists and views itself, as `gh issue list` and `gh issue view` do —
+and `issue` lists and views any of them:
+
+```bash
+gh agile epic list                     # open epics on the board, by Status
+gh agile story list -s all -L 50       # every story, open or closed
+gh agile initiative list
+gh agile issue list -S "sprint:@current"   # every work item in the current sprint
+gh agile epic view AGILE-200           # an epic: its stories, their Status, the rollup
+gh agile story view 202                # a story: its sprint, its tasks, every sprint: label
+gh agile initiative view hierarchy-visibility   # an initiative, by number or slug
+gh agile issue view 201 --format json  # any level, as JSON
+```
+
+A **list is a board read**, not a search: Status, Sprint and points live on the
+project item, so only the board can say them. It reuses `board show` with a
+filter of its own — `label:type:epic is:open` — so a list and a board never
+disagree about what an epic is, and `-S` takes the same terms as `board show
+--filter`. `-s` is `open`, `closed` or `all`, and `-L` keeps the first N, both
+as in `gh issue list`. `-w` opens the board in the browser instead.
+
+A **view** comes from the issue's side in one query: its board fields, its
+parent, its children with their Status, the `sprint:` labels recording where it
+was worked, and the `validate` checks for that one issue, then its body. `-w`
+opens the issue.
+
+**A level's `view` refuses another level and names the right command**, as
+`gh pr view` refuses an issue:
+
+```
+$ gh agile story view AGILE-200
+AGILE-200 is an epic, not a story:
+  gh agile epic view AGILE-200
+```
+
+`gh agile epic list` was, until AGILE-202, how an epic called "list" got filed:
+`epic` took its first word as a title. A title is `-t` now, and a `gh` verb is
+never read as one.
 
 ## 6. Issue titles: making the key and number visible
 
@@ -2816,6 +2850,7 @@ gh agile issue move --help
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint create` | Show or append iterations |
 | `initiative create` / `epic create` / `story create` | Create work items with their parent, labels and fields; the title is `-t`, as in `gh issue create` |
+| `initiative` / `epic` / `story` / `issue` `list` and `view` | List one level from the board, by Status; view one item with its children, its `sprint:` labels and its checks. `issue` takes any level |
 | `issue edit` | Set one field on an item already on the board |
 | `issue move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
 | `issue close` / `issue reopen` | Close as completed (needs Evidence) or `-r "not planned"`, setting Status to `Done`; reopen and move Status back |
