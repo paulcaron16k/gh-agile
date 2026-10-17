@@ -103,7 +103,7 @@ class TestSayingItIsRequired:
         import sys as _sys
         monkeypatch.setattr(tool, "require_interpreter", lambda: None)
         monkeypatch.setattr(tool, "apply_defaults", lambda args: None)
-        monkeypatch.setattr(_sys, "argv", ["gh-agile", "story", "a title"])
+        monkeypatch.setattr(_sys, "argv", ["gh-agile", "story", "create", "-t", "a title"])
         with pytest.raises(SystemExit):
             tool.main()
 

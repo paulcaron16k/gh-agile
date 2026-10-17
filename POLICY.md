@@ -34,7 +34,7 @@ language a person reads before creating an issue.
 | **Initiative** | An issue labelled `type:initiative`, holding epics as **sub-issues**, and carrying `initiative:<slug>` | **Optional.** The plan and WBS for a large feature — the set of epics it requires, with somewhere to write down why. Jira charges for the levels above Epic; sub-issues nest here, and across repositories. An epic under no initiative is ordinary |
 | **Epic** | An issue labelled `type:epic`, holding stories as **sub-issues** | Sub-issues give a real parent/child edge the API can traverse and roll up. Issue *types* would be better but are an organization-only feature |
 | **Story** | An issue labelled `type:story`, normally a sub-issue of exactly one epic | One parent, normally. `--epic none` files a story that stands alone, and `validate` **notes** it rather than failing — a finding that is somebody's deliberate choice cannot be fatal without the validator arguing with the person using it. Saying `none` is required, though: an orphan story is far more often an accident than an intention, and refusing one-off work outright pushes it outside the tool, where it is neither tracked nor exported |
-| **Task** | A **markdown checklist** in a `## Tasks` section of the story — **or** an issue labelled `type:task` as a sub-issue of one | The checklist is the recommendation, and the original reason stands: tasks below story level are working notes, and promoting them to issues buys ceremony and costs signal. **The tool is deliberately blind to the section.** GitHub already renders `- [ ]` natively with its own count, so there is nothing to add and something to lose: a body is a whole-value replace with no additive primitive, so two people ticking boxes would overwrite each other. It reads nothing, writes nothing, shows nothing on a board and exports nothing — it only guarantees not to damage the section, which `move --evidence` and every other body write are tested against. The issue form exists so `validate` does not punish a team that files them anyway, and it too **changes no number**: no points, no sprint label, no board row, not exported. See AGILE-132, and AGILE-164 for this row's reasoning |
+| **Task** | A **markdown checklist** in a `## Tasks` section of the story — **or** an issue labelled `type:task` as a sub-issue of one | The checklist is the recommendation, and the original reason stands: tasks below story level are working notes, and promoting them to issues buys ceremony and costs signal. **The tool is deliberately blind to the section.** GitHub already renders `- [ ]` natively with its own count, so there is nothing to add and something to lose: a body is a whole-value replace with no additive primitive, so two people ticking boxes would overwrite each other. It reads nothing, writes nothing, shows nothing on a board and exports nothing — it only guarantees not to damage the section, which `issue move --evidence` and every other body write are tested against. The issue form exists so `validate` does not punish a team that files them anyway, and it too **changes no number**: no points, no sprint label, no board row, not exported. See AGILE-132, and AGILE-164 for this row's reasoning |
 
 **The task-list section, spelled out**, because a convention two teams write
 differently is one no tool and no reader can rely on:
@@ -51,7 +51,7 @@ the author's business, nesting is allowed, and prose between the boxes is
 allowed — nothing here parses it.
 
 **An absent section is the normal case.** Most stories need no breakdown, and
-`story` does not create the heading: an empty `## Tasks` on every issue is the
+`story create` does not create the heading: an empty `## Tasks` on every issue is the
 ceremony this row exists to avoid. Add it when you have something to put in it.
 
 | **Bug** | An issue labelled `type:bug`; may or may not have an epic | Bugs arrive without asking whether they fit a plan |
@@ -110,8 +110,8 @@ closed items say only "done" has thrown away the reasoning that made the decisio
 defensible. When a question is reopened — and it will be — this is the difference
 between re-deciding and re-reading.
 
-*As work proceeds* is meant literally, and the tool honours it: `gh agile move
---evidence` writes the section whatever the status, so what was ruled out on the
+*As work proceeds* is meant literally, and the tool honours it: `gh agile issue
+move --evidence` writes the section whatever the status, so what was ruled out on the
 way to `In Review`, or what a `Blocked` item is blocked on, is recorded when it
 is known rather than reconstructed at the end. Only `Done` **requires** it —
 requiring evidence to start work is ceremony; requiring it to finish is the

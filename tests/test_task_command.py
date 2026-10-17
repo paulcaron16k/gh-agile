@@ -113,7 +113,8 @@ class TestItTouchesNoNumber:
         monkeypatch.setattr(tool, "apply_defaults", lambda args: None)
         monkeypatch.setattr(tool, "cmd_task", lambda args: 0)
         monkeypatch.setattr(_sys, "argv",
-                            ["gh-agile", "task", "t", "--story", "9", f"--{flag}", "1"])
+                            ["gh-agile", "task", "create", "-t", "t", "--story", "9",
+                             f"--{flag}", "1"])
         with pytest.raises(SystemExit) as exit_info:
             tool.main()
         assert exit_info.value.code != 0
@@ -160,7 +161,7 @@ class TestTheStoryFlag:
         monkeypatch.setattr(tool, "require_interpreter", lambda: None)
         monkeypatch.setattr(tool, "apply_defaults", lambda args: None)
         monkeypatch.setattr(tool, "cmd_task", lambda args: 0)
-        monkeypatch.setattr(_sys, "argv", ["gh-agile", "task", "a task"])
+        monkeypatch.setattr(_sys, "argv", ["gh-agile", "task", "create", "-t", "a task"])
         with pytest.raises(SystemExit) as exit_info:
             tool.main()
         assert exit_info.value.code != 0

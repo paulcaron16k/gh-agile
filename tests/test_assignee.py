@@ -193,12 +193,12 @@ class TestTheFlagIsParsed:
     ])
     def test_absent_and_named(self, tool, monkeypatch, extra, want):
         args = self.parsed(tool, monkeypatch,
-                           ["move", "7", "--status", "In Progress", *extra])
+                           ["issue", "move", "7", "In Progress", *extra])
         assert args.add_assignee == want
 
     def test_a_bare_flag_is_a_usage_error(self, tool, monkeypatch, capsys):
         with pytest.raises(SystemExit) as exit_info:
-            self.parsed(tool, monkeypatch, ["move", "7", "--status", "In Progress",
+            self.parsed(tool, monkeypatch, ["issue", "move", "7", "In Progress",
                                             "--add-assignee"])
         assert exit_info.value.code == 2
         assert "--add-assignee" in capsys.readouterr().err

@@ -30,16 +30,29 @@ PROFILE = {
 }
 
 
+#: One command line per command that names an issue.
+EPIC = ["epic", "create", "-t", "a title"]
+STORY = ["story", "create", "-t", "a title", "--epic", "none"]
+SET = ["issue", "edit", "1", "--field", "FR", "--value", "x"]
+MOVE = ["issue", "move", "1", "Todo"]
+FIX = ["issue", "reconcile", "1"]
+
+
 @pytest.fixture
 def defaults(monkeypatch, tool):
-    """`apply_defaults` with the profile and the working directory stubbed."""
-    def go(command, *, repo=None, key=None, cwd_repo="o/gh-agile", config=None):
-        import argparse
+    """`apply_defaults` on a real command line, the profile and the working
+    directory stubbed. Parsed rather than built by hand, because whether a
+    command needs a repository is declared on its parser (#202)."""
+    def go(argv, *, repo=None, key=None, cwd_repo="o/gh-agile", config=None):
         monkeypatch.setattr(tool, "read_config", lambda *a, **k: config or PROFILE)
         monkeypatch.setattr(tool, "current_repo", lambda: cwd_repo)
         monkeypatch.setattr(tool, "resolve_owner", lambda args, cfg: None)
-        args = argparse.Namespace(command=command, project=4, owner="o",
-                                  repo=repo, key=key)
+        args = tool.build_parser().parse_args(argv)
+        args.project, args.owner = 4, "o"
+        if repo is not None:
+            args.repo = repo
+        if key is not None:
+            args.key = key
         tool.apply_defaults(args)
         return args
     return go
@@ -49,31 +62,31 @@ class TestSyncDefaultsToEveryRepository:
     def test_no_flag_leaves_the_repository_unset(self, tool, defaults):
         """Unset is what `cmd_sync` reads as "sweep the profile". Filling it from
         the working directory is what made the documented default unreachable."""
-        assert defaults("sync").repo is None
+        assert defaults(["sync"]).repo is None
 
     def test_an_explicit_repo_still_narrows(self, tool, defaults):
-        assert defaults("sync", repo="o/zamboni").repo == "o/zamboni"
+        assert defaults(["sync"], repo="o/zamboni").repo == "o/zamboni"
 
     def test_a_key_still_resolves_to_its_repository(self, tool, defaults):
         """`--key ZMBNI` names a repository on its own, and that is more explicit
         than the clone you happen to be standing in."""
-        assert defaults("sync", key="ZMBNI").repo == "o/zamboni"
+        assert defaults(["sync"], key="ZMBNI").repo == "o/zamboni"
 
     def test_it_does_not_need_to_be_run_inside_a_clone(self, tool, defaults):
         """Filling a shared board is not a thing you do from one of its
         repositories in particular."""
-        assert defaults("sync", cwd_repo=None).repo is None
+        assert defaults(["sync"], cwd_repo=None).repo is None
 
 
 class TestEveryOtherCommandKeepsItsWorkingDirectoryDefault:
-    @pytest.mark.parametrize("command", ["epic", "story", "set", "move", "fix", "project"])
-    def test_the_clone_is_the_right_guess(self, tool, defaults, command):
-        assert defaults(command).repo == "o/gh-agile"
+    @pytest.mark.parametrize("argv", [EPIC, STORY, SET, MOVE, FIX, ["project", "owner"]])
+    def test_the_clone_is_the_right_guess(self, tool, defaults, argv):
+        assert defaults(argv).repo == "o/gh-agile"
 
-    @pytest.mark.parametrize("command", ["set", "move", "fix"])
-    def test_and_outside_a_clone_they_still_refuse(self, tool, defaults, command):
+    @pytest.mark.parametrize("argv", [SET, MOVE, FIX])
+    def test_and_outside_a_clone_they_still_refuse(self, tool, defaults, argv):
         with pytest.raises(SystemExit) as exit_info:
-            defaults(command, cwd_repo=None)
+            defaults(argv, cwd_repo=None)
         assert "not inside a GitHub repository" in str(exit_info.value)
 
 

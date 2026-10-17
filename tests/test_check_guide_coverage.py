@@ -145,7 +145,7 @@ class TestTheExemptions:
         """Filing tasks as issues is not promoted: POLICY.md §2 still
         recommends a checklist, and documenting the command in the guide would
         read as a recommendation."""
-        why = guard.UNDOCUMENTED_OK[("task",)]
+        why = guard.UNDOCUMENTED_OK[("task", "create")]
         assert "checklist" in why and "POLICY" in why
 
 

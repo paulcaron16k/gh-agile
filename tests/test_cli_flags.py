@@ -54,7 +54,7 @@ class TestGlobalFlagsEitherSide:
         """The reason every copy below the top is `SUPPRESS`: an ordinary default
         in the subparser would write `None` over the value typed first."""
         args = tool.build_parser().parse_args(["--project", "4", "--owner", "o",
-                                               "move", "7", "--status", "Done"])
+                                               "issue", "move", "7", "Done"])
         assert (args.project, args.owner) == (4, "o")
 
     def test_untyped_is_still_none(self, tool):
@@ -71,7 +71,8 @@ class TestGlobalFlagsEitherSide:
 #: Every short flag, and the long flag it must stand for. Each one is `gh`'s
 #: own, meaning the same thing there.
 GH_SHORT_FLAGS = {"-h": "--help", "-R": "--repo", "-L": "--limit", "-s": "--state",
-                  "-t": "--title"}
+                  "-t": "--title", "-r": "--reason", "-c": "--comment", "-S": "--search",
+                  "-w": "--web"}
 
 
 class TestShortFlagsAreGhs:
@@ -91,7 +92,8 @@ class TestShortFlagsAreGhs:
                     assert "-R" in action.option_strings, path
 
     def test_add_assignee_has_none(self, tool):
-        move = dict(subparsers(tool.build_parser()))["move"]
+        issue = dict(subparsers(tool.build_parser()))["issue"]
+        move = dict(subparsers(issue))["move"]
         flag = next(a for a in move._actions if "--add-assignee" in a.option_strings)
         assert flag.option_strings == ["--add-assignee"]
 

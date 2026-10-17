@@ -100,10 +100,11 @@ Commands
     gh agile key --key ZMBNI [--repo ...]   record or list repository keys
     gh agile board create --name "..." --type scrum|kanban|backlog|roadmap
     gh agile sprint create|list
-    gh agile epic  "Title" [--key ...]
-    gh agile story "Title" --epic 4 [--points 3] [--priority high]
-    gh agile move  ZMBNI-34 --status Done --evidence-file notes.md --close
-    gh agile set   --issue ZMBNI-34 --field Sprint --value @current
+    gh agile epic  create -t "Title" [--key ...]
+    gh agile story create -t "Title" --epic 4 [--points 3] [--priority high]
+    gh agile epic  list | view N                  likewise story, initiative, issue
+    gh agile issue close ZMBNI-34 --evidence-file notes.md
+    gh agile issue edit ZMBNI-34 --field Sprint --value @current
     gh agile sync [--dry-run]
     gh agile validate
     gh agile export [--csv] [--out-dir DIR] [--since ...]
@@ -1673,7 +1674,7 @@ WORKFLOW_ADVICE = {
         "by-hand",
         "it writes Status and nothing else -- no Evidence, no closing sprint: "
         "label, no completed-or-not-planned -- so an issue it touches reads Done "
-        "while being unfinished. `move --status Done --evidence` writes all "
+        "while being unfinished. `issue move ISSUE Done --evidence` writes all "
         "three, and the post-merge hook asks for it at the terminal (#186)",
     ),
     "Item added to project": (
@@ -3088,7 +3089,10 @@ def cmd_story(args) -> int:
 
     with board_write_reported(number, url, args.project):
         item = add_to_project(args.owner, args.project, url)
-        set_field(args.owner, args.project, item, "Status", canonical_status(args.status))
+        # Always `Todo`. `--status` went in #202: it was a second route to Done
+        # that asked for no evidence, and every other status is a start of work,
+        # which `issue move` is for -- claiming the issue, assigning the sprint.
+        set_field(args.owner, args.project, item, "Status", "Todo")
         if args.points is not None:
             set_field(args.owner, args.project, item, "Story Points", args.points)
         if args.priority:
@@ -5312,7 +5316,7 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
                    f"showing finished work as live.")
         for row in stale:
             out.append(f"    {row['key']}  Status: {row['status'] or '(none)'}  "
-                       f"->  gh agile move {row['number']} --status {CYCLE_END}")
+                       f"->  gh agile issue move {row['number']} {CYCLE_END}")
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -5400,15 +5404,26 @@ def cmd_board_show(args) -> int:
     replacing it, because a board's own filter is the part that must not be lost.
     """
     view = find_view(args.owner, args.project, args.name)
-    kind = board_kind(view, args._config)
+    return show_board(args, view, board_kind(view, args._config), args.filter)
+
+
+def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
+               limit: int | None = None, announce_unfiltered: bool = True) -> int:
+    """Read the board once, select by `view`'s filter plus `typed_filter`, render.
+
+    `board show` passes a real view. The work-item `list` commands pass one made
+    up for the occasion -- `label:type:epic` -- so a list reads the board the way
+    a board does, through one query and one filter evaluator, and prints the same
+    columns (#202). `limit` keeps the first N rows, as `gh issue list -L` does.
+    """
     own = view.get("filter") or ""
     # Only what the caller typed: the view's own filter already carries the
     # expanded `label:initiative:<slug>` form, written by `board create`.
-    extra = resolve_filter_initiatives(args._config, args.filter, current_repo())
+    extra = resolve_filter_initiatives(args._config, typed_filter, current_repo())
     combined = " ".join(c for c in (own, extra) if c)
     terms = parse_filter(combined)
 
-    if not terms:
+    if not terms and announce_unfiltered:
         # **A board that excludes nothing is not a board**, and the reader is
         # usually being misled by its name rather than by this tool. On the
         # Zamboni project a view renamed `Backlog` in the web UI had never been
@@ -5448,6 +5463,8 @@ def cmd_board_show(args) -> int:
               and not i.get("isArchived")]
     shown = [i for i in issues if item_matches(i, terms, current_sprint=current)]
     rows = [board_row(i, keys) for i in shown]
+    if limit is not None:
+        rows = rows[:limit]
     grouping = LAYOUT_SECTIONS.get(view["layout"], "status")
     if grouping == "start":
         # Needs the whole board, not the filtered rows: a roadmap shows epics and
@@ -5464,7 +5481,7 @@ def cmd_board_show(args) -> int:
     containers = board_containers(issues, shown, keys) if kind == "scrum" else []
 
     stamp = _now()
-    if args.format == "jsonl":
+    if getattr(args, "format", None) == "jsonl":
         body = board_jsonl(view, kind, rows, sections, args, combined, len(issues),
                            stamp, containers)
         suffix = "jsonl"
@@ -5472,12 +5489,12 @@ def cmd_board_show(args) -> int:
         # A file gets the fixed width whatever the terminal is doing: `--out-dir`
         # writes a record, and a record that is 203 columns on one machine and 80
         # on the next is a diff nobody can read.
-        width = BOARD_WIDTH if args.out_dir else display_width()
+        width = BOARD_WIDTH if getattr(args, "out_dir", None) else display_width()
         body = render_board(view, kind, rows, sections, args.owner, args.project,
                             len(issues), combined, width, containers)
         suffix = "txt"
 
-    if args.out_dir:
+    if getattr(args, "out_dir", None):
         directory = pathlib.Path(args.out_dir)
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"board_{kind}_{slug(view['name'])}_{file_stamp(stamp)}.{suffix}"
@@ -5485,6 +5502,336 @@ def cmd_board_show(args) -> int:
         print(f"  {path}  ({len(rows)} item(s))")
     else:
         sys.stdout.write(body)
+    return 0
+
+
+#: What each work-item `list` selects, as a filter the board already understands.
+#: `None` is `issue list`: every work item on the board, whatever its type.
+TYPE_FILTERS = {"initiative": "label:type:initiative", "epic": "label:type:epic",
+                "story": "label:type:story", None: ""}
+
+#: `-s/--state`, as `gh issue list -s` takes it.
+STATE_FILTERS = {"open": "is:open", "closed": "is:closed", "all": ""}
+
+#: The heading each list prints, in place of a board's name.
+LIST_NAMES = {"initiative": "Initiatives", "epic": "Epics", "story": "Stories",
+              None: "Work items"}
+
+
+def cmd_list(args) -> int:
+    """`initiative|epic|story|issue list`: the board, narrowed to one type.
+
+    `gh agile epic list` used to file an epic called "list" (ZMBNI-185). This is
+    the command that was expected. **It is a board read, not a search**: a work
+    item's Status, Sprint and points live on the project item, so only the board
+    can say them, and a list that disagreed with `board show` about what an epic
+    is would be a second source of truth. So it reuses `show_board` with a filter
+    of its own -- one query, the same evaluator, the same columns.
+    """
+    if args.web:
+        gh(["project", "view", str(args.project), "--owner", args.owner, "--web"])
+        return 0
+    kind = args.item_type
+    view = {"name": LIST_NAMES[kind], "layout": "BOARD_LAYOUT",
+            "filter": " ".join(f for f in (TYPE_FILTERS[kind], STATE_FILTERS[args.state])
+                               if f)}
+    return show_board(args, view, "list", args.search, limit=args.limit,
+                      announce_unfiltered=False)
+
+
+#: Tasks, by search. **Not from the board, because a task is never on it** --
+#: that is the definition (POLICY.md §2), so the board read every other list
+#: uses would find none. One query per repository, with each task's story.
+TASK_SEARCH_QUERY = """
+query($q: String!, $n: Int!) {
+  search(query: $q, type: ISSUE, first: $n) {
+    nodes {
+      ... on Issue {
+        number title state url
+        repository { nameWithOwner }
+        parent { number repository { nameWithOwner } }
+      }
+    }
+  }
+}"""
+
+
+def cmd_task_list(args) -> int:
+    """`task list`: tasks in the profile's repositories, each with its story."""
+    repos = [args.repo] if args.repo else list(dict.fromkeys(
+        e.get("repo") for e in profile_keys(args._config) if e.get("repo")))
+    if not repos:
+        sys.exit("no repository to list tasks in: run inside one, or pass --repo")
+    if args.web:
+        gh(["issue", "list", "--repo", repos[0], "--label", f"type:{TASK_TYPE}", "--web"])
+        return 0
+    keys = {}
+    for entry in profile_keys(args._config):
+        keys.setdefault(entry.get("repo"), entry.get("key"))
+    rows = []
+    for repo in repos:
+        query = " ".join(t for t in (f"repo:{repo}", "is:issue", f"label:type:{TASK_TYPE}",
+                                     STATE_FILTERS[args.state], args.search or "") if t)
+        data = graphql(TASK_SEARCH_QUERY, q=query, n=args.limit)
+        for node in ((data.get("data") or {}).get("search") or {}).get("nodes") or []:
+            if not node:
+                continue
+            here = (node.get("repository") or {}).get("nameWithOwner")
+            parent = node.get("parent") or {}
+            rows.append({
+                "key": issue_key(here, node["number"], keys),
+                "number": node["number"], "repository": here,
+                "state": node.get("state"), "title": node.get("title") or "",
+                "url": node.get("url") or "",
+                "story": issue_key((parent.get("repository") or {}).get("nameWithOwner"),
+                                   parent["number"], keys) if parent else None,
+            })
+    rows = rows[:args.limit]
+    if args.format == "jsonl":
+        sys.stdout.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+        return 0
+    if not rows:
+        print("  no tasks" if args.state == "all" else f"  no {args.state} tasks")
+        return 0
+    width = max(len(r["key"]) for r in rows)
+    story = max(len(r["story"] or "-") for r in rows)
+    print(f"  {'key':<{width}}  {'state':<6}  {'story':<{story}}  title")
+    for r in rows:
+        print(f"  {r['key']:<{width}}  {r['state'].lower():<6}  {r['story'] or '-':<{story}}"
+              f"  {r['title']}")
+    return 0
+
+
+#: One work item from the issue's side, for `view`: what a person opening it
+#: wants, in one query -- its board fields, its parent, and its children with
+#: theirs. From the issue rather than the board for the reason
+#: `ISSUE_ITEM_QUERY` gives: an issue names its own repository, so nothing can
+#: collide, and it costs a point or two rather than a board read.
+_VIEW_FIELDS = """
+          status: fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name } }
+          points: fieldValueByName(name: "Story Points") {
+            ... on ProjectV2ItemFieldNumberValue { number } }"""
+ISSUE_VIEW_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number title url state stateReason body
+      repository { nameWithOwner }
+      labels(first: 50) { nodes { name } }
+      assignees(first: 10) { nodes { login } }
+      parent {
+        number title repository { nameWithOwner } labels(first: 20) { nodes { name } }
+      }
+      subIssuesSummary { total completed }
+      subIssues(first: 100) {
+        nodes {
+          number title state repository { nameWithOwner }
+          labels(first: 20) { nodes { name } }
+          projectItems(first: 10) { nodes { project { number }%(fields)s } }
+        }
+      }
+      projectItems(first: 20) {
+        nodes {
+          project { number }%(fields)s
+          sprint: fieldValueByName(name: "Sprint") {
+            ... on ProjectV2ItemFieldIterationValue { title } }
+          priority: fieldValueByName(name: "Priority") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name } }
+          start: fieldValueByName(name: "Start date") {
+            ... on ProjectV2ItemFieldDateValue { date } }
+          target: fieldValueByName(name: "Target date") {
+            ... on ProjectV2ItemFieldDateValue { date } }
+        }
+      }
+    }
+  }
+}""" % {"fields": _VIEW_FIELDS}
+
+#: What a level's children are called, in `view`.
+CHILDREN = {"initiative": "epics", "epic": "stories", "story": "tasks"}
+
+#: The levels with a `view` of their own. `issue view` takes any of them.
+VIEWABLE = ("initiative", "epic", "story")
+
+
+def _a(level: str) -> str:
+    """`an epic`, `an initiative`, `a story`."""
+    return f"{'an' if level[0] in 'aeiou' else 'a'} {level}"
+
+
+def _labels(node: dict) -> list[str]:
+    return [n["name"] for n in (node.get("labels") or {}).get("nodes") or []]
+
+
+def _type_of(labels: list[str]) -> str | None:
+    return next((lb.split(":", 1)[1] for lb in labels if lb.startswith("type:")), None)
+
+
+def _on_project(node: dict, project: int) -> dict:
+    return next((n for n in (node.get("projectItems") or {}).get("nodes") or []
+                 if (n.get("project") or {}).get("number") == project), {})
+
+
+def _value(item: dict, alias: str, key: str):
+    return (item.get(alias) or {}).get(key)
+
+
+def view_facts(node: dict, project: int, keys: dict[str, str]) -> dict:
+    """The issue as `view` reports it, pure, so it is tested without GitHub."""
+    repo = (node.get("repository") or {}).get("nameWithOwner")
+    labels = _labels(node)
+    item = _on_project(node, project)
+    parent = node.get("parent")
+    children = []
+    for child in (node.get("subIssues") or {}).get("nodes") or []:
+        child_item = _on_project(child, project)
+        children.append({
+            "key": issue_key((child.get("repository") or {}).get("nameWithOwner"),
+                             child["number"], keys),
+            "type": _type_of(_labels(child)), "state": child.get("state"),
+            "status": _value(child_item, "status", "name"),
+            "story_points": _value(child_item, "points", "number"),
+            "title": child.get("title") or "",
+        })
+    summary = node.get("subIssuesSummary") or {}
+    return {
+        "key": issue_key(repo, node["number"], keys), "number": node["number"],
+        "repository": repo, "title": node.get("title") or "", "url": node.get("url") or "",
+        "type": _type_of(labels), "state": node.get("state"),
+        "state_reason": node.get("stateReason"),
+        "on_board": bool(item), "status": _value(item, "status", "name"),
+        "sprint": _value(item, "sprint", "title"),
+        "story_points": _value(item, "points", "number"),
+        "priority": _value(item, "priority", "name"),
+        "start": _value(item, "start", "date"), "target": _value(item, "target", "date"),
+        "assignees": [n["login"] for n in (node.get("assignees") or {}).get("nodes") or []],
+        "labels": labels,
+        "sprint_labels": sorted(lb[len("sprint:"):] for lb in labels
+                                if lb.startswith("sprint:")),
+        "parent": {
+            "key": issue_key((parent.get("repository") or {}).get("nameWithOwner"),
+                             parent["number"], keys),
+            "type": _type_of(_labels(parent)), "title": parent.get("title") or "",
+        } if parent else None,
+        "children": children,
+        "children_total": summary.get("total") or len(children),
+        "children_closed": summary.get("completed") or 0,
+        "body": node.get("body") or "",
+    }
+
+
+def render_view(facts: dict, checks: str | None) -> str:
+    """The text `view`: what it is, where it stands, what it is part of and holds,
+    whether it passes `validate`, and then its body -- the order `gh issue view`
+    puts metadata before the body in."""
+    state = (facts["state"] or "").lower()
+    if facts["state_reason"] == ABANDONED:
+        state += " (not planned)"
+    head = " · ".join(p for p in (facts["key"], facts["type"] or "untyped", state,
+                                  facts["status"]) if p)
+    out = [head, facts["title"], facts["url"]]
+    meta: list[str] = []
+
+    def line(name, value):
+        if value not in (None, "", []):
+            meta.append(f"  {name:<10} {value}")
+
+    if not facts["on_board"]:
+        line("board", "not on this project -- `gh agile sync` adds it")
+    line("sprint", facts["sprint"])
+    line("points", render_points(facts["story_points"])
+         if facts["story_points"] is not None else None)
+    line("priority", facts["priority"])
+    if facts["start"] or facts["target"]:
+        line("dates", f"{facts['start'] or '?'} .. {facts['target'] or '?'}")
+    line("assignees", ", ".join(facts["assignees"]))
+    if facts["parent"]:
+        parent = facts["parent"]
+        line("parent", f"{parent['key']}  {parent['type'] or '-'}  {parent['title']}")
+    line("worked in", ", ".join(facts["sprint_labels"]))
+    other = [lb for lb in facts["labels"]
+             if not lb.startswith(("type:", "key:", "sprint:"))]
+    line("labels", ", ".join(other))
+    if meta:
+        out.append("")
+        out.extend(meta)
+    if facts["children"]:
+        name = CHILDREN.get(facts["type"], "sub-issues")
+        out.append("")
+        out.append(f"  {name}: {facts['children_closed']}/{facts['children_total']} closed")
+        width = max(len(c["key"]) for c in facts["children"])
+        for child in facts["children"]:
+            status = child["status"] or ("closed" if child["state"] == "CLOSED" else "-")
+            out.append(f"    {child['key']:<{width}}  {child['type'] or '-':<10} "
+                       f"{status:<12} {child['title']}")
+    if checks is not None:
+        out.append("")
+        out.append("  checks")
+        out.extend(f"    {ln.strip()}" for ln in checks.strip().splitlines() if ln.strip())
+    if facts["body"].strip():
+        out.append("")
+        out.append(facts["body"].rstrip())
+    return "\n".join(out) + "\n"
+
+
+def issue_checks(args, facts: dict) -> str | None:
+    """`validate`'s findings for this one issue, which is where `validate --id`
+    went (#202): somebody looking at one issue is in `view` already.
+
+    `validate` narrows its report, not its read, so this costs a board read on
+    top of the view's own query. Suppressed rather than fatal, as in the
+    post-merge hook: a view that cannot check still shows the issue.
+    """
+    if not facts["on_board"]:
+        return None
+    said = io.StringIO()
+    with contextlib.suppress(SystemExit), contextlib.redirect_stdout(said):
+        cmd_validate(argparse.Namespace(owner=args.owner, project=args.project,
+                                        id=facts["key"] if "-" in facts["key"]
+                                        else str(facts["number"]),
+                                        repo=facts["repository"], _config=args._config))
+    return said.getvalue()
+
+
+def cmd_view(args) -> int:
+    """`initiative|epic|story|issue view`: one work item, as `gh issue view` shows one.
+
+    **A type's `view` refuses another type and names the right command**, as
+    `gh pr view` refuses an issue: `epic view 12` on a story would otherwise
+    render a story under an epic's headings. `issue view` takes any of them.
+    """
+    if args.item_type == "initiative":
+        # An initiative is also named by its slug, as `--initiative` takes it.
+        repo, number = resolve_initiative(args._config, args.issue, args.repo)
+    else:
+        repo, number = parse_issue_ref(args.issue, args._config, args.repo)
+    if args.web:
+        gh(["issue", "view", str(number), "--repo", repo, "--web"])
+        return 0
+    owner, _, name = repo.partition("/")
+    try:
+        data = graphql(ISSUE_VIEW_QUERY, owner=owner, name=name, number=number)
+    except SystemExit as exc:
+        sys.exit(f"could not read issue {repo}#{number}: {exc}")
+    node = ((data.get("data") or {}).get("repository") or {}).get("issue")
+    if not node:
+        sys.exit(f"no issue {repo}#{number}")
+    keys = {}
+    for entry in profile_keys(args._config):
+        keys.setdefault(entry.get("repo"), entry.get("key"))
+    facts = view_facts(node, args.project, keys)
+    wanted, actual = args.item_type, facts["type"]
+    if wanted and actual != wanted:
+        right = (f"gh agile {actual} view {args.issue}" if actual in VIEWABLE
+                 else f"gh agile issue view {args.issue}")
+        what = _a(actual) if actual else "untyped, with no type: label"
+        sys.exit(f"{facts['key']} is {what}, not {_a(wanted)}:\n  {right}")
+    checks = issue_checks(args, facts)
+    if args.format == "json":
+        print(json.dumps({**facts, "checks": checks}, indent=2, sort_keys=True))
+        return 0
+    sys.stdout.write(render_view(facts, checks))
     return 0
 
 
@@ -5885,6 +6232,14 @@ def cmd_set(args) -> int:
     hit between two field writes -- could only be fixed by hand, which is what
     this tool exists to avoid.
     """
+    # **Status has one door, and it is `issue move`.** That is where Done asks for
+    # evidence, starting work claims the issue and assigns the sprint, and the
+    # `sprint:` label is stamped. A field write here skipped all of it -- the
+    # second route to Done that #202 closes. Refused before anything is read.
+    if args.field.strip().casefold() == "status":
+        sys.exit("Status changes through `gh agile issue move ISSUE STATUS`, which asks "
+                 "for the evidence\n  Done needs and claims the issue and its sprint when "
+                 "work starts; closing is\n  `gh agile issue close ISSUE`.")
     repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
     item = board_item_for(args.owner, args.project, repo, args.issue)
     if not item:
@@ -6029,7 +6384,7 @@ def cmd_plan(args) -> int:
             f"  A story's dates are its sprint -- #115 is the rule that a level "
             f"which spans\n  sprints holds none, which is why these two fields "
             f"exist for the levels above.\n"
-            f"  Move the story with `gh agile set --issue {args.issue} --field "
+            f"  Move the story with `gh agile issue edit {args.issue} --field "
             f"Sprint --value ...`."
         )
     item = board_item_for(args.owner, args.project, repo, args.issue)
@@ -6106,7 +6461,8 @@ def claim_issue(repo: str, issue: int, wanted: str, *, explicit: bool) -> str:
 CLOSE_REASONS = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
 
 
-def close_issue(repo: str, issue: int, *, not_planned: bool) -> None:
+def close_issue(repo: str, issue: int, *, not_planned: bool,
+                comment: str | None = None) -> None:
     """Close the issue, and check GitHub recorded the reason that was asked for.
 
     **The exit code cannot be trusted here.** `gh issue close --reason` on an
@@ -6123,7 +6479,8 @@ def close_issue(repo: str, issue: int, *, not_planned: bool) -> None:
     sprint* label on an issue nobody worked.
     """
     wanted = "not planned" if not_planned else "completed"
-    gh(["issue", "close", str(issue), "--repo", repo, "--reason", wanted])
+    gh(["issue", "close", str(issue), "--repo", repo, "--reason", wanted]
+       + (["--comment", comment] if comment else []))
     recorded = json.loads(gh(["issue", "view", str(issue), "--repo", repo,
                               "--json", "state,stateReason"]))
     reason = (recorded.get("stateReason") or "").upper()
@@ -6143,10 +6500,10 @@ def close_issue(repo: str, issue: int, *, not_planned: bool) -> None:
 def abandoning(args) -> bool:
     """Whether this run is closing the issue as *not planned*.
 
-    Both flags, because `--not-planned` alone changes nothing: `cmd_move` reads
-    it only inside `if args.close`, so without `--close` it is a stated intention
-    that never reaches GitHub, and a sprint label must not be withheld on the
-    strength of one.
+    Both attributes, because `not_planned` alone changes nothing: `cmd_move`
+    reads it only inside `if args.close`. They were `move --close --not-planned`,
+    and `--not-planned` without `--close` was parsed, accepted and dropped. Since
+    #202 only `issue close -r "not planned"` sets them, and it sets both.
     """
     return bool(getattr(args, "not_planned", False) and getattr(args, "close", False))
 
@@ -6248,6 +6605,45 @@ def promote_parents(args, repo: str, issue: int) -> None:
               f"Status = {CYCLE_START}")
 
 
+def cmd_close(args) -> int:
+    """Close an issue, as `gh issue close` does, and bring its Status with it.
+
+    `move --close --not-planned` was the only close, and `--not-planned` without
+    `--close` silently did nothing. The cleanup of ZMBNI-185 was
+    `gh issue close 185 -r "not planned" -c ...`, so that is the spelling (#202).
+
+    Both reasons end at Status `Done`, because a closed issue on any other Status
+    is live work to every board filter. **Completed is the Done path entire** --
+    the evidence rule, the closing `sprint:` label. **Not planned** needs no
+    evidence and stamps no label, because a `sprint:` label asserts the sprint
+    work was *done in*. Closed first, then Status, for the reason `cmd_move`
+    gives where it does it.
+    """
+    args.status = CYCLE_END
+    args.close = True
+    args.not_planned = args.reason == "not planned"
+    args.add_assignee = None
+    return cmd_move(args)
+
+
+def cmd_reopen(args) -> int:
+    """Reopen an issue, as `gh issue reopen` does, and put its Status back.
+
+    `Todo` unless `--status` names another: a reopened issue is waiting to be
+    picked up again, and moving it through `cmd_move` means `--status
+    "In Progress"` claims it and assigns the sprint as any start of work does.
+    Its `sprint:` labels stay -- they record where it was worked, which reopening
+    does not undo.
+    """
+    repo, number = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
+    gh(["issue", "reopen", str(number), "--repo", repo]
+       + (["--comment", args.comment] if args.comment else []))
+    print(f"  #{number} reopened")
+    args.issue, args.repo = str(number), repo
+    args.evidence = args.evidence_file = args.add_assignee = None
+    return cmd_move(args)
+
+
 def cmd_move(args) -> int:
     """Change an issue's status, requiring the evidence that status implies.
 
@@ -6271,7 +6667,11 @@ def cmd_move(args) -> int:
     # printed -- sees the spelling GitHub holds rather than the one that was
     # typed. `In-Review` and `in review` are the same transition.
     args.status = canonical_status(args.status)
-    required = tuple(REQUIRED_FOR.get(args.status.casefold(), ()))
+    # Nothing was done, so there is nothing to evidence: a close as not planned
+    # reaches Done -- a closed issue on any other Status reads as live work on
+    # the board (`stale_status`) -- without the section Done otherwise demands.
+    # Offered text is still written; `-c` is where the reason belongs.
+    required = () if abandoning(args) else tuple(REQUIRED_FOR.get(args.status.casefold(), ()))
     # Read whenever the text was offered, not only when the status demands it.
     # This was `if required else {}`, so on every status but the cycle end the
     # flags were parsed, accepted and thrown away: no warning, exit 0, and the
@@ -6344,8 +6744,9 @@ def cmd_move(args) -> int:
     # There is no repair afterwards; the reason cannot be changed on a closed
     # issue. Closing first, then setting Status, keeps `NOT_PLANNED` -- measured
     # on the same project that loses it the other way round.
-    if args.close:
-        close_issue(repo, args.issue, not_planned=args.not_planned)
+    if getattr(args, "close", False):
+        close_issue(repo, args.issue, not_planned=args.not_planned,
+                    comment=getattr(args, "comment", None))
     set_field(args.owner, args.project, item["id"], "Status", args.status)
     print(f"  #{args.issue} Status = {args.status}")
 
@@ -6822,7 +7223,7 @@ def cmd_fix(args) -> int:
     for the first draft of this command, which went through `board_items`. See
     the table on `ISSUE_ITEM_QUERY`.
     """
-    repo, issue = parse_issue_ref(args.id, args._config, getattr(args, "repo", None))
+    repo, issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
     item_id, labels, current = issue_project_item(repo, issue, args.project)
 
     active, completed = iterations(args.owner, args.project)
@@ -6940,13 +7341,13 @@ def closing_issues(pull_request: int) -> list[tuple[str, int]] | None:
 #: `--not-planned` its reason in #96.
 STILL_OPEN = (
     "is still open, although a merged pull request in this range says it closes it.",
-    "--close, because nothing else has closed it and the reason is this tool's\n"
-    "      to choose -- `completed`, or `--not-planned` if that is what happened.",
+    "`issue close`, because nothing else has closed it and the reason is this\n"
+    "      tool's to choose -- completed, or `-r \"not planned\"` if that is what happened.",
 )
 CLOSED_NOT_DONE = (
     "was closed by this merge, and the board has not caught up:",
-    "no --close: it is already closed, and closing an issue twice is a\n"
-    "      no-op that exits 0 -- which is how a close reason gets lost.",
+    "`issue move`, not `issue close`: it is already closed, and closing an issue\n"
+    "      twice is a no-op that exits 0 -- which is how a close reason gets lost.",
 )
 
 
@@ -6986,7 +7387,7 @@ def outstanding(args, board: list[dict], repo: str, issue: int) -> str | None:
         detail, why = STILL_OPEN
         return render_unfinished(
             issue, detail,
-            f'gh agile move {issue} --status Done --close --evidence "..."', why)
+            f'gh agile issue close {issue} --evidence "..."', why)
     said, found = io.StringIO(), 0
     # `SystemExit` suppressed for the same reason: `validate --id` refuses a bare
     # number that two repositories share, and a refusal here would take the pull
@@ -7001,7 +7402,7 @@ def outstanding(args, board: list[dict], repo: str, issue: int) -> str | None:
     detail, why = CLOSED_NOT_DONE
     return render_unfinished(
         issue, f"{detail}\n{said.getvalue().strip()}",
-        f'gh agile move {issue} --status Done --evidence "..."', why)
+        f'gh agile issue move {issue} Done --evidence "..."', why)
 
 
 #: The line that marks a hook as this tool's, so `hooks` knows what it may
@@ -7636,29 +8037,80 @@ SETUP_FIELDS = [
     ("--spec", "path", "optional", "JSON field spec; the built-in default is used without one"),
 ]
 
+#: The title of a new work item: a flag, as `gh issue create -t` takes it, never
+#: a positional. `gh issue create "x"` is `unknown argument "x"`, and the
+#: positional is what made `gh agile epic list` file an epic called "list"
+#: (ZMBNI-185, #202).
+def add_title(parser: argparse.ArgumentParser, what: str) -> None:
+    parser.add_argument("-t", "--title", required=True, help=f"the {what}'s title")
+
+
+def add_list(group, item_type: str | None, what: str) -> None:
+    """`list`, with `gh issue list`'s flags for the same things."""
+    lister = group.add_parser("list", help=f"list {what} on the board, by Status")
+    lister.add_argument("-s", "--state", choices=list(STATE_FILTERS), default="open",
+                        help="open (the default), closed or all")
+    lister.add_argument("-L", "--limit", type=int, default=30,
+                        help="at most this many (default %(default)s)")
+    lister.add_argument("-S", "--search", metavar="TERMS",
+                        help="extra filter terms, ANDed on, as `board show --filter`")
+    lister.add_argument("--format", choices=["jsonl"],
+                        help="one JSON object per line instead of the text table")
+    lister.add_argument("-w", "--web", action="store_true", help="open the board instead")
+    if item_type == TASK_TYPE:
+        lister.add_argument("-R", "--repo", help="one repository; default every one "
+                                                 "in the profile")
+        lister.set_defaults(func=cmd_task_list, projectless=True)
+    else:
+        lister.set_defaults(func=cmd_list, item_type=item_type)
+
+
+def add_view(group, item_type: str | None, what: str) -> None:
+    """`view`, the issue first, as `gh issue view` takes it."""
+    viewer = group.add_parser("view", help=f"view {what}, its children and its checks")
+    viewer.add_argument("issue", metavar="initiative" if item_type == "initiative"
+                        else "issue",
+                        help=f"{ISSUE_REF_HELP}"
+                             + (", or the initiative's slug" if item_type == "initiative"
+                                else ""))
+    viewer.add_argument("-R", "--repo", help="only needed for a bare number outside "
+                                             "its repository")
+    viewer.add_argument("--format", choices=["json"], help="JSON instead of text")
+    viewer.add_argument("-w", "--web", action="store_true", help="open it in the browser")
+    viewer.set_defaults(func=cmd_view, item_type=item_type, needs_repo=True)
+
+
 EPIC_FIELDS = [
-    ("title", "text", "required", "the epic's title; positional"),
+    ("-t/--title", "text", "required", "the epic's title"),
     ("--repo", "owner/name", "required", "repository the issue is created in"),
     ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
     ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
 ]
 
 STORY_FIELDS = [
-    ("title", "text", "required", "the story's title; positional"),
+    ("-t/--title", "text", "required", "the story's title"),
     ("--repo", "owner/name", "required", "repository the issue is created in"),
     ("--epic", "N|KEY-N|URL", "required", "epic to attach to as a sub-issue"),
     ("--points", "number", "optional", "Story Points; the Gold model's story_points"),
     ("--priority", "lowest|low|medium|high|highest", "optional", "Priority field"),
-    ("--status", "one of STATUSES", "optional", "Status field; defaults to Todo"),
     ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
     ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
 ]
 
 SET_FIELDS = [
-    ("--issue", "N|KEY-N|URL", "required", "the issue, which must already be on the board"),
+    ("issue", "N|KEY-N|URL", "required", "the issue, on the board already; positional"),
     ("--field", "field name", "required", 'e.g. Status, "Story Points", Priority, FR, Sprint'),
     ("--value", "text", "optional", "text, single-select option, sprint title, or @current"),
     ("--number", "number", "optional", "numeric value; use instead of --value for a number field"),
+]
+
+CLOSE_FIELDS = [
+    ("issue", "N|KEY-N|URL", "required", "the issue; positional"),
+    ("-r/--reason", "completed|not planned", "optional", "default completed"),
+    ("-c/--comment", "text", "optional", "a closing comment, as gh issue close -c"),
+    ("--evidence", "text or -", "conditional", "required for completed, unless the "
+                                               "body has it"),
+    ("--evidence-file", "path or -", "conditional", "file of ## Heading sections"),
 ]
 
 PLAN_FIELDS = [
@@ -7673,13 +8125,11 @@ PLAN_FIELDS = [
 
 MOVE_FIELDS = [
     ("issue", "N|KEY-N|URL", "required", "the issue; positional"),
-    ("--status", "one of STATUSES", "required", "the status to move to"),
+    ("status", "one of STATUSES", "required", "the status to move to; positional"),
     ("--evidence", "text or -", "conditional", "required for Done, written on any "
                                                "status; - reads stdin"),
     ("--evidence-file", "path or -", "conditional", "file of ## Heading sections; "
                                                     "- reads stdin"),
-    ("--close", "flag", "optional", "close the issue as well"),
-    ("--not-planned", "flag", "optional", "close as not planned rather than completed"),
     ("--add-assignee", "login", "optional",
      'who to assign; "@me" is you, and In Progress claims an unassigned issue'),
 ]
@@ -7828,7 +8278,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     Separated from `main` so the parser can be walked in a test. It is the
     record of which commands exist and what each one takes, and two things
-    beside it have to agree with it -- `NEEDS_REPO`, and the guide -- so it has
+    beside it have to agree with it -- `apply_defaults`, and the guide -- so it has
     to be readable without running the tool. `scripts/check_guide.py` reads it
     through `--help` because it checks the published surface; a test inside the
     process reads it here.
@@ -7878,7 +8328,7 @@ default chosen for you.""",
     init.add_argument("--title-prefix", choices=sorted(TITLE_PREFIX_MODES),
                       default="off", help="what every issue is called")
     init.add_argument("-R", "--repo", help="owner/name; defaults to the working directory")
-    init.set_defaults(func=cmd_init)
+    init.set_defaults(func=cmd_init, needs_repo=True, projectless=True)
 
     setup = sub.add_parser("setup", help="create the project's fields and labels, idempotently",
         epilog=field_help(SETUP_FIELDS) + """\n\nproject fields created:\n  Story Points  number                            the Gold model's story_points\n  Priority      single-select  lowest..highest    Gold priority_id\n  FR            text                              requirement traceability\n  Sprint        iteration                         Gold sprint_id; via GraphQL, gh cannot\n  Status        single-select  Todo..Done         Gold state_id; two options added to GitHub's three""",
@@ -7888,34 +8338,34 @@ default chosen for you.""",
     setup.set_defaults(func=cmd_setup)
 
     initiative = sub.add_parser(
-        "initiative", help="create an initiative: the plan and WBS for a large feature",
-        epilog=field_help([
-            ("title", "text", "required", "the initiative; positional"),
-            ("--slug", "text", "optional", "the label's readable half; default is the title, "
-                                           "slugified"),
-            ("--repo", "owner/name", "optional", "where the issue is filed"),
-            ("--key", "KEY", "optional", "which key to label it with"),
-            ("--intent", "text", "optional", "the plan: what changes for whom, and why"),
-            ("--acceptance", "text", "optional", "what finished looks like"),
-        ]) + """
-
-what an initiative is:
+        "initiative", help="initiatives: the plan and WBS for a large feature",
+        epilog="""what an initiative is:
   A level above epic -- the set of epics a large new feature requires, with
   somewhere to write the plan and the WBS down. Jira's standard hierarchy stops
   at Epic and charges for the levels above it; GitHub's sub-issues nest, and
   across repositories, so the level costs a label and a command here.
 
   The issue is the authority: it holds the plan, it closes, and it rolls up.
-  Epics join it with `gh agile epic ... --initiative <slug|KEY-n>`, which makes
-  the sub-issue edge *and* applies `initiative:<slug>` -- both, because a board
-  filter cannot traverse the hierarchy and the label is what it can see.
+  Epics join it with `gh agile epic create ... --initiative <slug|KEY-n>`, which
+  makes the sub-issue edge *and* applies `initiative:<slug>` -- both, because a
+  board filter cannot traverse the hierarchy and the label is what it can see.
 
   Optional, always. An epic under no initiative is ordinary, not a finding.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     initiative_sub = initiative.add_subparsers(dest="initiative_command", required=True)
     initiative_new = initiative_sub.add_parser(
-        "create", help="file the initiative issue, board it, and mint its slug")
-    initiative_new.add_argument("title")
+        "create", help="file the initiative issue, board it, and mint its slug",
+        epilog=field_help([
+            ("-t/--title", "text", "required", "the initiative's title"),
+            ("--slug", "text", "optional", "the label's readable half; default is the title, "
+                                           "slugified"),
+            ("--repo", "owner/name", "optional", "where the issue is filed"),
+            ("--key", "KEY", "optional", "which key to label it with"),
+            ("--intent", "text", "optional", "the plan: what changes for whom, and why"),
+            ("--acceptance", "text", "optional", "what finished looks like"),
+        ]),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_title(initiative_new, "initiative")
     initiative_new.add_argument("--slug", help="override the slug derived from the title")
     initiative_new.add_argument("-R", "--repo")
     initiative_new.add_argument("--key", help="which key to label the issue with")
@@ -7930,22 +8380,26 @@ what an initiative is:
                                      "6w, 10d, 3sprints. Calendar days, inclusive")
     initiative_new.add_argument("--intent")
     initiative_new.add_argument("--acceptance")
+    add_list(initiative_sub, "initiative", "initiatives")
+    add_view(initiative_sub, "initiative", "one initiative")
     initiative_fix = initiative_sub.add_parser(
         "reconcile", help="bring initiative:<slug> into line with the hierarchy",
         epilog=field_help([
-            ("ref", "number|KEY-n|slug", "required", "the initiative; positional"),
+            ("ref", "N|KEY-N|URL|slug", "required", "the initiative; positional"),
             ("--dry-run", "flag", "optional", "list what would change and change nothing"),
         ]) + RECONCILE_WHY,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     initiative_fix.add_argument("ref")
     initiative_fix.add_argument("--dry-run", action="store_true")
     initiative_fix.add_argument("-R", "--repo")
-    initiative.set_defaults(func=cmd_initiative)
+    initiative.set_defaults(func=cmd_initiative, needs_repo=True)
 
-    epic = sub.add_parser("epic", help="create an epic issue on the board",
-        epilog=field_help(EPIC_FIELDS) + """""",
+    epic_group = sub.add_parser("epic", help="epics: a body of work, under an initiative or none")
+    epic_sub = epic_group.add_subparsers(dest="epic_command", required=True)
+    epic = epic_sub.add_parser("create", help="file an epic and put it on the board",
+        epilog=field_help(EPIC_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    epic.add_argument("title")
+    add_title(epic, "epic")
     epic.add_argument("-R", "--repo")
     epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     epic.add_argument("--initiative",
@@ -7960,12 +8414,17 @@ what an initiative is:
                            "3sprints. Calendar days, inclusive")
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
-    epic.set_defaults(func=cmd_epic)
+    epic.set_defaults(func=cmd_epic, needs_repo=True)
+    add_list(epic_sub, "epic", "epics")
+    add_view(epic_sub, "epic", "one epic")
 
-    story = sub.add_parser("story", help="create a story, attach it to its epic, set its fields",
-        epilog=field_help(STORY_FIELDS) + """""",
+    story_group = sub.add_parser("story", help="stories: the unit of work a sprint plans")
+    story_sub = story_group.add_subparsers(dest="story_command", required=True)
+    story = story_sub.add_parser(
+        "create", help="file a story, attach it to its epic, and set its fields",
+        epilog=field_help(STORY_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    story.add_argument("title")
+    add_title(story, "story")
     story.add_argument("-R", "--repo")
     story.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     # Still required, and `none` is how you say it deliberately. A bare omission
@@ -7975,23 +8434,15 @@ what an initiative is:
                        help=f"the epic: {ISSUE_REF_HELP}; or `none` for a story that stands alone")
     story.add_argument("--points", type=float)
     story.add_argument("--priority")
-    story.add_argument("--status", default="Todo")
     story.add_argument("--intent")
     story.add_argument("--acceptance")
-    story.set_defaults(func=cmd_story)
+    story.set_defaults(func=cmd_story, needs_repo=True)
+    add_list(story_sub, "story", "stories")
+    add_view(story_sub, "story", "one story")
 
-    task = sub.add_parser(
-        "task", help="create a task: story-internal housekeeping, counted by nothing",
-        epilog=field_help([
-            ("title", "text", "required", "the task; positional"),
-            ("--story", "N|KEY-N|URL", "required", "the story it belongs to"),
-            ("--repo", "owner/name", "optional", "where the issue is filed"),
-            ("--key", "KEY", "optional", "which key to label it with"),
-            ("--intent", "text", "optional", "## Intent body section"),
-            ("--acceptance", "text", "optional", "## Acceptance body section"),
-        ]) + """
-
-what a task is, and is not:
+    task_group = sub.add_parser(
+        "task", help="tasks: story-internal housekeeping, counted by nothing",
+        epilog="""what a task is, and is not:
   A task is how one person is organising their own story. POLICY.md §2 still
   recommends a markdown checklist for this, and still says promoting one to an
   issue buys ceremony and costs signal -- but GitHub's sub-issues make it two
@@ -8003,14 +8454,27 @@ what a task is, and is not:
   counts stories, and is not exported. `--story` is required and there is no
   `none`: a parentless task is not a thin task, it is a mislabelled issue.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    task.add_argument("title")
+    task_sub = task_group.add_subparsers(dest="task_command", required=True)
+    task = task_sub.add_parser(
+        "create", help="file a task under its story",
+        epilog=field_help([
+            ("-t/--title", "text", "required", "the task's title"),
+            ("--story", "N|KEY-N|URL", "required", "the story it belongs to"),
+            ("--repo", "owner/name", "optional", "where the issue is filed"),
+            ("--key", "KEY", "optional", "which key to label it with"),
+            ("--intent", "text", "optional", "## Intent body section"),
+            ("--acceptance", "text", "optional", "## Acceptance body section"),
+        ]),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_title(task, "task")
     task.add_argument("--story", required=True,
                       help=f"the story this task belongs to: {ISSUE_REF_HELP}")
     task.add_argument("-R", "--repo", help="owner/name")
     task.add_argument("--key", help="which key to label the issue with")
     task.add_argument("--intent")
     task.add_argument("--acceptance")
-    task.set_defaults(func=cmd_task)
+    task.set_defaults(func=cmd_task, needs_repo=True, projectless=True)
+    add_list(task_sub, TASK_TYPE, "tasks")
 
     self_test = sub.add_parser(
         "self-test", help="stand up a scratch project, exercise everything, tear it down"
@@ -8028,7 +8492,7 @@ what a task is, and is not:
                                 "seen from ~75s to over 420s)")
     self_test.add_argument("--gap", type=int, default=20,
                            help="seconds between the two status transitions")
-    self_test.set_defaults(func=cmd_self_test)
+    self_test.set_defaults(func=cmd_self_test, projectless=True)
 
     sync = sub.add_parser(
         "sync", help="add issues that belong on the board and are not on it",
@@ -8060,7 +8524,7 @@ why this is needed:
     sync.add_argument("--yes", action="store_true",
                       help=f"confirm an --adopt that would write to more than "
                            f"{ADOPT_CONFIRM_ABOVE} issues")
-    sync.set_defaults(func=cmd_sync)
+    sync.set_defaults(func=cmd_sync, needs_repo=True)
 
     board = sub.add_parser(
         "board", help="scrum, kanban, backlog or roadmap boards over one project",
@@ -8158,7 +8622,7 @@ optional `Epic: ` -- and nothing else. A title that merely begins like one,
                "the one account that happens to hold that number.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    project.set_defaults(func=cmd_project)
+    project.set_defaults(func=cmd_project, needs_repo=True, projectless=True)
 
     sprint = sub.add_parser("sprint", help="list or create sprint iterations")
     sprint_sub = sprint.add_subparsers(dest="sprint_command", required=True)
@@ -8250,18 +8714,31 @@ why this exists:
     key.add_argument("--key", help="uppercase key; omit to list what is recorded")
     key.add_argument("--name", help="human-readable project name, written to shortDescription")
 
-    key.set_defaults(func=cmd_key)
+    key.set_defaults(func=cmd_key, needs_repo=True, projectless=True)
 
-    move = sub.add_parser("move", help="change status, with the evidence that status requires",
-        epilog=field_help(MOVE_FIELDS) + """""",
+    # `issue` holds the verbs that act on any work item, whatever its type, the
+    # way `gh issue` holds them (#202). `move`, `set` and `fix` were top-level;
+    # each now takes the issue as its first positional, as every targeted `gh`
+    # command does.
+    issue_group = sub.add_parser("issue", help="any work item: list, view, move, "
+                                                "edit, close, reopen, reconcile")
+    issue_sub = issue_group.add_subparsers(dest="issue_command", required=True)
+    add_list(issue_sub, None, "every work item")
+    add_view(issue_sub, None, "any work item")
+    move = issue_sub.add_parser(
+        "move", help="change status, with the evidence that status requires",
+        epilog=field_help(MOVE_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     move.add_argument("issue", help=ISSUE_REF_HELP)
-    move.add_argument("--status", required=True, help=f"one of: {', '.join(STATUSES)}")
+    # A second positional, not `--status`: a required second value on a
+    # targeted `gh` command is one -- `gh issue transfer <issue> <repo>` -- as
+    # in jira-cli's `issue move KEY STATE`. Statuses take a hyphen, so
+    # `issue move 12 in-progress` needs no quotes.
+    move.add_argument("status", help=f"one of: {', '.join(STATUSES)}; a hyphen for "
+                                     "the space")
     move.add_argument("--evidence", help="section text, or - for stdin. Written whatever "
                                         "the status; required only for Done")
     move.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
-    move.add_argument("--close", action="store_true", help="close the issue as well")
-    move.add_argument("--not-planned", action="store_true", help="close as not planned")
     # A login is required, `@me` written out, as `gh issue edit --add-assignee`
     # takes it. It was `nargs="?"`, a bare flag meaning the caller -- a spelling
     # `gh` does not have, and #201 retired it. `default=None` still keeps "not
@@ -8273,17 +8750,54 @@ why this exists:
                       help='who to assign; "@me" for you. Moving to In Progress claims '
                            "an unassigned issue without it")
     move.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
-    move.set_defaults(func=cmd_move)
+    move.set_defaults(func=cmd_move, needs_repo=True)
 
-    setter = sub.add_parser("set", help="set one field on an issue already on the board",
-        epilog=field_help(SET_FIELDS) + """""",
+    setter = issue_sub.add_parser(
+        "edit", help="set one field on an issue already on the board",
+        epilog=field_help(SET_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    setter.add_argument("--issue", required=True,
-                        help=ISSUE_REF_HELP)
+    setter.add_argument("issue", help=ISSUE_REF_HELP)
     setter.add_argument("--field", required=True, help='field name, e.g. "Story Points"')
     setter.add_argument("--value", help="text or single-select option")
     setter.add_argument("--number", type=float, help="numeric value")
-    setter.set_defaults(func=cmd_set)
+    setter.set_defaults(func=cmd_set, needs_repo=True)
+    closer = issue_sub.add_parser(
+        "close", help="close it, as gh issue close does, and set Status to Done",
+        epilog=field_help(CLOSE_FIELDS),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    closer.add_argument("issue", help=ISSUE_REF_HELP)
+    closer.add_argument("-r", "--reason", choices=list(CLOSE_REASONS), default="completed",
+                        help="completed (the default) needs Evidence, as Done does; "
+                             "not planned needs none")
+    closer.add_argument("-c", "--comment", help="leave a closing comment")
+    closer.add_argument("--evidence", help="section text, or - for stdin")
+    closer.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
+    closer.add_argument("-R", "--repo", help="only needed if the item's repository "
+                                             "cannot be read back")
+    closer.set_defaults(func=cmd_close, needs_repo=True)
+
+    reopener = issue_sub.add_parser(
+        "reopen", help="reopen it, as gh issue reopen does, and move Status back")
+    reopener.add_argument("issue", help=ISSUE_REF_HELP)
+    reopener.add_argument("--status", default="Todo",
+                          help="where it goes back to (default %(default)s); In Progress "
+                               "claims it and its sprint")
+    reopener.add_argument("-c", "--comment", help="leave a comment")
+    reopener.add_argument("-R", "--repo", help="only needed if the item's repository "
+                                               "cannot be read back")
+    reopener.set_defaults(func=cmd_reopen, needs_repo=True)
+
+    fix = issue_sub.add_parser(
+        "reconcile", help="repair one issue's Sprint field from its sprint: labels")
+    fix.add_argument("issue", help=ISSUE_REF_HELP)
+    fix.add_argument("--overwrite", action="store_true",
+                     help="also change a field that disagrees with its label; by default only "
+                          "an empty field is repaired, because a disagreement is somebody's "
+                          "decision")
+    fix.add_argument("--dry-run", action="store_true",
+                     help="say what would change and change nothing")
+    fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
+    fix.set_defaults(func=cmd_fix, needs_repo=True)
 
     planner = sub.add_parser("plan",
         help="set or clear the dates on an epic or initiative that already exists",
@@ -8301,7 +8815,7 @@ why this exists:
                               "end: 6w, 10d, 3sprints. Calendar days, inclusive")
     planner.add_argument("-R", "--repo", help="only needed if the item's repository "
                                         "cannot be read back")
-    planner.set_defaults(func=cmd_plan)
+    planner.set_defaults(func=cmd_plan, needs_repo=True)
 
     unfinished = sub.add_parser(
         "unfinished",
@@ -8314,7 +8828,7 @@ why this exists:
 
     hooks = sub.add_parser(
         "hooks", help="install the post-merge hook into this clone")
-    hooks.set_defaults(func=cmd_hooks)
+    hooks.set_defaults(func=cmd_hooks, projectless=True)
 
     export = sub.add_parser("export", help="items, field values and status history")
     export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
@@ -8348,21 +8862,8 @@ why this exists:
     export.set_defaults(func=cmd_export)
 
     validate = sub.add_parser("validate", help="check the conventions in POLICY.md")
-    validate.add_argument("--id", help=f"only this issue: {ISSUE_REF_HELP}. "
-                                      "Narrows the report, not the board read -- see `fix --id`")
     validate.set_defaults(func=cmd_validate)
 
-    fix = sub.add_parser("fix", help="repair one issue's Sprint field from its sprint: labels")
-    fix.add_argument("--id", required=True,
-                     help=ISSUE_REF_HELP)
-    fix.add_argument("--overwrite", action="store_true",
-                     help="also change a field that disagrees with its label; by default only "
-                          "an empty field is repaired, because a disagreement is somebody's "
-                          "decision")
-    fix.add_argument("--dry-run", action="store_true",
-                     help="say what would change and change nothing")
-    fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
-    fix.set_defaults(func=cmd_fix)
     inherit_global_flags(parser)
     return parser
 
@@ -8406,8 +8907,168 @@ def inherit_global_flags(parser: argparse.ArgumentParser) -> None:
             inherit_global_flags(child)
 
 
+#: The work-item types whose title used to be a positional: `epic "Title"`.
+WORK_ITEM_GROUPS = ("initiative", "epic", "story", "task")
+
+#: Every verb `gh issue` and `gh pr` have. **Never read as a title**, whether or
+#: not this tool has the verb yet: suggesting `epic create -t list` for
+#: `epic list` would be ZMBNI-185 again, offered as advice.
+GH_VERBS = frozenset({
+    "create", "list", "status", "view", "edit", "close", "reopen", "comment",
+    "delete", "develop", "lock", "unlock", "pin", "unpin", "transfer", "checkout",
+    "checks", "diff", "merge", "ready", "review", "revert", "update-branch",
+    "move", "reconcile",
+})
+
+#: Top-level commands that moved under `issue`: the new verb, and the flag whose
+#: value became a positional. `move ISSUE --status S` is `issue move ISSUE S`;
+#: `set --issue N` is `issue edit N`; `fix --id N` is `issue reconcile N`.
+MOVED_UNDER_ISSUE = {"move": ("move", "--status"), "set": ("edit", "--issue"),
+                     "fix": ("reconcile", "--id")}
+
+#: `move`'s flags that take a value, so the issue is not mistaken for one.
+MOVE_VALUE_FLAGS = ("--evidence", "--evidence-file", "--add-assignee", "-R", "--repo")
+
+#: Global flags that take a value, so the command can be found after them.
+GLOBAL_VALUE_FLAGS = ("--owner", "--project", "--config")
+
+
+def retired_spelling(argv: list[str]) -> str | None:
+    """The replacement for a spelling AGILE-200 retired, or None.
+
+    **Every retired spelling already fails at argument parsing** -- nothing is
+    reinterpreted as something else -- which is safe and not yet kind: argparse
+    says `invalid choice: 'My title'`, and leaves the person to work out that the
+    title wants `create -t`. `main` is the release (README, *Versions*), so the
+    break reaches every install at its next upgrade, and the error has to name
+    the new spelling rather than wait for the release note (#202; the table is
+    #206's to finish and, a release later, to remove).
+
+    Rebuilt from what was typed, so the suggestion runs as given.
+    """
+    import shlex
+
+    rest = list(argv)
+    head = []
+    while rest and rest[0].startswith("-"):
+        flag = rest.pop(0)
+        head.append(flag)
+        if flag in GLOBAL_VALUE_FLAGS and rest:
+            head.append(rest.pop(0))
+    if not rest:
+        return None
+    command, tail = rest[0], rest[1:]
+    if command in WORK_ITEM_GROUPS:
+        if command == "story" and tail[:1] == ["create"]:
+            # `--status` went from `story create` in #202, so a correct verb and
+            # title can still carry it.
+            status, after = _pull_flag(tail[1:], "--status")
+            if status is not None:
+                if after and not after[0].startswith("-"):
+                    after = ["-t", *after]
+                new = shlex.join(["gh", "agile", *head, "story", "create", *after])
+                return (f"`story create` has no --status: a story starts in Todo.\n  {new}"
+                        + _status_after_create(status))
+        if tail and tail[0] == "create" and len(tail) > 1 and not tail[1].startswith("-"):
+            # `initiative create "Title"`: the verb was right, the title was not.
+            title, after, was = tail[1], tail[2:], f"{command} create TITLE"
+        elif tail and tail[0] not in GH_VERBS and not tail[0].startswith("-"):
+            # `epic "Title"`: no verb at all.
+            title, after, was = tail[0], tail[1:], f"{command} TITLE"
+        else:
+            return None
+        status, after = _pull_flag(after, "--status")
+        new = shlex.join(["gh", "agile", *head, command, "create", "-t", title, *after])
+        hint = (f"`{was}` is now `{command} create -t TITLE`, as "
+                f"`gh issue create -t` takes it:\n  {new}")
+        return hint + _status_after_create(status)
+    if command == "move" and "--close" in tail:
+        # `move X --status Done --close [--not-planned]` is `issue close X`, the
+        # way `gh issue close -r` spells the reason.
+        _status, after = _pull_flag(tail, "--status")
+        abandoned = "--not-planned" in after
+        after = [t for t in after if t not in ("--close", "--not-planned")]
+        issue = _first_positional(after)
+        reason = ["-r", "not planned"] if abandoned else []
+        new = shlex.join(["gh", "agile", *head, "issue", "close",
+                          *([issue] if issue else []), *reason, *after])
+        return (f"`move --close` is now `issue close`, as `gh issue close` takes it, "
+                f"with the reason as -r:\n  {new}")
+    if command == "validate" and any(t == "--id" or t.startswith("--id=") for t in tail):
+        # `validate` is general and board-wide; one issue's findings are in its
+        # `view`, which is where somebody looking at one issue already is.
+        value, after = _pull_flag(tail, "--id")
+        new = shlex.join(["gh", "agile", *head, "issue", "view",
+                          *([value] if value else []), *after])
+        return f"`validate --id` is now `issue view`, which shows the issue's checks:\n  {new}"
+    if command in MOVED_UNDER_ISSUE:
+        verb, flag = MOVED_UNDER_ISSUE[command]
+        value, after = _pull_flag(tail, flag)
+        if command == "move":
+            # The issue was already positional; the status joins it.
+            first = _first_positional(after)
+            positionals = [p for p in (first, value) if p is not None]
+        else:
+            positionals = [value] if value is not None else []
+        new = shlex.join(["gh", "agile", *head, "issue", verb, *positionals, *after])
+        return (f"`{command}` is now `issue {verb}`, with the issue first as every "
+                f"targeted `gh` command takes it:\n  {new}")
+    return None
+
+
+def _first_positional(tokens: list[str]) -> str | None:
+    """Remove and return `move`'s issue: the first token that is no flag's value.
+
+    Every flag's value is skipped, or `--evidence "text" 12` would read the
+    evidence as the issue.
+    """
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in MOVE_VALUE_FLAGS or token in GLOBAL_VALUE_FLAGS:
+            index += 2
+            continue
+        if not token.startswith("-"):
+            return tokens.pop(index)
+        index += 1
+    return None
+
+
+def _status_after_create(status: str | None) -> str:
+    """The second command, when a retired `--status` asked to start the work."""
+    if status is None or same_status(status, "Todo"):
+        return ""
+    return ("\n  then move it, which asks for what that status needs and claims the issue "
+            "when work starts:\n"
+            f"  gh agile issue move <number> {shlex_quote(canonical_status(status))}")
+
+
+def shlex_quote(text: str) -> str:
+    import shlex
+
+    return shlex.quote(text)
+
+
+def _pull_flag(tokens: list[str], flag: str) -> tuple[str | None, list[str]]:
+    """`flag`'s value, and the tokens without it: `--flag v` or `--flag=v`."""
+    rest = list(tokens)
+    for index, token in enumerate(rest):
+        if token == flag and index + 1 < len(rest):
+            value = rest[index + 1]
+            del rest[index:index + 2]
+            return value, rest
+        if token.startswith(flag + "="):
+            del rest[index]
+            return token[len(flag) + 1:], rest
+    return None, rest
+
+
 def main() -> int:
     require_interpreter()
+    retired = retired_spelling(sys.argv[1:])
+    if retired:
+        print(f"gh agile: {retired}", file=sys.stderr)
+        return 2
     args = build_parser().parse_args()
     # The one place a `MissingScope` is turned back into an exit. It travels
     # from `gh` untouched precisely because nothing on the way catches it, so
@@ -8468,23 +9129,6 @@ def resolve_owner(args, config: dict) -> None:
         )
 
 
-#: The commands that legitimately run with no project number, and why each one
-#: does. Everything else is refused rather than allowed to carry a `None` into a
-#: GraphQL variable -- including commands added later, which is why this is the
-#: exemption list and not a requirement list.
-#:
-#:   project     the bootstrap. `project create` is what *writes* `project.number`
-#:               to the profile, and `title-prefix`, `owner` and `sprint-template`
-#:               only ever touch the profile. Demanding a number here would mean
-#:               needing a board before you could record the board.
-#:   key         lists or records a key in the profile. It reaches the project
-#:               only to write `shortDescription`, already guarded by `if
-#:               args.project`.
-#:   self-test   stands up its own scratch project, and is exempt from the
-#:               `--project` defaulting above for the same reason.
-PROJECTLESS = {"project", "key", "self-test", "task", "init", "hooks"}
-
-
 def missing_project_message(explicit: str | None) -> str:
     """No board to act on: say which of the two reasons it is.
 
@@ -8529,21 +9173,6 @@ def missing_project_message(explicit: str | None) -> str:
     )
 
 
-#: Every command that can touch an issue needs a repository, whether or not it
-#: declares a `--repo` flag. `set --issue 26` had none to attach to, so the
-#: attribute never existed and a bare issue number could not be resolved even
-#: from inside the repository it belongs to -- and `plan` repeated it exactly,
-#: minutes after being written.
-#:
-#: **Hand-maintained, so something checks it against the parser.** A command that
-#: names an issue and is missing here does not fail loudly: it refuses a bare
-#: number with *run inside one* from inside one, which reads like the caller's
-#: mistake. `tests/test_plan_command.py` compares this set with the commands that
-#: actually take an issue.
-NEEDS_REPO = {"initiative", "epic", "story", "task", "set", "move", "plan",
-              "sync", "key", "project", "fix", "init"}
-
-
 def apply_defaults(args) -> None:
     """Fill --project, --repo and --key from the profile and the working directory.
 
@@ -8584,12 +9213,32 @@ def apply_defaults(args) -> None:
     # argparse default, so "not given and not in the profile" left `args.project`
     # as None all the way to the query, where it surfaced as a project that could
     # not be found -- see `missing_project_message`.
-    if args.project is None and args.command not in PROJECTLESS:
+    #
+    # **Each command declares it on its own parser: `projectless=True`.** The
+    # exemptions, and why each holds: `project` is the bootstrap -- `project
+    # create` *writes* `project.number`, and its other subcommands only touch the
+    # profile, so demanding a number would mean needing a board to record the
+    # board. `key` lists or records a key in the profile and reaches the project
+    # only for `shortDescription`, already guarded. `self-test` stands up its own
+    # scratch project. Everything else is refused, including commands added
+    # later, which is why this is an exemption and not a requirement.
+    #
+    # It was a set of top-level names. Under `issue move` and `epic list` the
+    # top-level name no longer says what one subcommand needs (#202), and a
+    # declaration beside the parser cannot name a command that does not exist.
+    if args.project is None and not getattr(args, "projectless", False):
         sys.exit(missing_project_message(getattr(args, "config", None)))
 
     key = getattr(args, "key", None)
     repo = getattr(args, "repo", None)
-    if repo is None and args.command in NEEDS_REPO:
+    # **`needs_repo=True` on every parser that can touch an issue**, whether or
+    # not it has a `--repo` flag. `set --issue 26` had none to attach to, so a
+    # bare number could not be resolved even from inside its own repository, and
+    # `plan` repeated it minutes after being written: it refuses with *run inside
+    # one* from inside one, which reads like the caller's mistake.
+    # `tests/test_plan_command.py` walks the parser for commands that take an
+    # issue and lack the declaration.
+    if repo is None and getattr(args, "needs_repo", False):
         if key and args.command not in ("key",):
             repo = repo_for_key(config, key)
             if not repo:

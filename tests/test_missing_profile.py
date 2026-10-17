@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pathlib
 
 import pytest
 
@@ -33,15 +32,25 @@ WITH_NUMBER = {"project": {"number": 4, "owner": "boardowner"}}
 WITHOUT_NUMBER = {"keys": [{"key": "AGILE", "repo": "o/r"}]}
 
 
+#: A runnable command line for each command these tests name.
+COMMAND_LINES = {
+    "validate": ["validate"], "export": ["export"], "board": ["board", "list"],
+    "sprint": ["sprint", "list"], "sync": ["sync"], "project": ["project", "owner"],
+    "key": ["key"], "self-test": ["self-test", "--repo", "o/r"],
+}
+
+
 @pytest.fixture
 def defaults(monkeypatch, tool):
-    """`apply_defaults` with the profile and the owner lookup stubbed."""
+    """`apply_defaults` on a real command line, the profile and the owner lookup
+    stubbed. Parsed rather than built by hand, because whether a command needs a
+    project is declared on its parser (#202)."""
     def go(command="validate", *, project=None, config=None):
         monkeypatch.setattr(tool, "read_config", lambda *a, **k: config or {})
         monkeypatch.setattr(tool, "resolve_owner", lambda args, cfg: None)
         monkeypatch.setattr(tool, "current_repo", lambda: "o/r")
-        args = argparse.Namespace(command=command, project=project, owner=None,
-                                  repo=None, key=None, config=None)
+        args = tool.build_parser().parse_args(COMMAND_LINES[command])
+        args.project = project
         tool.apply_defaults(args)
         return args
     return go
@@ -140,16 +149,21 @@ class TestWhatMustStillWork:
         would mean needing a board before you could record the board."""
         assert defaults(command).project is None
 
-    def test_every_exempt_name_is_a_real_command(self, tool):
-        """A typo in the exemption list silently re-arms the refusal on a
-        bootstrap command, and nothing else would notice: the name simply never
-        matches, so `project create` starts demanding a project number to create
-        a project. Checked against the subparsers themselves."""
-        # Whitespace squeezed out: some subparsers put the name on its own line.
-        source = pathlib.Path(tool.__file__).read_text()
-        squeezed = "".join(source.split())
-        for command in tool.PROJECTLESS:
-            assert f'sub.add_parser("{command}"' in squeezed, command
+    def test_the_exemptions_are_exactly_these(self, tool):
+        """The exemption is declared on each parser now, so a typo can no longer
+        name a command that does not exist -- the hazard the old name list had.
+        What is left to guard is the list itself: a new command exempted by
+        copy-paste would carry a `None` project into a GraphQL variable."""
+        def walk(parser, path=()):
+            for action in parser._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    for name, child in action.choices.items():
+                        yield (*path, name), child
+                        yield from walk(child, (*path, name))
+
+        exempt = {path[0] for path, parser in walk(tool.build_parser())
+                  if parser.get_default("projectless")}
+        assert exempt == {"project", "key", "self-test", "task", "init", "hooks"}
 
 
 class TestItCostsNoNetworkCall:

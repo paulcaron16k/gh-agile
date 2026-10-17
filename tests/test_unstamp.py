@@ -164,7 +164,7 @@ class TestFixReportsRatherThanRepairs:
             monkeypatch.setattr(tool, "iterations", lambda *a, **k: (
                 [{"title": "Sprint 2", "startDate": "2026-08-31", "duration": 14}], []))
             monkeypatch.setattr(tool, "set_field", lambda *a: written.append(a[-1]))
-            args = argparse.Namespace(owner="o", project=1, _config={}, id="9",
+            args = argparse.Namespace(owner="o", project=1, _config={}, issue="9",
                                       repo="o/r", overwrite=False, dry_run=False)
             tool.cmd_fix(args)
             return capsys.readouterr().out, written

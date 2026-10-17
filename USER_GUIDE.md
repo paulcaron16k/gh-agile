@@ -90,7 +90,7 @@ so, with the command to add it; nothing creates a board unasked, and `init` neve
 removes one a profile already has.
 
 **It refuses what the rest of the tool refuses.** A key must match Jira's rules,
-a sprint cadence decides when every sprint begins and blocks `epic`, `story` and
+a sprint cadence decides when every sprint begins and blocks `epic create`, `story create` and
 `ensure` until chosen, and `--title-prefix` is written into every issue title.
 Those are flags, and a missing one is a refusal naming the flag — not a default
 chosen on your behalf, because the cost of that guess lands on somebody else
@@ -198,7 +198,7 @@ an issue number is.
 ### How an issue's key is decided, and where it is stored
 
 **Explicitly, on the issue, as a label — `key:ZMBNI`.** Written at creation by
-`epic` and `story`, so it is recorded rather than inferred.
+`epic create` and `story create`, so it is recorded rather than inferred.
 
 GitHub Issue Fields would be the natural home and are unavailable:
 `createIssueField` requires an **Organization** owner and refuses a user
@@ -514,7 +514,7 @@ marking it would mark nearly every row and teach people to ignore the column.
 have someone*, and a container should not: it holds stories worked by several
 people, so there is no single answer to "who has this". Filling it from whoever
 started the first story is a guess that is only right on a team of one, so
-`move` never claims one implicitly and `validate` never demands one. Setting an
+`issue move` never claims one implicitly and `validate` never demands one. Setting an
 assignee on an epic is still allowed and still meaningful — `--add-assignee`
 does it at any level — it is simply never expected.
 
@@ -689,7 +689,7 @@ In Progress (2)
   AGILE-140   story    2  0004 W38  bea         Something somebody is actually doing
 
 * closed, but Status is not Done -- the board is showing finished work as live.
-    AGILE-123  Status: In Progress  ->  gh agile move 123 --status Done
+    AGILE-123  Status: In Progress  ->  gh agile issue move 123 Done
 ```
 
 A footnote rather than a column: the condition is rare, and a column would cost
@@ -698,7 +698,7 @@ nothing at all.
 
 It happens when a pull request's `Closes #n` closes the issue — that automation
 sets the issue's state and **nothing else**, so Status stays where it was last
-put. Finishing with `gh agile move <n> --status Done --close` cannot produce it.
+put. Finishing with `gh agile issue close <n>` cannot produce it.
 
 **The filter comes from the view, not from you.** That is the point: the board
 was defined once, in the profile and on GitHub, and this renders *that*
@@ -941,7 +941,7 @@ Measured on two live projects, which is where the recommendation comes from:
 | **Auto-add sub-issues to project** | **yes** (on by default) | Every story created under a boarded epic would need a `sync` |
 | **Item closed** → Status = Done | **no** — see below | Nothing it can fix. Status does not follow a close, so finished work sits in the In Progress column looking live — but this workflow writes Status and *nothing else*, so it replaces a visibly unfinished issue with one that reads Done and is not. The post-merge hook asks a person instead |
 | **Item added to project** → Status = Todo | **yes** | An item arriving by any other route has no Status, which puts it in no column of any board |
-| **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `move` can set the reason. That is how `--not-planned` lost its reason on the sandbox |
+| **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `issue move` can set the reason. That is how `not planned` lost its reason on the sandbox |
 | Pull request merged · Pull request linked to issue | not for a board of issues | They act on **pull-request items**. This board holds 65 items and every one is an issue, so both would do nothing |
 
 **Project → ⋯ (top right) → Workflows.** It is a setting on the **project**, not
@@ -965,10 +965,10 @@ done, and the wrap-up is one command.
 That command is strictly better than the workflow, not merely equal:
 
 ```bash
-gh agile move AGILE-187 --status Done --evidence "..."
+gh agile issue move AGILE-187 Done --evidence "..."
 ```
 
-No `--close`, because the issue is already closed and closing one twice is a
+`issue move`, not `issue close`, because the issue is already closed and closing one twice is a
 no-op that exits 0 — which is how a close reason gets lost. It writes the
 Evidence, sets the Status, **and** stamps the closing sprint. The workflow
 produces none of those three.
@@ -1037,9 +1037,9 @@ commands.** GitHub may close it and leave the board behind:
       closed but status is not Done (1):
         #187 AGILE-187 A planner types a duration, not an end : 'In Progress'
 
-      finish it:  gh agile move 187 --status Done --evidence "..."
-      no --close: it is already closed, and closing an issue twice is a
-      no-op that exits 0 -- which is how a close reason gets lost.
+      finish it:  gh agile issue move 187 Done --evidence "..."
+      `issue move`, not `issue close`: it is already closed, and closing an issue
+      twice is a no-op that exits 0 -- which is how a close reason gets lost.
 ```
 
 or — just as often — not close it at all:
@@ -1047,9 +1047,9 @@ or — just as often — not close it at all:
 ```
   #186 is still open, although a merged pull request in this range says it closes it.
 
-      finish it:  gh agile move 186 --status Done --close --evidence "..."
-      --close, because nothing else has closed it and the reason is this tool's
-      to choose -- `completed`, or `--not-planned` if that is what happened.
+      finish it:  gh agile issue close 186 --evidence "..."
+      `issue close`, because nothing else has closed it and the reason is this
+      tool's to choose -- completed, or `-r "not planned"` if that is what happened.
 ```
 
 **Do not assume `Closes #n` closes the issue.** Measured across five consecutive
@@ -1073,7 +1073,7 @@ It does not restate what a finished issue looks like: it asks `gh agile validate
 is one that can disagree with the first.
 
 **`Auto-close issue` is the one to actively avoid.** It is the mirror image and it
-races this tool: `move --status Done --not-planned --close` sets Status first, the
+races this tool: `issue close ISSUE -r "not planned"` sets Status first, the
 workflow closes the issue as *completed*, and the tool's own close then finds it
 already closed and changes nothing. Measured; `gh issue close --reason` on an
 already-closed issue exits 0 and does nothing, so the reason was silently lost.
@@ -1229,7 +1229,7 @@ runs continuously on their side and is configured in the web UI.
 | | Needs sync? |
 |---|---|
 | Status, points, sprint, assignee on an item **already on the board** | **No.** Read live — a change shows immediately |
-| Issues created by `gh agile epic` / `story` | **No.** Added at creation |
+| Issues created by `gh agile epic create` / `story create` | **No.** Added at creation |
 | Sub-issues of an epic already on the board | **No** — the built-in *Auto-add sub-issues* workflow is enabled by default |
 | An issue filed in the web UI, or by `gh issue create`, or by any other tool | **Yes.** It is simply not on the board |
 
@@ -1382,7 +1382,7 @@ empty iterations nobody planned, and a burndown that reports absence as
 activity. Sprint creation is driven by work instead:
 
 - `sprint ensure`, when a person or an agent runs it — typically at planning.
-- `move --status "In Progress"`, which creates the sprint covering today if none
+- `issue move ISSUE "In Progress"`, which creates the sprint covering today if none
   is active and `autocreate` is on.
 
 Stop work for four months and there are no sprints for those months, because
@@ -1393,7 +1393,7 @@ from `Sprint 2` to `Sprint 5`, which is the honest record that nobody worked in
 
 ### Choose the cadence before creating work
 
-**A sprint cadence must be chosen deliberately, and `epic`, `story` and
+**A sprint cadence must be chosen deliberately, and `epic create`, `story create` and
 `sprint ensure` refuse until it is.** Not ceremony: defaults used to apply
 silently, so the first sprint was created with whatever the tool assumed and the
 cadence was discovered afterwards — by which point sprints existed under it.
@@ -1431,7 +1431,7 @@ Configuration lives in the profile:
 | `cadence_days` | `14` | Sprint length, 1–30. `"2-week"` is accepted and normalised |
 | `start_day` | `"monday"` | Weekday new sprints begin on |
 | `ahead` | `2` | Future sprints `ensure` keeps |
-| `autocreate` | `true` | Whether `move` may create one as a fallback |
+| `autocreate` | `true` | Whether `issue move` may create one as a fallback |
 | `name_template` | `"{key} Sprint {n}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
 | `record_label` | `true` | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes |
 
@@ -1486,7 +1486,7 @@ assigned by count, so a sprint placed before the series can be numbered after
 it. The dates are the truth; renaming would clear every assignment, since
 iterations carry no id.
 
-**If `ensure` has not run, `move` covers for it.** Moving a story to
+**If `ensure` has not run, `issue move` covers for it.** Moving a story to
 `In Progress` with no active sprint creates one and says so; set
 `autocreate: false` to have it warn and leave the field empty instead.
 
@@ -1526,13 +1526,13 @@ sprint:2026-08-10
 ```
 
 Dated rather than named: a sprint's title is cosmetic and can be changed, while
-its start date is its identity, and dates sort. `move` writes it when work
+its start date is its identity, and dates sort. `issue move` writes it when work
 starts and again when it finishes, so an item carried across a boundary carries
 one label per sprint it lived in:
 
 ```bash
-gh agile move 53 --status "In Progress"     #  #53 + sprint:2026-08-10
-gh agile move 53 --status Done --close      #  #53 + sprint:2026-08-24
+gh agile issue move 53 "In Progress"     #  #53 + sprint:2026-08-10
+gh agile issue close 53      #  #53 + sprint:2026-08-24
 ```
 
 The export carries both, beside the live field:
@@ -1564,11 +1564,11 @@ close instead, through the same rule `sprint backfill --source timeline` applies
 so the live stamp and the repair pass cannot disagree:
 
 ```bash
-gh agile move 53 --status Done --evidence "..." --close   #  #53 + sprint:2026-08-31
+gh agile issue close 53 --evidence "..."   #  #53 + sprint:2026-08-31
 ```
 
 **An abandoned issue is given no derived label.** `sprint:` means *the sprint this
-was worked in*, and work closed with `--not-planned` was worked in none —
+was worked in*, and work closed with `-r "not planned"` was worked in none —
 deriving one would stamp every abandoned issue into whichever sprint it was
 abandoned in and pad that sprint with work nobody did. `validate` does not ask an
 abandoned issue for a label, and `sprint backfill` does not supply one, because a
@@ -1601,7 +1601,7 @@ the last sprint it lived in.
 cadence converging in `setup`, `sprint ensure`, `sprint create` — restores from
 a snapshot taken moments before and then heals from the labels, in that order
 and in the same run. The snapshot covers items the labels know nothing about,
-such as one assigned by hand and never moved through `move`; the heal covers
+such as one assigned by hand and never moved through `issue move`; the heal covers
 what the snapshot could not put back, including a run that died partway. It is
 silent when there is nothing to repair, which is the normal case.
 
@@ -1644,16 +1644,16 @@ Narrow on purpose: only `sprint:` labels, only on epics and initiatives. A story
 is never touched, whatever else is true of it. `reconcile` names the count it
 skipped and points here when it finds any.
 
-### One issue at a time: `fix --id`
+### One issue at a time: `issue reconcile`
 
 `sprint reconcile` is board-wide, which is right for a sweep and wrong when you
-already know which issue is wrong. `fix` is the same repair aimed at one issue:
+already know which issue is wrong. `issue reconcile` is the same repair aimed at one issue:
 
 ```bash
-gh agile fix --id 24 --dry-run    # what would change
-gh agile fix --id 24              # apply
-gh agile fix --id AGILE-24        # a keyed reference works too
-gh agile fix --id 24 --overwrite  # also change a field that disagrees with its label
+gh agile issue reconcile 24 --dry-run    # what would change
+gh agile issue reconcile 24              # apply
+gh agile issue reconcile AGILE-24        # a keyed reference works too
+gh agile issue reconcile 24 --overwrite  # also change a field that disagrees with its label
 ```
 
 Same rule as `reconcile`, deliberately: the labels are the record, the latest
@@ -1665,7 +1665,7 @@ It is also much cheaper, which is the other reason it exists. Measured on a
 
 | | points |
 |---|---|
-| `fix --id 24` | 3 |
+| `issue reconcile 24` | 3 |
 | `sprint reconcile` | 5 |
 | the first draft of `fix`, routed through `gh project item-list` | 105 |
 
@@ -1677,7 +1677,7 @@ that come back.** `-L 200` against a 25-item board costs 102; `-L 25` costs 26;
 `gh project` list commands are the expensive way to read a board, not the cheap
 one.
 
-`fix` avoids them entirely by starting from the issue rather than the board — one
+`issue reconcile` avoids them entirely by starting from the issue rather than the board — one
 query returns the issue's labels, its project item id and that item's current
 `Sprint` value together.
 
@@ -1708,7 +1708,7 @@ set #59 heal hook probe  Sprint 2 -> Sprint 1
 The whole cycle, measured on a scratch project:
 
 ```
-gh agile move 58 --status "In Progress"
+gh agile issue move 58 "In Progress"
   #58 Sprint = Sprint 1 (current)
   #58 + sprint:2026-08-17
 
@@ -1791,7 +1791,7 @@ configuration:
 
 **Do in the tool, not the web UI:**
 
-- Creating sprints — `gh agile sprint ensure`, or let `move` create one.
+- Creating sprints — `gh agile sprint ensure`, or let `issue move` create one.
 - Renaming or re-dating a sprint. There is no safe web-UI path: it clears
   assignments board-wide. Prefer changing `name_template`, which affects only
   sprints created afterwards.
@@ -1853,39 +1853,32 @@ knows about — a detached subtree whose label was never cleaned up. Both point 
 labels against the hierarchy in both directions and `--dry-run` reports without
 changing anything.
 
-`--id` narrows the report to one issue, for when you already have a suspect:
+One issue's findings are in its `view`, for when you already have a suspect:
 
 ```bash
-gh agile validate --id 24
-gh agile validate --id AGILE-24
+gh agile issue view 24
+gh agile issue view AGILE-24
 ```
 
-Two things to know about it. It **narrows the report, not the work** — the
-projects API cannot fetch one item by issue number, only by project item id,
-which is the thing that has to be looked up first, so the board is read either
-way. If you want the cheap per-issue path, that is `fix --id`. And it skips the
-sprint-overlap check, because overlap is a property of the iteration series
-rather than of any issue, and reporting it from a command aimed at one issue
-would read as a finding about that issue.
-
-On a project spanning repositories a bare number can match more than one issue.
-`validate --id` lists both and stops rather than picking one:
-
-```
-#12 is on this project from more than one repository:
-    owner/repo-a#12  A's twelfth
-    owner/repo-b#12  B's twelfth
-  Name one with a KEY-NUMBER reference, e.g. AGILE-12, so there is no guess.
-```
+It was `validate --id`; `validate` is now the board-wide check only, because a
+command that is sometimes about one issue and sometimes about all of them is the
+shape `gh` never takes. Two things to know about the checks in a view. They
+**narrow the report, not the work** — the projects API cannot fetch one item by
+issue number, only by project item id, which is the thing that has to be looked
+up first, so the board is read either way. If you want the cheap per-issue
+repair, that is `issue reconcile`. And they skip the sprint-overlap check,
+because overlap is a property of the iteration series rather than of any issue,
+and reporting it from a command aimed at one issue would read as a finding about
+that issue.
 
 ## 5. Creating an epic and a story
 
 ```bash
-gh agile epic "Snapshot expiry and orphan removal" \
+gh agile epic create -t "Snapshot expiry and orphan removal" \
   --intent "Nothing reclaims storage; 120 files on disk and 1 live after five days." \
   --acceptance "expire and remove-orphans delete only unreferenced files, and abort otherwise."
 
-gh agile story "Compute the reachable file set" --epic 31 \
+gh agile story create -t "Compute the reachable file set" --epic 31 \
   --points 5 --priority highest \
   --intent "Both operations depend on it; an omission here deletes live data." \
   --acceptance "Every referenced file across all six metadata categories is returned."
@@ -1901,8 +1894,8 @@ complains.
 ### Dates on an epic, for GitHub's own roadmap
 
 ```bash
-gh agile epic "Initiatives above epics" --start 2026-09-01 --target 2026-10-31
-gh agile initiative create "Hierarchy visibility" --start 2026-09-01 --target 2026-12-31
+gh agile epic create -t "Initiatives above epics" --start 2026-09-01 --target 2026-10-31
+gh agile initiative create -t "Hierarchy visibility" --start 2026-09-01 --target 2026-12-31
 ```
 
 **Both container levels take them**, because both are on the roadmap and neither
@@ -1934,7 +1927,7 @@ too, but only after `epic` had already made the issue, and an issue number is
 never reused.
 
 ```bash
-gh agile epic "Q4 migration" --start soon
+gh agile epic create -t "Q4 migration" --start soon
 #   --start 'soon' is not a date. Use YYYY-MM-DD, in UTC -- 2026-09-29 is today.
 ```
 
@@ -2019,7 +2012,7 @@ gh agile plan AGILE-173 --for 8w
 
 `--for` and `--target` together are refused. They answer the same question and
 they can disagree — pass `--target` for a date somebody fixed, `--for` for a
-span you are sizing. `epic` and `initiative` take `--for` at creation for the
+span you are sizing. `epic create` and `initiative create` take `--for` at creation for the
 same reason they take `--start`.
 
 **Nothing is derived from the work beneath.** Not story points, not velocity,
@@ -2028,14 +2021,14 @@ is what keeps the result a plan rather than a forecast wearing a plan's clothes
 — and it is why `Target date` can be compared against what actually happened.
 
 **Both dates are one decision, which is why this is one command.** The precedent
-is `move`: starting work is one call because Status, Sprint, the label and the
-assignee all follow from it. `gh agile set --field "Start date"` still works and
+is `issue move`: starting work is one call because Status, Sprint, the label and the
+assignee all follow from it. `gh agile issue edit ISSUE --field "Start date"` still works and
 writes one field per invocation, so re-planning through it is two commands, two
 board writes, and a window where the plan is half one thing and half another.
 
 **Only an epic or an initiative can be planned.** A story's dates are its sprint
 — a level that spans sprints holds no `Sprint` field, which is why these two
-date fields exist for the levels above and not below. `set` refuses a date on a
+date fields exist for the levels above and not below. `issue edit` refuses a date on a
 story for the same reason, so the sanctioned path and the generic one agree:
 
 ```bash
@@ -2061,11 +2054,11 @@ then have nowhere to put the plan. GitHub's sub-issues nest, and **across
 repositories**, so the level costs a label and a command here.
 
 ```bash
-gh agile initiative create "Large new feature" --intent "..." --acceptance "..."
+gh agile initiative create -t "Large new feature" --intent "..." --acceptance "..."
 #   initiative #91: AGILE-91 Large new feature
 #   initiative:large-new-feature
 
-gh agile epic "Ingest side" --initiative large-new-feature --intent "..." --acceptance "..."
+gh agile epic create -t "Ingest side" --initiative large-new-feature --intent "..." --acceptance "..."
 #   epic #92: AGILE-92 Ingest side
 #   #92 under initiative paulcaron16k/gh-agile#91  (initiative:large-new-feature)
 ```
@@ -2073,9 +2066,9 @@ gh agile epic "Ingest side" --initiative large-new-feature --intent "..." --acce
 **`--initiative` takes three forms**, whichever you have to hand:
 
 ```bash
-gh agile epic "..." --initiative 91                  # the issue number
-gh agile epic "..." --initiative AGILE-91            # a keyed reference
-gh agile epic "..." --initiative large-new-feature   # the slug
+gh agile epic create -t "..." --initiative 91                  # the issue number
+gh agile epic create -t "..." --initiative AGILE-91            # a keyed reference
+gh agile epic create -t "..." --initiative large-new-feature   # the slug
 ```
 
 A bare number means *in this repository*, as everywhere else in this tool; on a
@@ -2107,7 +2100,7 @@ you nothing. It is minted from the title and carried on the initiative issue, so
 that issue is the single authority for what the slug means:
 
 ```
-$ gh agile initiative "Large New Feature"
+$ gh agile initiative create -t "Large New Feature"
 initiative slug 'large-new-feature' is already taken by paulcaron16k/gh-agile#91.
   Two initiatives answering to one slug put both trees behind one board filter.
   Pass --slug to choose another.
@@ -2185,6 +2178,47 @@ definition rather than something retyped beside it. The shorthand is expanded on
 the way in; you can write either.
 
 **Optional, always.** An epic under no initiative is ordinary, not a finding.
+
+### Reading work items: `list` and `view`
+
+Each level lists and views itself, as `gh issue list` and `gh issue view` do —
+and `issue` lists and views any of them:
+
+```bash
+gh agile epic list                     # open epics on the board, by Status
+gh agile story list -s all -L 50       # every story, open or closed
+gh agile initiative list
+gh agile issue list -S "sprint:@current"   # every work item in the current sprint
+gh agile epic view AGILE-200           # an epic: its stories, their Status, the rollup
+gh agile story view 202                # a story: its sprint, its tasks, every sprint: label
+gh agile initiative view hierarchy-visibility   # an initiative, by number or slug
+gh agile issue view 201 --format json  # any level, as JSON
+```
+
+A **list is a board read**, not a search: Status, Sprint and points live on the
+project item, so only the board can say them. It reuses `board show` with a
+filter of its own — `label:type:epic is:open` — so a list and a board never
+disagree about what an epic is, and `-S` takes the same terms as `board show
+--filter`. `-s` is `open`, `closed` or `all`, and `-L` keeps the first N, both
+as in `gh issue list`. `-w` opens the board in the browser instead.
+
+A **view** comes from the issue's side in one query: its board fields, its
+parent, its children with their Status, the `sprint:` labels recording where it
+was worked, and the `validate` checks for that one issue, then its body. `-w`
+opens the issue.
+
+**A level's `view` refuses another level and names the right command**, as
+`gh pr view` refuses an issue:
+
+```
+$ gh agile story view AGILE-200
+AGILE-200 is an epic, not a story:
+  gh agile epic view AGILE-200
+```
+
+`gh agile epic list` was, until AGILE-202, how an epic called "list" got filed:
+`epic` took its first word as a title. A title is `-t` now, and a `gh` verb is
+never read as one.
 
 ## 6. Issue titles: making the key and number visible
 
@@ -2289,7 +2323,7 @@ project.issue_title_prefix is 'key-type', which is not one of the three legal va
   issue is called, so a guess here is a guess written into issue titles:
 ```
 
-It is checked on every command, not only on `epic` and `story`, so a typo is
+It is checked on every command, not only on `epic create` and `story create`, so a typo is
 reported the first time anything runs rather than on the day someone creates an
 epic. `true` and `false` are accepted as hand-edits and read as `key` and `off`.
 
@@ -2303,14 +2337,14 @@ non-interactive, so an agent can run the same sequence.
 **1 — the epic exists**
 
 ```bash
-gh agile epic "Snapshot expiry and orphan removal" --intent "..." --acceptance "..."
+gh agile epic create -t "Snapshot expiry and orphan removal" --intent "..." --acceptance "..."
 #   epic #31: Snapshot expiry and orphan removal
 ```
 
 **2 — a story under it**
 
 ```bash
-gh agile story "Compute the reachable file set" --epic 31 \
+gh agile story create -t "Compute the reachable file set" --epic 31 \
   --points 5 --priority highest --intent "..." --acceptance "..."
 #   story #32 under epic #31    (labelled key:ZMBNI, so it is ZMBNI-32)
 ```
@@ -2318,7 +2352,7 @@ gh agile story "Compute the reachable file set" --epic 31 \
 **3 — start work; the sprint and the assignee follow**
 
 ```bash
-gh agile move ZMBNI-32 --status "In Progress"
+gh agile issue move ZMBNI-32 "In Progress"
 #   #32 Status = In Progress
 #   #32 Sprint = Sprint 1 (current)
 #   #32 assigned to @me
@@ -2341,7 +2375,7 @@ reported and not touched, because silently adding yourself to another person's
 work would make the convention argue with the team:
 
 ```bash
-gh agile move ZMBNI-32 --status "In Progress"
+gh agile issue move ZMBNI-32 "In Progress"
 #   #32 already assigned to a-teammate; left alone
 ```
 
@@ -2350,8 +2384,8 @@ yourself, as `gh issue edit` takes it — assigns whatever the status and whoeve
 already holds it:
 
 ```bash
-gh agile move ZMBNI-32 --status "In Progress" --add-assignee a-teammate
-gh agile move ZMBNI-32 --status Blocked --add-assignee @me
+gh agile issue move ZMBNI-32 "In Progress" --add-assignee a-teammate
+gh agile issue move ZMBNI-32 Blocked --add-assignee @me
 ```
 
 It is `--add-assignee`, not `--assignee`, because it adds: two people on one
@@ -2360,14 +2394,14 @@ issue is expressible, and nobody is silently dropped.
 To place it in a different sprint, say so:
 
 ```bash
-gh agile set --issue ZMBNI-32 --field Sprint --value "Sprint 2"
+gh agile issue edit ZMBNI-32 --field Sprint --value "Sprint 2"
 ```
 
 **A story may stand alone, if you say so.** `--epic none` files one with no
 parent:
 
 ```bash
-gh agile story "Bump the pinned ruff" --epic none --intent "..." --acceptance "..."
+gh agile story create -t "Bump the pinned ruff" --epic none --intent "..." --acceptance "..."
 #   story #58 standing alone: ZMBNI-58 Bump the pinned ruff
 ```
 
@@ -2399,7 +2433,7 @@ something is Blocked is worth having: a blocked issue with no note of what
 blocks it is the least useful state on a board.
 
 ```bash
-gh agile move ZMBNI-32 --status Blocked --evidence "waiting on the Iceberg 1.6 bump"
+gh agile issue move ZMBNI-32 Blocked --evidence "waiting on the Iceberg 1.6 bump"
 #   #32 body updated: Evidence
 #   #32 Status = Blocked
 ```
@@ -2413,13 +2447,13 @@ days later, by which time the text existed nowhere else.
 One thing to know: the section is **replaced**, not appended to. Evidence written
 at `In Review` and again at `Done` leaves the second.
 
-**And you do not have to write it twice.** `move --status Done` checks the body,
+**And you do not have to write it twice.** `issue move ISSUE Done` checks the body,
 not only the flags, so an issue whose `## Evidence` was written earlier closes
 with nothing supplied at all:
 
 ```bash
-gh agile move ZMBNI-32 --status "In Review" --evidence "the probe table, the numbers"
-gh agile move ZMBNI-32 --status Done --close
+gh agile issue move ZMBNI-32 "In Review" --evidence "the probe table, the numbers"
+gh agile issue close ZMBNI-32
 #   #32 Evidence already in the body
 #   #32 Status = Done
 ```
@@ -2450,7 +2484,7 @@ the issue body does not carry what a move to Done requires:
 **5 — fixed, with evidence**
 
 ```bash
-gh agile move ZMBNI-32 --status Done --evidence-file evidence.md --close
+gh agile issue close ZMBNI-32 --evidence-file evidence.md
 ```
 
 where `evidence.md` is:
@@ -2468,7 +2502,7 @@ Three ways to supply it, and one that only works for a human:
 |---|---|
 | `--evidence-file notes.md` | An agent, CI, or anyone who wrote it down first |
 | `--evidence "text"` | A one-liner |
-| `--evidence-file -` or `--evidence -` | A pipe: `git log -1 \| gh agile move …` |
+| `--evidence-file -` or `--evidence -` | A pipe: `git log -1 \| gh agile issue move …` |
 | *(nothing, at a terminal)* | Prompts section by section |
 
 **The body is validated, not merely templated.** `Done` requires `## Evidence`,
@@ -2479,16 +2513,26 @@ the body is not complete:
   - ## Evidence is still _TBD_
 ```
 
-`--close` closes the issue as completed; `--not-planned` closes it as not
-planned, so work that stopped for another reason stays distinguishable in the
-export.
+`gh agile issue close` closes the issue as completed, and is the Done path entire:
+the same evidence rule, the closing `sprint:` label. `-r "not planned"` closes it as
+not planned, so work that stopped for another reason stays distinguishable in the
+export; that needs no evidence and stamps no label, because nothing was done in any
+sprint. Either way Status becomes `Done`, since a closed issue on any other Status
+reads as live work to every board. `-c` leaves a closing comment, as in
+`gh issue close`, and `gh agile issue reopen` reverses it, moving Status back to
+`Todo` unless `--status` names another:
+
+```bash
+gh agile issue close ZMBNI-185 -r "not planned" -c "created by mistake"
+gh agile issue reopen ZMBNI-32 --status "In Progress"
+```
 
 **The close happens before the status is written, and that ordering is load-bearing.**
 A project can carry a built-in *auto-close when Status is Done* workflow, and it
 closes the issue as **completed** — attributed to you, not to the automation, so
 the timeline gives no hint. `gh issue close --reason` on an issue that is already
 closed changes nothing and still exits 0, and the reason cannot be corrected
-afterwards. Going first is the only way `--not-planned` survives on such a
+afterwards. Going first is the only way `not planned` survives on such a
 project, and the tool checks what GitHub actually recorded rather than trusting
 the exit code:
 
@@ -2503,7 +2547,7 @@ If the reason comes back wrong anyway, it says so on stderr rather than printing
 **6 — close the epic**
 
 ```bash
-gh agile move ZMBNI-31 --status Done --evidence-file epic-evidence.md --close
+gh agile issue close ZMBNI-31 --evidence-file epic-evidence.md
 ```
 
 Close it when its stories are closed. `gh agile validate` reports an epic marked
@@ -2530,7 +2574,7 @@ property that makes it drivable. A working sequence:
 # Pick up the work, and say so on the board. The current sprint follows, and so
 # does the assignee -- an issue nobody holds is claimed for whoever `gh` is
 # authenticated as. Pass --add-assignee to name somebody else.
-gh agile move "$ISSUE" --status "In Progress"
+gh agile issue move "$ISSUE" "In Progress"
 
 # ... make the change, run the tests ...
 
@@ -2541,7 +2585,7 @@ cat > /tmp/evidence.md <<'EOF'
 after the fix, verified by running the 25-line case against both.
 EOF
 
-gh agile move "$ISSUE" --status Done --evidence-file /tmp/evidence.md --close
+gh agile issue close "$ISSUE" --evidence-file /tmp/evidence.md
 ```
 
 Two rules worth encoding in whatever drives it:
@@ -2743,7 +2787,7 @@ An **assignee is a point-in-time value**. It is the developer while a story is
 in progress, then often a reviewer, then QA. It answers "who has this now",
 which a board needs and a report cannot use.
 
-`move --status "In Progress"` sets it, claiming an issue nobody holds — section
+`issue move ISSUE "In Progress"` sets it, claiming an issue nobody holds — section
 7, step 3. That is precisely so the board can answer *who has this now*, and it
 is not an answer to the question below.
 
@@ -2793,8 +2837,8 @@ Every command lists its own fields with type, obligation and description:
 
 ```bash
 gh agile setup --help
-gh agile story --help
-gh agile move --help
+gh agile story create --help
+gh agile issue move --help
 ```
 
 | Command | Does |
@@ -2805,9 +2849,12 @@ gh agile move --help
 | `board list` / `board show` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint create` | Show or append iterations |
-| `epic` / `story` | Create work items with their parent, labels and fields |
-| `set` | Set one field on an item already on the board |
-| `move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
+| `initiative create` / `epic create` / `story create` | Create work items with their parent, labels and fields; the title is `-t`, as in `gh issue create` |
+| `initiative` / `epic` / `story` / `issue` `list` and `view` | List one level from the board, by Status; view one item with its children, its `sprint:` labels and its checks. `issue` takes any level |
+| `issue edit` | Set one field on an item already on the board |
+| `issue move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
+| `issue close` / `issue reopen` | Close as completed (needs Evidence) or `-r "not planned"`, setting Status to `Done`; reopen and move Status back |
+| `issue reconcile` | Repair one issue's Sprint field from its `sprint:` labels |
 | `validate` | Check the conventions a machine can check |
 | `export` | Issues and events, full or incremental, to stdout or timestamped files |
 | `self-test` | Stand up a scratch project, exercise everything, tear it down |
