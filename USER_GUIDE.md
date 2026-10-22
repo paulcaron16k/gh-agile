@@ -2389,6 +2389,35 @@ gh agile story create -t "Compute the reachable file set" --epic 31 \
 #   story #32 under epic #31    (labelled key:ZMBNI, so it is ZMBNI-32)
 ```
 
+**At stand-up — what is yours, what is waiting, what nobody has**
+
+```bash
+gh agile issue status
+```
+```
+0006 W42-2026  2026-10-12 .. 2026-10-25  -- the current sprint, for you
+
+Assigned to you
+  In Progress
+    ZMBNI-32  Compute the reachable file set
+  In Review
+    ZMBNI-29  Expire snapshots past retention
+
+In Review, not yours
+  ZMBNI-30  Remove orphan files  (a-teammate)
+
+In the sprint, and nobody holds it
+  There is nothing in the sprint without an assignee
+```
+
+`gh issue status` answers *what needs me*; this asks it of the current sprint.
+It sits under `issue` because that is where `gh` puts status -- top-level `gh
+status` is notifications across every repository. An empty section is named
+rather than left out, so a blank stand-up reads as one. `--format json` gives
+the three lists. It reads the board once, and you are whoever `gh` is logged in
+as; a teammate with read access to the project sees the same board, through
+`project.owner`.
+
 **3 — start work; the sprint and the assignee follow**
 
 ```bash
@@ -2912,6 +2941,7 @@ gh agile issue move --help
 | `issue move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
 | `issue close` / `issue reopen` | Close as completed (needs Evidence) or `-r "not planned"`, setting Status to `Done`; reopen and move Status back |
 | `issue reconcile` | Repair one issue's Sprint field from its `sprint:` labels |
+| `issue status` | The current sprint at stand-up: yours by Status, what is in review, what nobody holds |
 | `validate` | Check the conventions a machine can check |
 | `export` | Issues and events, full or incremental, to stdout or timestamped files |
 
