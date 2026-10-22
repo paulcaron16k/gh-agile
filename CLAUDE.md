@@ -131,7 +131,7 @@ collateral damage). That is why the sprint record lives on one.
 
 **A board is reconstructed, never mirrored.** `ProjectV2View` has **no `items` field** — a view hands out its
 `filter` as an opaque string, its `layout` and its grouping, and there is no API for "what does this view show".
-So `board show` evaluates the filter locally against the same items `export` reads. Consequences that are not
+So `board view` evaluates the filter locally against the same items `export` reads. Consequences that are not
 optional: a filter term outside `FILTER_TERMS` is **refused, not ignored** (dropping `label:key:ZMBNI` renders one
 team's board full of another team's work and looks correct); and **empty is not excluded** — a status the filter
 allows but nothing occupies is reported on the `empty:` line, while one the filter removes is not mentioned, because
@@ -200,7 +200,7 @@ project's profile now sets.
 The number leads because it is the only part anyone says out loud. The ISO week is how a person places
 a sprint in the year. The year is there to sort by rather than to read. Four digits is ten thousand
 sprints, which at a fortnight each outlasts any board — and the leading zeros are the price of a column
-that lines up, which `board show` spends eight characters on. Measured before the cap was chosen:
+that lines up, which `board view` spends eight characters on. Measured before the cap was chosen:
 `0004 W38-2026` cuts to `0004 W38` and keeps the number and the week; Jira's `<Board> Sprint <n>` cuts
 to `AGILE S…` and keeps neither.
 
@@ -222,6 +222,13 @@ Tidying it would clear every assignment on the board.
 
 ## Conventions
 
+- **The CLI is shaped like `gh`, and a new command follows it (AGILE-200).** A noun group with verbs; an issue
+  is `-t` to create and a positional to target; a named thing (board, key) takes its name positionally. Declare
+  every subcommand `kind=GENERAL` or `kind=TARGETED, identifier=...` — the one declaration files it in `--help`
+  *and* gives it the identifier as its first positional, and `tests/test_help_sections.py` walks the parser and
+  fails on anything undeclared. Descriptions are capitalised with no full stop. No flag means two things, none is
+  accepted abbreviated, and a `list` into a pipe prints tab-separated rows with no header. A spelling retired
+  goes in `RETIRED_TABLE` with a runnable example, and fails at parsing — never reinterpreted.
 - **Every duration is an integer count of seconds, and no column name carries a unit suffix.** No `_days`, no
   `_hours`, no exceptions. In days, cycle times reported `0.0` and a median of `0.0` was published as a
   measurement; the same work reads 165, 181, 17, 76, 561 seconds. `cadence_days` is the profile's hand-authored
@@ -300,5 +307,5 @@ backlog was retired and the issues were real. So: **do not restate live state in
 "helpfully" copy it back.** Add it to `docs/tasks.md` or leave it out.
 
 That section records *identities and locations* only, and deliberately no counts, statuses or "what is
-in the current sprint". Those change on their own and are answered live — `board show`, `board list`,
+in the current sprint". Those change on their own and are answered live — `board view`, `board list`,
 `sprint list`, `validate`, `gh issue list` — and the section names which command answers what.

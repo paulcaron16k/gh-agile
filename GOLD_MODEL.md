@@ -110,7 +110,7 @@ GitHub the sequence is per **repository**, and `ProjectV2.repositories` is
 plural — a board may hold items from several. A project-level key would make
 `KEY-12` ambiguous the moment a second repository joined.
 
-So `gh agile key --repo owner/name --key ZMBNI` records the mapping in
+So `gh agile key add ZMBNI --repo owner/name` records the mapping in
 `.gh_agile.json`, and the export emits `issue_key` from it. Passing `--name` as
 well writes `"<name> [<KEY>]"` into the project's `shortDescription`, which is
 the closest GitHub offers to storing the pair where a person will see it:

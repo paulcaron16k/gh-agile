@@ -97,7 +97,7 @@
         "additionalProperties": true,
         "_additionalProperties_comment": [
           "`field_<name>` columns are the project's own fields, lower-cased with spaces",
-          "as underscores, and a project may define any of them. The five `setup`",
+          "as underscores, and a project may define any of them. The five `init`",
           "creates are declared below with their types; anything else a project adds",
           "arrives as an extra column, which is why this schema is open."
         ],
@@ -312,7 +312,7 @@
               "null"
             ],
             "format": "date",
-            "description": "The epic's planned start, a project DATE field. A PLAN, not a measurement: `board show`'s roadmap derives when work actually began from the `sprint:` labels beneath an item, and the two are not interchangeable. Null on anything nobody dated, which is most rows."
+            "description": "The epic's planned start, a project DATE field. A PLAN, not a measurement: `board view`'s roadmap derives when work actually began from the `sprint:` labels beneath an item, and the two are not interchangeable. Null on anything nobody dated, which is most rows."
           },
           "field_target_date": {
             "type": [

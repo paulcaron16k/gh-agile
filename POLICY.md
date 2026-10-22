@@ -55,8 +55,8 @@ allowed — nothing here parses it.
 ceremony this row exists to avoid. Add it when you have something to put in it.
 
 | **Bug** | An issue labelled `type:bug`; may or may not have an epic | Bugs arrive without asking whether they fit a plan |
-| **Sprint** | Project **iteration** field named `Sprint`, named `0004 W38-2026` — number, ISO week, year. **Never renamed**: the iteration configuration has no per-sprint id, so any write replaces it wholesale and clears every item's `Sprint` value board-wide. A rename buys a cosmetic change and costs a reconstruction | The one field GitHub genuinely provides for this. `gh project field-create` cannot make one — its `--data-type` accepts only TEXT, SINGLE_SELECT, DATE and NUMBER — so `setup` creates it through the GraphQL mutation |
-| **Status** | Project single-select: `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` | Deliberately five. Every extra column is a state someone must decide between. GitHub ships three; `setup` adds the other two, because `blocked_hours` and `review_hours` are computed from time spent in them |
+| **Sprint** | Project **iteration** field named `Sprint`, named `0004 W38-2026` — number, ISO week, year. **Never renamed**: the iteration configuration has no per-sprint id, so any write replaces it wholesale and clears every item's `Sprint` value board-wide. A rename buys a cosmetic change and costs a reconstruction | The one field GitHub genuinely provides for this. `gh project field-create` cannot make one — its `--data-type` accepts only TEXT, SINGLE_SELECT, DATE and NUMBER — so `init` creates it through the GraphQL mutation |
+| **Status** | Project single-select: `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` | Deliberately five. Every extra column is a state someone must decide between. GitHub ships three; `init` adds the other two, because `blocked_hours` and `review_hours` are computed from time spent in them |
 | **Estimate** | Project number field `Story Points` | Number, not select, so it can be summed. Named for the Gold model's `story_points`, so the export column needs no translation |
 | **Traceability** | Project text field `FR`, free text | Carries the requirement id where one exists |
 
@@ -77,7 +77,7 @@ column by hand, that is a bug in the tooling.
 |---|---|---|
 | Decide something is worth doing | Person | Judgement. Not automatable, not worth pretending |
 | Write the issue body: intent, acceptance, evidence | Person | The body is the artifact that survives; see §4 |
-| Create the project and its fields | **Machine** | `gh agile setup`, idempotent -- creates missing fields and adds missing options |
+| Create the project and its fields | **Machine** | `gh agile init`, idempotent -- creates missing fields and adds missing options |
 | Create an epic or story with its labels, parent and fields | **Machine** | `gh agile epic` / `gh agile story` — one call, no multi-step dance |
 | Attach a story to its epic | **Machine** | Part of creation. Doing it after the fact is how orphans happen |
 | Move an item across the board | Person | The board is the interface; dragging is fine |

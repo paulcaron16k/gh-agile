@@ -324,7 +324,7 @@ selecting both would invite confusing them. True when written, and it separated 
 field — because everything that is not an iteration or a single-select is `ProjectV2Field`. TEXT, NUMBER and
 DATE are one typename, 14 of the 17 fields on this board. So `#175` added two DATE fields and the premise
 was gone that moment, silently, with the comment still standing there reading as authoritative. Every date
-`gh agile epic --start` wrote went out as `--text`, and GitHub answered *did not receive a date value to
+`gh agile epic --start` (now `epic create --start`) wrote went out as `--text`, and GitHub answered *did not receive a date value to
 update a field of type date*. **When a change adds a case to a set, re-read the comments that justified
 narrowing that set** — a rationale is dated evidence, not a standing fact, and the one place it will not be
 questioned is the place it is written down.
@@ -361,7 +361,7 @@ developer?* — **when a fix removes a signal, check what else that signal was c
 same thing as *closed with no Evidence*.
 
 **An automatic repair and a manual one are not interchangeable just because both end in the right field.**
-`gh agile move X --status Done --evidence` writes the Evidence, the Status and the closing sprint label.
+`gh agile issue move X Done --evidence` writes the Evidence, the Status and the closing sprint label.
 The workflow writes the Status. Compared on the field they share they look equal, and on everything else
 the manual one is strictly better — so the real choice was never *right board now versus right board
 later*, it was *a wrong record for ever versus a correct one after one command*. **Compare repairs on what

@@ -8,7 +8,7 @@ would a Jira export.
 gh extension install paulcaron16k/gh-agile
 
 gh agile validate          # do the conventions hold?
-gh agile export --csv      # backlog with status history
+gh agile export --format csv   # backlog with status history
 ```
 
 ## Versions, and what installing gets you
@@ -195,7 +195,7 @@ assignment**. This tool saves and re-applies them around any such change.
 
 ### Field properties this tool sets
 
-`setup` creates these on the project and converges them on every run.
+`init` creates these on the project and converges them on every run.
 
 | Field | Description | Value / enum |
 |---|---|---|
@@ -212,7 +212,7 @@ or kanban.
 
 | Property | Description | Value |
 |---|---|---|
-| `name` | Identity for convergence — `setup` matches on it | e.g. `Team: AGILE only` |
+| `name` | Identity for convergence — `init` matches on it | e.g. `Team: AGILE only` |
 | `layout` | How items are drawn | `BOARD_LAYOUT`, `TABLE_LAYOUT`, `ROADMAP_LAYOUT` |
 | `filter` | The type's base filter, ANDed with any extra | scrum `sprint:@current` · kanban `-status:Done` · backlog `no:sprint -status:Done` · roadmap `label:type:epic -status:Done is:open` |
 
@@ -227,14 +227,14 @@ Live example from this repository's own board, `gh agile board list`:
 ```
 
 That first column is the board's number, and it is one of the ways to name a
-board to `board show`.
+board to `board view`.
 
 **Column limits are not settable.** `ProjectV2View` exposes no limit field, so a
 kanban board's WIP limits stay a web-UI setting.
 
 ### Reading a board from the terminal
 
-`gh agile board show` renders one board as text, or as JSONL that can re-create
+`gh agile board view` renders one board as text, or as JSONL that can re-create
 that text. Name the board by its number, its exact name, an unambiguous prefix,
 or an unambiguous substring — tried in that order, so a name that is another
 board's prefix resolves rather than being refused. Anything still ambiguous is
@@ -388,7 +388,7 @@ A repository that is not the main one carries only `{"config_from": "owner/main-
 
 ## The fields it creates
 
-`gh agile setup` is idempotent and converges: it creates what is missing and
+`gh agile init` is idempotent and converges: it creates what is missing and
 adds missing *options* to a single-select that already exists, never removing
 one — removing an option silently clears the field on every item holding it.
 
@@ -412,10 +412,11 @@ kind**. Since the issue-number sequence is per *repository* — and a project ca
 span repositories — the key is recorded per repository:
 
 ```bash
-gh agile key --repo paulcaron16k/Zamboni --key ZMBNI
-gh agile key --repo paulcaron16k/gh-agile --key AGILE \
+gh agile key add ZMBNI --repo paulcaron16k/Zamboni
+gh agile key add AGILE --repo paulcaron16k/gh-agile \
          --name "gh-agile: Agile management on GitHub"
-gh agile key                                    # list what is recorded
+gh agile key list                               # what is recorded
+gh agile key delete ZMBNI                       # refused while issues carry it
 ```
 
 The export then carries `issue_key` — `AGILE-14`, `ZMBNI-1817` — which is the
@@ -428,7 +429,7 @@ has to a place for the pair.
 
 A sprint is a GitHub **iteration**: one entry in the configuration of the
 project's `Sprint` iteration field. There is one such field per project, created
-by `setup`, and every sprint the team will ever have — past, current and
+by `init`, and every sprint the team will ever have — past, current and
 future — lives inside it.
 
 That single shared configuration is the fact everything else here follows from.
@@ -442,7 +443,7 @@ classDiagram
         +number, title
     }
     class SprintField["ProjectV2IterationField &quot;Sprint&quot;"] {
-        created by setup
+        created by init
         +name  Sprint
         +id  stable across changes
         +configuration.startDay  1=Sunday … 7=Saturday
@@ -466,7 +467,7 @@ classDiagram
         +layout  BOARD_LAYOUT
     }
 
-    ProjectV2 "1" --> "1" SprintField : setup creates
+    ProjectV2 "1" --> "1" SprintField : init creates
     SprintField "1" --> "*" Iteration : configuration holds all
     ProjectV2Item "*" --> "0..1" Iteration : assignment by id
     ScrumBoard ..> Iteration : selects the active one
@@ -541,7 +542,7 @@ sprint_closed_in  = '2026-08-24'
 ```
 
 **The field is repaired from the labels, automatically.** Every write that
-clears assignments — `setup` converging the cadence, `sprint ensure`,
+clears assignments — `init` converging the cadence, `sprint ensure`,
 `sprint create` — restores from a snapshot and then heals from the labels, in
 that order, in the same run. The snapshot covers items the labels know nothing
 about; the heal covers what the snapshot could not put back, including a run that
@@ -568,11 +569,11 @@ fortnight. Field for the board, labels for the record.
 
 | Object | Created by | Properties |
 |---|---|---|
-| `Sprint` field | `setup` | `duration` = `cadence_days`, converged on every run — existing sprints keep their dates, only later ones use a changed cadence. **`startDay` is left alone**: the configuration input does not accept it, and GitHub does not derive it from a start date — sending a Monday left the field reporting Sunday. It only affects what the web UI suggests, so `start_day` governs what this tool aligns, not what GitHub stores |
+| `Sprint` field | `init` | `duration` = `cadence_days`, converged on every run — existing sprints keep their dates, only later ones use a changed cadence. **`startDay` is left alone**: the configuration input does not accept it, and GitHub does not derive it from a start date — sending a Monday left the field reporting Sunday. It only affects what the web UI suggests, so `start_day` governs what this tool aligns, not what GitHub stores |
 | Iteration | `sprint create`, `sprint ensure`, `issue move` | `title` from `name_template`, `startDate` aligned to `start_day`, `duration` = `cadence_days` |
 | Item `Sprint` value | `issue edit ISSUE --field Sprint`, `issue move` to `In Progress` | The iteration's id, resolved from a title or `@current`. Cleared by any iteration write — live state, not history |
 | `sprint:YYYY-MM-DD` label | `issue move` at `In Progress` and at `Done` | The sprint's start date. On the issue, immutable, one per sprint the issue lived in |
-| Scrum board | `setup`, `board create --type scrum` | `filter: sprint:@current`, which is what makes a board scrum rather than kanban |
+| Scrum board | `init`, `board create --type scrum` | `filter: sprint:@current`, which is what makes a board scrum rather than kanban |
 
 Profile settings, all under `sprint`:
 
@@ -640,7 +641,7 @@ Everything below was checked against the live API, not inferred.
 | What | Consequence |
 |---|---|
 | **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
-| **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `setup` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
+| **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `init` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
 | **A user-owned project has no auto-add-issues workflow** | The six built-ins are: auto-add sub-issues to project, auto-close issue, item added to project, item closed, pull request linked to issue, pull request merged. Nothing puts a newly opened repository issue on the board — hence `sync` |
 | **The series anchor is write-only** | `ProjectV2IterationFieldConfigurationInput` takes `startDate`, `duration`, `iterations`; the readable `ProjectV2IterationFieldConfiguration` exposes `startDay`, `duration`, `iterations`, `completedIterations` — and no `startDate`. You cannot read back the anchor you sent |
 | **A sprint created in the web UI can be any length, on any day** | It may overlap what this tool would place. `ensure` then reports that it cannot place a sprint without overlapping, and creates nothing |
@@ -662,7 +663,7 @@ configuration:
 - Renaming or re-dating a sprint. There is no safe web-UI path: it clears
   assignments board-wide. Prefer changing `name_template`, which affects only
   sprints created afterwards and leaves existing ones alone.
-- Creating fields and boards — `setup` converges them; a hand-made one drifts.
+- Creating fields and boards — `init` converges them; a hand-made one drifts.
 
 **Two manual steps the API cannot do for you.** Enable the built-in *Item added
 to project* workflow to set `Status` on anything added by any path, and, if you
@@ -696,10 +697,10 @@ Gold's vocabulary. See [GOLD_MODEL.md](GOLD_MODEL.md).
 | `github_project`, `github_boards`, `github_sprints` | the configuration | **always full** |
 
 ```bash
-gh agile export --grain all --csv --out-dir exports/   # everything
-gh agile export --grain both --csv --out-dir exports/  # issues + events
-gh agile export --grain prs --csv --out-dir exports/
-gh agile export --grain master --csv --out-dir exports/
+gh agile export --grain all --format csv --out-dir exports/            # everything
+gh agile export --grain issues,events --format csv --out-dir exports/  # a comma list
+gh agile export --grain prs --format csv --out-dir exports/
+gh agile export --grain master --format csv --out-dir exports/
 ```
 
 **`github_prs` is the only grain GitHub filters for us.** The projects API has no
@@ -731,7 +732,7 @@ the loader.
 ### Incremental, for the two large grains
 
 ```bash
-gh agile export --grain both --csv --out-dir exports/   # since the watermark
+gh agile export --grain issues,events --format csv --out-dir exports/  # since the watermark
 gh agile export --since 2026-08-01T00:00:00Z            # explicit override
 gh agile export --no-state                              # always full
 gh agile export                                         # read it; watermark unmoved
@@ -784,13 +785,13 @@ why this tool saves and re-applies them.
 limits stay a web-UI setting.
 
 **Ask a view what it shows.** `ProjectV2View` has no `items` field either, so
-`board show` evaluates the view's filter locally rather than reading back what
+`board view` evaluates the view's filter locally rather than reading back what
 the web UI draws — see [above](#reading-a-board-from-the-terminal).
 
 **Project automations, as a write.** They can be *read* — `projectV2.workflows`
 gives each one's `name` and `enabled` — but the schema has
 `deleteProjectV2Workflow` and nothing that creates, enables or configures one, and
-a workflow's filter is not readable. So `setup` cannot converge them and every one
+a workflow's filter is not readable. So `init` cannot converge them and every one
 stays a manual web-UI step — see [Sprint management](#sprint-management).
 
 **Issue types and issue fields.** Both organization-only —
@@ -825,15 +826,15 @@ Three tiers follow from that, and they are what to grant against:
 |---|---|---|
 | Read | `export`, `validate`, `sprint list`, `board list`, `issue reconcile --dry-run` | project **read**, and `project.owner` in the profile |
 | Day to day | `epic create`, `story create`, `issue edit`, `issue move`, `issue reconcile`, `sync`, `sprint backfill`, `sprint reconcile` | project **write** + repo **push** (for labels and issue bodies) |
-| Admin | `setup` (creates *fields*), `project create`, `sprint create`, `sprint ensure` | project **admin** — these change the project's schema |
+| Admin | `init` (creates the project and its *fields*), `sprint create`, `sprint ensure` | project **admin** — these change the project's schema |
 
-`key` with no arguments is a local file read and works for anyone with a clone.
+`key list` and `project view` are local file reads and work for anyone with a clone.
 
 **The Read tier needs `project.owner` recorded in the profile**, or it silently
 does not work for anyone but the board's owner: `--owner` falls back to whoever
 ran the command, so a teammate looking for project 4 gets *their* project 4.
-`gh agile project create` records it; for an older profile, run
-`gh agile project owner` once and commit it.
+`gh agile init` records it, and adds it to an older profile when run again;
+commit the result.
 
 ### Personal account
 
@@ -961,7 +962,7 @@ the walk with the catch once. `docs/review-2026-08.md` S8 has the measurement.
 
 What is **still** unverified is the table at the top of this section: whether
 project *Write* covers field creation, iteration configuration and view creation,
-or whether `setup`, `sprint create` and `board create` need *Admin*. That cannot
+or whether `init`, `sprint create` and `board create` need *Admin*. That cannot
 be worked out by reading the schema — it needs an org with a second account at
 Write. Treat the Admin row as informed guesswork until someone measures it.
 

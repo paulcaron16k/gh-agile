@@ -166,7 +166,7 @@ self-test:
 # Same setup, left standing. For when the self-test fails and you need to look
 # at the board rather than at its assertions. Prints the number to tear down.
 #
-# The throwaway profile is not ceremony. `setup` resolves --project through
+# The throwaway profile is not ceremony. `init` resolves --project through
 # apply_defaults, which refuses a number that disagrees with `project.number` in
 # whatever profile it finds -- and the profile in this clone names the live board.
 # So this target created a project, had its setup refused for that reason, and

@@ -46,9 +46,9 @@ class TestStripComment:
         assert guide.strip_comment(line) == want
 
     @pytest.mark.parametrize("line", [
-        'gh agile epic "fixes #12"',
-        "gh agile sync --query 'a#b' --state all",
-        'gh agile move 7 --evidence "see #12 and #13"',
+        'gh agile epic create -t "fixes #12"',
+        "gh agile sync --search 'a#b' --state all",
+        'gh agile issue move 7 Done --evidence "see #12 and #13"',
     ])
     def test_a_hash_inside_quotes_is_an_argument(self, guide, line):
         """The shell's own rule, and the guide does document titles with issue
@@ -68,7 +68,7 @@ class TestTheSafetyFlagSurvives:
         "gh agile sync --adopt                   # and give what it adds the convention",
         "gh agile sync --repo owner/other-repo   # just one",
         "gh agile sync",
-        "gh agile sync --query 'label:type:story' --state all",
+        "gh agile sync --search 'label:type:story' --state all",
     ])
     def test_every_documented_sync_ends_up_a_dry_run(self, guide, documented):
         rewritten = guide.strip_comment(documented)
@@ -79,6 +79,6 @@ class TestTheSafetyFlagSurvives:
         assert "#" not in rewritten.split("--dry-run")[0]
 
     def test_an_export_keeps_its_state_flags(self, guide):
-        rewritten = guide.strip_comment("gh agile export --csv   # to stdout")
+        rewritten = guide.strip_comment("gh agile export --format csv   # to stdout")
         assert "#" not in rewritten
-        assert rewritten == "gh agile export --csv"
+        assert rewritten == "gh agile export --format csv"
