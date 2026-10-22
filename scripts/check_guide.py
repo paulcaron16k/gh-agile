@@ -43,6 +43,7 @@ SAFE = {
     ("project", "view"),
     ("validate",), ("sync",), ("export",),
     ("initiative", "list"), ("epic", "list"), ("story", "list"), ("issue", "list"),
+    ("issue", "status"),
 }
 
 #: Flags on the root parser rather than on a subcommand, so they are legal

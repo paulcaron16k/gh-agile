@@ -5778,6 +5778,110 @@ def cmd_list(args) -> int:
                       announce_unfiltered=False)
 
 
+#: `issue status`'s sections, in the order `gh issue status` lays its own out:
+#: what is yours first, then what is waiting on somebody, then what nobody has.
+#: Each carries what it prints when it is empty -- named, never omitted, as
+#: `gh issue status` prints `There are no issues assigned to you`.
+STATUS_SECTIONS = (
+    ("yours", "Assigned to you", "There are no issues assigned to you in this sprint"),
+    ("review", "In Review, not yours", "There is nothing in review that you could pick up"),
+    ("unheld", "In the sprint, and nobody holds it",
+     "There is nothing in the sprint without an assignee"),
+)
+
+
+def status_sections(rows: list[dict], me: str) -> dict[str, list[dict]]:
+    """The current sprint's open items, sorted into `STATUS_SECTIONS`.
+
+    Pure, so the sorting is tested without a board. An item can be in two
+    sections only in principle -- one held by you is never "not yours" or
+    "nobody's" -- so each lands in exactly one, or none: somebody else's work
+    that is not in review is not something stand-up asks you about.
+    """
+    order = {name: index for index, name in enumerate(STATUSES)}
+    found = {name: [] for name, _title, _empty in STATUS_SECTIONS}
+    for row in rows:
+        held = [a.casefold() for a in row["assignees"]]
+        if me.casefold() in held:
+            found["yours"].append(row)
+        elif same_status(row["status"] or "", "In Review"):
+            found["review"].append(row)
+        elif not held and not same_status(row["status"] or "", "Done"):
+            found["unheld"].append(row)
+    found["yours"].sort(key=lambda r: (order.get(canonical_status(r["status"] or ""), 99),
+                                       r["key"]))
+    return found
+
+
+def cmd_issue_status(args) -> int:
+    """`issue status`: the stand-up question, asked of the current sprint.
+
+    `gh issue status` answers *what needs me* -- assigned to you, mentioning you,
+    opened by you. The agile form is the question at stand-up: in this sprint,
+    what am I holding, what is waiting on review, and what is in it with nobody
+    holding it. **Under `issue`**, because that is where `gh` puts status: `gh
+    issue status` and `gh pr status` sit under their noun, and top-level `gh
+    status` is cross-repository notifications, a different thing (#205).
+
+    **One board read** -- `fetch_items`, the hand-written query, never
+    `item-list` -- plus the iterations, one point, to know which sprint is
+    current. The caller is `@me` resolved by `gh` through `gh api user`, REST
+    and so no GraphQL point at all: the tool never sees a token and must not
+    guess a login from git config. The owner is `project.owner`, so a teammate
+    with project read access sees the same board the owner does.
+    """
+    active, _completed = iterations(args.owner, args.project)
+    if not active:
+        sys.exit("no active sprint, so there is no stand-up to report.\n"
+                 "  `gh agile sprint ensure` creates one; `gh agile issue list` "
+                 "shows the board meanwhile.")
+    current = active[0]
+    me = caller_login()
+    keys = {}
+    for entry in profile_keys(args._config):
+        keys.setdefault(entry.get("repo"), entry.get("key"))
+    _title, items = fetch_items(args.owner, args.project)
+    rows = [board_row(item, keys) for item in items
+            if (item.get("content") or {}).get("__typename") == "Issue"
+            and (item.get("content") or {}).get("state") == "OPEN"
+            and not item.get("isArchived")
+            and field_values(item).get("Sprint") == current["title"]]
+    found = status_sections(rows, me)
+
+    if args.format == "json":
+        print(json.dumps({
+            "sprint": {"title": current["title"], "start": current["startDate"],
+                       "end": _iteration_end(current)},
+            "me": me,
+            **{name: [{k: r[k] for k in ("key", "repository", "number", "title", "url",
+                                          "status", "assignees", "story_points")}
+                      for r in found[name]] for name, _t, _e in STATUS_SECTIONS},
+        }, indent=2))
+        return 0
+
+    print(f"\n{current['title']}  {current['startDate']} .. {_iteration_end(current)}"
+          f"  -- the current sprint, for {me}\n")
+    for name, title, empty in STATUS_SECTIONS:
+        print(title)
+        if not found[name]:
+            print(f"  {empty}\n")
+            continue
+        width = max(len(r["key"]) for r in found[name])
+        last = None
+        for row in found[name]:
+            if name == "yours" and row["status"] != last:
+                last = row["status"]
+                print(f"  {last or 'no status'}")
+            indent = "    " if name == "yours" else "  "
+            who = (f"  ({', '.join(row['assignees'])})"
+                   if name == "review" and row["assignees"] else "")
+            # The key is the first column, so a prefixed title would say it twice.
+            words = strip_title_prefix(row["title"], row["key"].rsplit("-", 1)[0])
+            print(f"{indent}{row['key']:<{width}}  {words}{who}")
+        print()
+    return 0
+
+
 #: Tasks, by search. **Not from the board, because a task is never on it** --
 #: that is the definition (POLICY.md §2), so the board read every other list
 #: uses would find none. One query per repository, with each task's story.
@@ -9267,6 +9371,11 @@ why this exists:
                                                 "edit, close, reopen, reconcile")
     issue_sub = issue_group.add_subparsers(dest="issue_command", required=True)
     add_list(issue_sub, None, "every work item")
+    issue_status = issue_sub.add_parser(
+        "status", help="the current sprint: yours by Status, what is in review, "
+                       "what nobody holds")
+    issue_status.add_argument("--format", choices=["json"], help="JSON instead of text")
+    issue_status.set_defaults(func=cmd_issue_status)
     add_view(issue_sub, None, "any work item")
     move = issue_sub.add_parser(
         "move", help="change status, with the evidence that status requires",
