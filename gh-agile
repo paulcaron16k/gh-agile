@@ -6590,7 +6590,9 @@ def cmd_edit(args) -> int:
                 print(f"  #{number} {flag} {shown}".rstrip())
         for name, value in fields:
             set_field(args.owner, args.project, item["id"], name, value)
-            print(f"  #{number} {name} = {value}")
+            # `--points 3` parses as 3.0, and the board shows 3.
+            shown = f"{value:g}" if isinstance(value, float) else value
+            print(f"  #{number} {name} = {shown}")
         if dates is not None:
             write_dates(args, repo, number, item, list(dates))
     return 0
