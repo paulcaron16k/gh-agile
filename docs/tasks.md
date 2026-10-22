@@ -44,7 +44,7 @@ has a command that answers it live:
 
 | Question | Ask |
 |---|---|
-| What is on a board, and in which column | `gh agile board show <number\|name>` |
+| What is on a board, and in which column | `gh agile board view <number\|name>` |
 | Which boards exist on a project | `gh agile board list` |
 | Which sprint is current, and what has run | `gh agile sprint list` |
 | Do the conventions hold | `gh agile validate` |
@@ -70,7 +70,7 @@ for it on the strength of an older note.
 |---|---|---|
 | `AGILE` | `paulcaron16k/projects/4` | `.github/agile.json` in this repo. Boards: `Sprint board` (scrum, **no key filter — the whole team, both repositories**), `Engineering: all work` (kanban), `Backlog`, `Team: AGILE` and `Team: REPORTS` (scrum, one key each), plus GitHub's default `View 1`. `issue_title_prefix: key`, so titles read `AGILE-82 ...` and `REPORTS-1 ...` — which is what makes a shared board readable at a glance |
 | `REPORTS` | `paulcaron16k/projects/4` — **the same board as AGILE** | `~/checkout/prj_mgmt/agile-reports/.github/agile.json`, which holds one property: `{"config_from": "paulcaron16k/gh-agile"}`. This is the multi-repo board the tool is built for: one team responsible for two repositories, one `Sprint board` showing both, and `Team: AGILE` / `Team: REPORTS` slicing each out with `label:key:...` |
-| `ZMBNI` | `paulcaron16k/projects/23` | `~/checkout/iceberg/Zamboni/.github/agile.json`. Boards: `Sprint board` (scrum), `Kanban`. `issue_title_prefix: key`. **No longer part of this repository's profile** — it was listed there only to demonstrate a board spanning repositories, which `agile-reports` now does properly. Zamboni has its own team and its own board, and is not ours to test against. **The profile records no `project.owner`** — a number without an account is not an identity, and `gh agile project owner` is the fix |
+| `ZMBNI` | `paulcaron16k/projects/23` | `~/checkout/iceberg/Zamboni/.github/agile.json`. Boards: `Sprint board` (scrum), `Kanban`. `issue_title_prefix: key`. **No longer part of this repository's profile** — it was listed there only to demonstrate a board spanning repositories, which `agile-reports` now does properly. Zamboni has its own team and its own board, and is not ours to test against. **The profile records no `project.owner`** — a number without an account is not an identity, and running `gh agile init` there records it |
 | `TEST` | `paulcaron16k/projects/19` | `~/checkout/prj_mgmt/agile-test/.github/agile.json`. Boards: `Engineering: all work`, `Backlog`, `Team: TEST` (scrum), `Roadmap`. `issue_title_prefix: key+type`. Issue numbers `#1` and `#2` are already spent by a `self-test` run |
 
 **Zamboni's markdown backlog is retired.** `~/checkout/iceberg/Zamboni/docs/tasks.md` no longer exists;

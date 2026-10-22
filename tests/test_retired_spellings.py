@@ -205,3 +205,34 @@ class TestTheBoardsDialect:
     ])
     def test_the_current_spelling_is_left_alone(self, tool, argv):
         assert tool.retired_spelling(argv) is None
+
+
+class TestEveryRowOfTheTable:
+    """#206: the table is the record of what was retired, and the release
+    note's table is this one. Each row is run through `main`, so a row cannot
+    be listed without a hint that names its replacement."""
+
+    @pytest.mark.parametrize("row", __import__("conftest")._load().RETIRED_TABLE,
+                             ids=lambda row: row[0])
+    def test_the_row_fails_and_names_the_new_spelling(self, tool, monkeypatch, capsys, row):
+        _was, _is, argv, suggested = row
+        code, err = run(tool, monkeypatch, capsys, *argv)
+        assert code == 2
+        assert suggested in err
+
+    def test_the_old_spelling_also_fails_without_the_hint(self, tool):
+        """Underneath the kindness, nothing retired is reinterpreted: with the
+        hint gone, every row is still a parse error."""
+        for _was, _is, argv, _suggested in tool.RETIRED_TABLE:
+            with pytest.raises(SystemExit):
+                tool.build_parser().parse_args(argv)
+
+    def test_the_release_note_carries_the_same_table(self, tool):
+        """The note sent to consumers and the table the hints are tested against
+        are one table; a row added to one and not the other is caught here."""
+        import pathlib
+        note = (pathlib.Path(__file__).resolve().parent.parent
+                / "docs" / "release-v0.4.0.md").read_text()
+        rows = [line for line in note.splitlines()
+                if line.startswith("| ") and not line.startswith("| Was ")]
+        assert rows == [f"| {was} | {now} |" for was, now, _a, _e in tool.RETIRED_TABLE]

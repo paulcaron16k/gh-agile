@@ -8900,6 +8900,12 @@ class AgileParser(argparse.ArgumentParser):
 
     def __init__(self, *args, kind: str | None = None, identifier: str | None = None,
                  many: bool = False, **kwargs):
+        # **No abbreviated flags.** argparse accepts any unambiguous prefix, so
+        # `export --state w.json` -- retired in #203 -- quietly parsed as
+        # `--state-file`: a retired spelling reinterpreted, which is the one
+        # thing AGILE-200 promised would not happen. `gh` takes no abbreviation
+        # either.
+        kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
         self.command_kind, self.identifier = kind, identifier
         if kind == TARGETED:
@@ -9717,6 +9723,72 @@ def inherit_global_flags(parser: argparse.ArgumentParser) -> None:
             inherit_global_flags(child)
 
 
+#: **Every spelling AGILE-200 retired, in one place**: what it was, what it is,
+#: a command line that types the old spelling, and what the hint must then
+#: say. `retired_spelling` is the code that says it; this is the record of
+#: what it has to cover, and `tests/test_retired_spellings.py` runs every row
+#: through `main` -- so a row cannot be listed without a working hint, and the
+#: release note's table is this one (#206).
+#:
+#: **Remove it, and `retired_spelling`, in the release after v0.4.0.** One
+#: release of kindness is the promise; after that an old spelling fails at
+#: argument parsing like any other typo, which it already does underneath.
+RETIRED_TABLE = (
+    ("`epic`/`story`/`task TITLE`", "`epic`/`story`/`task create -t TITLE`",
+     ["epic", "Snapshot expiry"], "gh agile epic create -t 'Snapshot expiry'"),
+    ("`initiative create TITLE`", "`initiative create -t TITLE`",
+     ["initiative", "create", "Big thing"], "gh agile initiative create -t 'Big thing'"),
+    ("`story create ... --status S`", "`story create ...`, then `issue move N S`",
+     ["story", "create", "-t", "T", "--epic", "none", "--status", "In Progress"],
+     "gh agile issue move <number> 'In Progress'"),
+    ("`move ISSUE --status S`", "`issue move ISSUE S`",
+     ["move", "12", "--status", "Done"], "gh agile issue move 12 Done"),
+    ("`move ISSUE --close [--not-planned]`", "`issue close ISSUE [-r \"not planned\"]`",
+     ["move", "12", "--status", "Done", "--close", "--not-planned"],
+     "gh agile issue close 12 -r 'not planned'"),
+    ("`set --issue N --field F --value V`", "`issue edit N --field F --value V`",
+     ["set", "--issue", "12", "--field", "FR", "--value", "x"],
+     "gh agile issue edit 12 --field FR --value x"),
+    ("`set`/`issue edit ... --number N`", "`issue edit ... --value N`",
+     ["issue", "edit", "12", "--field", "FR", "--number", "3"],
+     "gh agile issue edit 12 --field FR --value 3"),
+    ("`fix --id N`", "`issue reconcile N`",
+     ["fix", "--id", "12"], "gh agile issue reconcile 12"),
+    ("`validate --id N`", "`issue view N`",
+     ["validate", "--id", "12"], "gh agile issue view 12"),
+    ("`plan ISSUE --start/--target/--for`", "`issue edit ISSUE --start/--target/--for`",
+     ["plan", "12", "--for", "6w"], "gh agile issue edit 12 --for 6w"),
+    ("`--add-assignee` with no value", "`--add-assignee @me`",
+     ["issue", "move", "12", "In Progress", "--add-assignee"],
+     "gh agile issue move 12 'In Progress' --add-assignee @me"),
+    ("`board show`", "`board view`",
+     ["board", "show", "Backlog"], "gh agile board view Backlog"),
+    ("`board create --name N`", "`board create N`",
+     ["board", "create", "--name", "X", "--type", "scrum"],
+     "gh agile board create X --type scrum"),
+    ("`setup`", "`init`", ["setup"], "gh agile init"),
+    ("`project create`", "`init`",
+     ["project", "create", "--title", "B"], "gh agile init -t B"),
+    ("`project owner`", "`init`", ["project", "owner"], "gh agile init"),
+    ("`hooks`", "`init` (installs the hook; `--no-hooks` to skip)",
+     ["hooks"], "gh agile init"),
+    ("`project sprint-template --template T`", "`project edit --sprint-template T`",
+     ["project", "sprint-template", "--template", "2-week"],
+     "gh agile project edit --sprint-template 2-week"),
+    ("`project title-prefix --mode M`", "`project edit --title-prefix M`",
+     ["project", "title-prefix", "--mode", "key"], "gh agile project edit --title-prefix key"),
+    ("`key --key K`", "`key add K`", ["key", "--key", "ZZ"], "gh agile key add ZZ"),
+    ("`key`", "`key list`", ["key"], "gh agile key list"),
+    ("`export --csv`", "`export --format csv`",
+     ["export", "--csv"], "gh agile export --format csv"),
+    ("`export --state F`", "`export --state-file F`",
+     ["export", "--state", "w.json"], "gh agile export --state-file w.json"),
+    ("`export --grain both`", "`export --grain issues,events`",
+     ["export", "--grain", "both"], "gh agile export --grain issues,events"),
+    ("`sync --query`", "`sync --search`",
+     ["sync", "--query", "label:x"], "gh agile sync --search label:x"),
+)
+
 #: The work-item types whose title used to be a positional: `epic "Title"`.
 WORK_ITEM_GROUPS = ("initiative", "epic", "story", "task")
 
@@ -9757,6 +9829,16 @@ def retired_spelling(argv: list[str]) -> str | None:
     Rebuilt from what was typed, so the suggestion runs as given.
     """
     import shlex
+
+    # `--add-assignee` with nothing after it meant the caller, until #201 made it
+    # take a login as `gh issue edit --add-assignee` does. A value is required
+    # now, so the bare flag is the one retired spelling that is not a command.
+    for index, token in enumerate(argv):
+        if token == "--add-assignee" and (index + 1 == len(argv)
+                                          or argv[index + 1].startswith("-")):
+            new = shlex.join(["gh", "agile", *argv[:index + 1], "@me", *argv[index + 1:]])
+            return (f"`--add-assignee` takes a login now, `@me` written out, as "
+                    f"`gh issue edit --add-assignee` takes it:\n  {new}")
 
     rest = list(argv)
     head = []

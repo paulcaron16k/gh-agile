@@ -79,17 +79,17 @@ class TestItCannotPassByFindingNothing:
 
 class TestWhatCountsAsDocumented:
     def test_an_invocation_counts(self, guard):
-        seen = guard.documented_leaves([(1, "gh agile board show 3")])
-        assert ("board", "show") in seen
+        seen = guard.documented_leaves([(1, "gh agile board view 3")])
+        assert ("board", "view") in seen
 
     def test_the_parent_counts_too(self, guard):
-        """`gh agile board show` documents `board`, whose own help is a menu."""
-        seen = guard.documented_leaves([(1, "gh agile board show 3")])
+        """`gh agile board view` documents `board`, whose own help is a menu."""
+        seen = guard.documented_leaves([(1, "gh agile board view 3")])
         assert ("board",) in seen
 
     def test_a_flag_does_not_become_a_subcommand(self, guard):
-        seen = guard.documented_leaves([(1, "gh agile validate --id AGILE-9")])
-        assert seen == {("validate",)}
+        seen = guard.documented_leaves([(1, "gh agile sync --dry-run --state all")])
+        assert seen == {("sync",)}
 
     def test_a_global_flag_before_the_subcommand_is_skipped(self, guard):
         seen = guard.documented_leaves([(1, "gh agile --owner acme board list")])

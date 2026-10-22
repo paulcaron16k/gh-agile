@@ -5,12 +5,12 @@ non-scrum type that kept finished work, where `kanban` is `-status:Done` and
 `backlog` is `no:sprint -status:Done`. Measured on project #4 the day this was
 filed:
 
-    $ gh agile board show Roadmap
+    $ gh agile board view Roadmap
     roadmap - 12 of 81 items   filter: label:type:epic
       AGILE-9  7/7   AGILE-10  9/9   AGILE-12  3/3   AGILE-26  6/6  ...
       (not started) (1)  REPORTS-1
 
-    $ gh agile board show Roadmap --filter=-status:Done
+    $ gh agile board view Roadmap --filter=-status:Done
     roadmap - 1 of 81 items
 
 **Twelve of twelve epics complete.** And the sections ascend by start, so those

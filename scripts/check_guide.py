@@ -37,7 +37,7 @@ TOOL = ROOT / "gh-agile"
 #:
 #: The work-item lists are here and their views are not: a list reads whatever
 #: board the profile names, and a view names one issue, which on another board
-#: is somebody else's issue or none -- the reason `board show` is absent too.
+#: is somebody else's issue or none -- the reason `board view` is absent too.
 SAFE = {
     ("key", "list"), ("board", "list"), ("sprint", "list"), ("sprint", "view"),
     ("project", "view"),
@@ -48,7 +48,7 @@ SAFE = {
 
 #: Flags on the root parser rather than on a subcommand, so they are legal
 #: *before* the subcommand and appear in no subcommand's help. The value is
-#: whether the flag takes one, because `gh agile --owner some-org project owner`
+#: whether the flag takes one, because `gh agile --owner some-org init`
 #: otherwise reads `some-org` as the subcommand.
 #:
 #: This replaced a blacklist of one value -- `@me` was filtered out by name --
@@ -58,7 +58,7 @@ SAFE = {
 GLOBAL_FLAGS = {"--owner": True, "--project": True, "--config": True, "--help": False}
 
 #: Never executed, whatever SAFE says. Learned by running this script the first
-#: time: `key --key SPARK` wrote a third key into the profile and
+#: time: `key --key SPARK` (now `key add SPARK`) wrote a third key into the profile and
 #: `export --out-dir exports/` created a directory. A checker with side effects
 #: is worse than no checker -- it makes the thing it checks wrong.
 #:
