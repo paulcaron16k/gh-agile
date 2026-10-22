@@ -2850,7 +2850,7 @@ def reconcile_initiative(args, target: dict) -> int:
 
 def cmd_initiative(args) -> int:
     if args.initiative_command == "reconcile":
-        target = initiative_target(args._config, args.ref, getattr(args, "repo", None))
+        target = initiative_target(args._config, args.issue, getattr(args, "repo", None))
         return reconcile_initiative(args, target)
     return create_initiative(args)
 
@@ -8613,7 +8613,8 @@ def add_title(parser: argparse.ArgumentParser, what: str) -> None:
 
 def add_list(group, item_type: str | None, what: str) -> None:
     """`list`, with `gh issue list`'s flags for the same things."""
-    lister = group.add_parser("list", help=f"list {what} on the board, by Status")
+    lister = group.add_parser("list", kind=GENERAL,
+                              help=f"List {what} on the board, by Status")
     lister.add_argument("-s", "--state", choices=list(STATE_FILTERS), default="open",
                         help="open (the default), closed or all")
     lister.add_argument("-L", "--limit", type=int, default=30,
@@ -8633,12 +8634,9 @@ def add_list(group, item_type: str | None, what: str) -> None:
 
 def add_view(group, item_type: str | None, what: str) -> None:
     """`view`, the issue first, as `gh issue view` takes it."""
-    viewer = group.add_parser("view", help=f"view {what}, its children and its checks")
-    viewer.add_argument("issue", metavar="initiative" if item_type == "initiative"
-                        else "issue",
-                        help=f"{ISSUE_REF_HELP}"
-                             + (", or the initiative's slug" if item_type == "initiative"
-                                else ""))
+    viewer = group.add_parser("view", kind=TARGETED,
+                              identifier="initiative" if item_type == "initiative" else "issue",
+                              help=f"View {what}, its children and its checks")
     viewer.add_argument("-R", "--repo", help="only needed for a bare number outside "
                                              "its repository")
     viewer.add_argument("--format", choices=["json"], help="JSON instead of text")
@@ -8850,6 +8848,122 @@ class VersionAction(argparse.Action):
         parser.exit(0)
 
 
+#: A subcommand is one of two kinds, as `gh issue --help` sorts them. A
+#: **general** command takes no identifier -- `create`, `list`, `status`. A
+#: **targeted** one takes the same identifier as its first positional, every
+#: time -- `view`, `edit`, `close`. A reader learns the rule once and predicts
+#: the rest, and it is the rule that would have made `epic list` impossible to
+#: misread as a title (#204).
+GENERAL, TARGETED = "general", "targeted"
+
+#: What a targeted command can name, and how its help says so.
+IDENTIFIERS = {
+    "issue": ISSUE_REF_HELP,
+    "initiative": f"{ISSUE_REF_HELP}, or the initiative's slug",
+    "board": "the board's number as `board list` prints it, or its name; a unique "
+             "prefix or substring is enough",
+    "sprint": "@current (the default), a start date YYYY-MM-DD -- its identity -- or "
+              "a title",
+}
+
+#: Targeted commands whose identifier may be left out, and the **one** target
+#: that then means. As `gh pr view` takes the current branch: omitting it picks
+#: a default target, and never widens the command to everything.
+DEFAULT_TARGETS = {"sprint": "@current"}
+
+#: Where a targeted command's identifier lands, when not under its own name.
+IDENTIFIER_DESTS = {"initiative": "issue", "board": "name"}
+
+#: The top level, grouped as `gh --help` groups its own: the work-item groups,
+#: then the board's configuration, then the commands that are not a group.
+TOP_LEVEL_SECTIONS = (
+    ("WORK ITEM COMMANDS", ("initiative", "epic", "story", "task", "issue")),
+    ("BOARD COMMANDS", ("board", "sprint", "project", "key")),
+    ("GENERAL COMMANDS", ("init", "sync", "validate", "export")),
+)
+
+
+class AgileParser(argparse.ArgumentParser):
+    """argparse, with a subcommand declared general or targeted, and `gh`'s help.
+
+    **The declaration drives both halves**, which is the point of having one:
+    `kind=TARGETED, identifier="issue"` files the command under TARGETED
+    COMMANDS *and* gives it the issue as its first positional. Kept in two
+    places, a new command could be listed as one kind and parse as the other.
+
+    argparse prints one undifferentiated list, so the sections are written
+    rather than configured. A group with both kinds prints GENERAL and TARGETED
+    COMMANDS; a group with one prints AVAILABLE COMMANDS, as `gh label` and
+    `gh project` do -- matching `gh` where it does not split as well as where it
+    does. A leaf command keeps argparse's own help, which lists its flags.
+    """
+
+    def __init__(self, *args, kind: str | None = None, identifier: str | None = None,
+                 many: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.command_kind, self.identifier = kind, identifier
+        if kind == TARGETED:
+            default = DEFAULT_TARGETS.get(identifier)
+            self.add_argument(IDENTIFIER_DESTS.get(identifier, identifier),
+                              metavar=identifier,
+                              nargs="+" if many else ("?" if default else None),
+                              default=default, help=IDENTIFIERS[identifier])
+
+    def subcommands(self):
+        """`(name, help, parser)` for each subcommand `--help` shows, or None."""
+        action = next((a for a in self._actions
+                       if isinstance(a, argparse._SubParsersAction)), None)
+        if action is None:
+            return None
+        return [(shown.dest, shown.help, action.choices[shown.dest])
+                for shown in action._choices_actions]
+
+    def format_help(self) -> str:
+        commands = self.subcommands()
+        if commands is None:
+            return super().format_help()
+        is_top = all(name in {n for _h, names in TOP_LEVEL_SECTIONS for n in names}
+                     for name, _help, _p in commands)
+        if is_top:
+            sections = [(heading, [c for c in commands if c[0] in names])
+                        for heading, names in TOP_LEVEL_SECTIONS]
+        else:
+            general = [c for c in commands if c[2].command_kind != TARGETED]
+            targeted = [c for c in commands if c[2].command_kind == TARGETED]
+            sections = ([("GENERAL COMMANDS", general), ("TARGETED COMMANDS", targeted)]
+                        if general and targeted else [("AVAILABLE COMMANDS", commands)])
+        width = max([15] + [len(name) + 2 for name, _h, _p in commands])
+        out = [self.description or "", "", "USAGE",
+               f"  {self.prog} <command>" + (" <subcommand>" if is_top else "")
+               + " [flags]", ""]
+        for heading, entries in sections:
+            if not entries:
+                continue
+            out.append(heading)
+            # Alphabetical within a section, as `gh` lists its own.
+            out += [f"  {name + ':':<{width}}{text}" for name, text, _p in sorted(entries)]
+            out.append("")
+        formatter = self._get_formatter()
+        formatter._indent()
+        formatter.add_arguments([a for a in self._actions if a.option_strings])
+        out += ["FLAGS", formatter.format_help().rstrip("\n"), ""]
+        kinds = sorted({p.identifier for _n, _t, p in commands if p.identifier})
+        if kinds:
+            out.append("ARGUMENTS")
+            for kind in kinds:
+                out.append(f"  A targeted command takes {IDENTIFIERS[kind]}"
+                           f"{'; omitted, ' + DEFAULT_TARGETS[kind] if kind in DEFAULT_TARGETS else ''}.")
+            out.append("")
+        if self.epilog:
+            out += [self.epilog.rstrip(), ""]
+        out += ["LEARN MORE",
+                f"  Use `{self.prog} <command> --help` for more information about a command."
+                if not is_top else
+                "  Use `gh agile <command> <subcommand> --help` for more information about "
+                "a command.", ""]
+        return "\n".join(out)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Every command and flag, built but not parsed.
 
@@ -8860,7 +8974,8 @@ def build_parser() -> argparse.ArgumentParser:
     through `--help` because it checks the published surface; a test inside the
     process reads it here.
     """
-    parser = argparse.ArgumentParser(prog="gh agile", description=__doc__.splitlines()[0])
+    parser = AgileParser(prog="gh agile", description="Agile project management over "
+                                                      "GitHub Issues and Projects.")
     add_global_flags(parser, default=None)
     parser.add_argument("--version", action=VersionAction,
                         help="the build, the interpreter and the profile in use")
@@ -8870,7 +8985,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
     init = sub.add_parser(
-        "init", help="from a fresh clone to a working board, in one command",
+        "init", kind=GENERAL, help="From a fresh clone to a working board, in one command",
         epilog=field_help([
             ("--key", "KEY", "required*", "labels every issue; Jira's rules apply"),
             ("--title", "text", "required*", "the project's title"),
@@ -8932,7 +9047,7 @@ default chosen for you.""",
     init.set_defaults(func=cmd_init, needs_repo=True, projectless=True)
 
     initiative = sub.add_parser(
-        "initiative", help="initiatives: the plan and WBS for a large feature",
+        "initiative", help="Initiatives: the plan and WBS for a large feature",
         epilog="""what an initiative is:
   A level above epic -- the set of epics a large new feature requires, with
   somewhere to write the plan and the WBS down. Jira's standard hierarchy stops
@@ -8948,7 +9063,7 @@ default chosen for you.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     initiative_sub = initiative.add_subparsers(dest="initiative_command", required=True)
     initiative_new = initiative_sub.add_parser(
-        "create", help="file the initiative issue, board it, and mint its slug",
+        "create", kind=GENERAL, help="File the initiative issue, board it, and mint its slug",
         epilog=field_help([
             ("-t/--title", "text", "required", "the initiative's title"),
             ("--slug", "text", "optional", "the label's readable half; default is the title, "
@@ -8977,20 +9092,20 @@ default chosen for you.""",
     add_list(initiative_sub, "initiative", "initiatives")
     add_view(initiative_sub, "initiative", "one initiative")
     initiative_fix = initiative_sub.add_parser(
-        "reconcile", help="bring initiative:<slug> into line with the hierarchy",
+        "reconcile", kind=TARGETED, identifier="initiative",
+        help="Bring initiative:<slug> into line with the hierarchy",
         epilog=field_help([
-            ("ref", "N|KEY-N|URL|slug", "required", "the initiative; positional"),
+            ("initiative", "N|KEY-N|URL|slug", "required", "the initiative; positional"),
             ("--dry-run", "flag", "optional", "list what would change and change nothing"),
         ]) + RECONCILE_WHY,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    initiative_fix.add_argument("ref")
     initiative_fix.add_argument("--dry-run", action="store_true")
     initiative_fix.add_argument("-R", "--repo")
     initiative.set_defaults(func=cmd_initiative, needs_repo=True)
 
-    epic_group = sub.add_parser("epic", help="epics: a body of work, under an initiative or none")
+    epic_group = sub.add_parser("epic", help="Epics: a body of work, under an initiative or none")
     epic_sub = epic_group.add_subparsers(dest="epic_command", required=True)
-    epic = epic_sub.add_parser("create", help="file an epic and put it on the board",
+    epic = epic_sub.add_parser("create", kind=GENERAL, help="File an epic and put it on the board",
         epilog=field_help(EPIC_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(epic, "epic")
@@ -9013,10 +9128,10 @@ default chosen for you.""",
     add_list(epic_sub, "epic", "epics")
     add_view(epic_sub, "epic", "one epic")
 
-    story_group = sub.add_parser("story", help="stories: the unit of work a sprint plans")
+    story_group = sub.add_parser("story", help="Stories: the unit of work a sprint plans")
     story_sub = story_group.add_subparsers(dest="story_command", required=True)
     story = story_sub.add_parser(
-        "create", help="file a story, attach it to its epic, and set its fields",
+        "create", kind=GENERAL, help="File a story, attach it to its epic, and set its fields",
         epilog=field_help(STORY_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(story, "story")
@@ -9037,7 +9152,7 @@ default chosen for you.""",
     add_view(story_sub, "story", "one story")
 
     task_group = sub.add_parser(
-        "task", help="tasks: story-internal housekeeping, counted by nothing",
+        "task", help="Tasks: story-internal housekeeping, counted by nothing",
         epilog="""what a task is, and is not:
   A task is how one person is organising their own story. POLICY.md §2 still
   recommends a markdown checklist for this, and still says promoting one to an
@@ -9052,7 +9167,7 @@ default chosen for you.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     task_sub = task_group.add_subparsers(dest="task_command", required=True)
     task = task_sub.add_parser(
-        "create", help="file a task under its story",
+        "create", kind=GENERAL, help="File a task under its story",
         epilog=field_help([
             ("-t/--title", "text", "required", "the task's title"),
             ("--story", "N|KEY-N|URL", "required", "the story it belongs to"),
@@ -9075,7 +9190,7 @@ default chosen for you.""",
     # Hidden from `--help`: a development command `make self-test` runs, and
     # `gh` ships none in its help. No `help=` is what hides it.
     self_test = sub.add_parser(
-        "self-test", description="stand up a scratch project, exercise everything, "
+        "self-test", kind=GENERAL, description="stand up a scratch project, exercise everything, "
                                  "tear it down")
     self_test.add_argument("-R", "--repo", required=True, help="repository to create throwaway issues in")
     self_test.add_argument("--stamp", help="label for the scratch project's title")
@@ -9093,7 +9208,7 @@ default chosen for you.""",
     self_test.set_defaults(func=cmd_self_test, projectless=True)
 
     sync = sub.add_parser(
-        "sync", help="add issues that belong on the board and are not on it",
+        "sync", kind=GENERAL, help="Add issues that belong on the board and are not on it",
         epilog=field_help([
             ("--repo", "owner/name", "optional", "one repository; default is every repo in the profile keys"),
             ("--state", "open|closed|all", "optional", "which issues to consider; default open"),
@@ -9127,7 +9242,7 @@ why this is needed:
     sync.set_defaults(func=cmd_sync, needs_repo=True)
 
     board = sub.add_parser(
-        "board", help="scrum, kanban, backlog or roadmap boards over one project",
+        "board", help="Scrum, kanban, backlog or roadmap boards over one project",
         epilog="board types:\n" + "\n".join(
             f"  {k:<9} {v['layout'].replace('_LAYOUT','').lower():<8} {v['filter']:<22} {v['about']}"
             for k, v in BOARD_TYPES.items()
@@ -9135,13 +9250,14 @@ why this is needed:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     board_sub = board.add_subparsers(dest="board_command", required=True)
-    board_lister = board_sub.add_parser("list", help="every board on the project")
+    board_lister = board_sub.add_parser("list", kind=GENERAL, help="List every board on the project")
     board_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
     board_lister.add_argument("-w", "--web", action="store_true",
                               help="open the project in the browser")
     # `view`, as `gh issue/pr/project/repo/run view` all say. It was `show`.
     board_view = board_sub.add_parser(
-        "view", help="render one board's contents as text, or as JSONL",
+        "view", kind=TARGETED, identifier="board",
+        help="Render one board's contents as text, or as JSONL",
         epilog=field_help([
             ("name", "text|number", "required", "the board: its `board list` number, "
                                                 "or a name -- exact, prefix or substring"),
@@ -9162,8 +9278,6 @@ why this is needed:
     # **Only a read may match loosely.** `gh` never fuzzy-matches an identifier,
     # and `board create` converges by exact name, so a write takes a number or
     # the exact name; a read showing the wrong board is visible at once.
-    board_view.add_argument("name", help="the board's number as `board list` prints it, "
-                                         "or its name; a unique prefix or substring is enough")
     # No `display`: `gh` prints for a person with no flag at all (#203).
     board_view.add_argument("--format", choices=["jsonl"],
                             help="JSONL instead of the text view")
@@ -9172,7 +9286,7 @@ why this is needed:
     board_view.add_argument("-w", "--web", action="store_true",
                             help="open the board in the browser")
     board_new = board_sub.add_parser(
-        "create", help="create a board, or converge the one with exactly this name",
+        "create", kind=GENERAL, help="Create a board, or converge the one with exactly this name",
         epilog=field_help([
             ("name", "text", "required", "the board's name, and its identity for "
                                          "convergence: exact"),
@@ -9194,17 +9308,18 @@ why this is needed:
     # One create per noun, as `gh` has: `init` creates and adopts a project, so
     # `project create`, `project owner` and `setup` went (#203). What is left is
     # reading the profile's project and changing its two settings.
-    project = sub.add_parser("project", help="the profile's project: view it, edit its "
+    project = sub.add_parser("project", help="The profile's project: view it, edit its "
                                              "settings")
     project_sub = project.add_subparsers(dest="project_command", required=True)
     project_viewer = project_sub.add_parser(
-        "view", help="the project's owner, number, keys, cadence and title prefix")
+        "view", kind=GENERAL,
+        help="Show the project's owner, number, keys, cadence and title prefix")
     project_viewer.add_argument("--format", choices=["json"], help="JSON instead of text")
     project_viewer.add_argument("-w", "--web", action="store_true",
                                 help="open the project in the browser")
     project_viewer.set_defaults(func=cmd_project_view)
     project_editor = project_sub.add_parser(
-        "edit", help="change the sprint cadence or the issue title prefix",
+        "edit", kind=GENERAL, help="Change the sprint cadence or the issue title prefix",
         epilog="title prefix modes:\n" + "\n".join(
             f"  {name:<10} {example}" for name, example in TITLE_PREFIX_MODES.items()
         ) + """
@@ -9235,14 +9350,16 @@ one, `RFC-2119 keywords`, is somebody's own words and is left alone.""",
     # asks for the project itself.
     project_editor.set_defaults(func=cmd_project_edit, projectless=True)
 
-    sprint = sub.add_parser("sprint", help="sprint iterations, and the repairs around them")
+    sprint = sub.add_parser("sprint", help="Sprint iterations, and the repairs around them")
     sprint_sub = sprint.add_subparsers(dest="sprint_command", required=True)
-    sprint_lister = sprint_sub.add_parser("list", help="every sprint, active and completed")
+    sprint_lister = sprint_sub.add_parser("list", kind=GENERAL,
+                                          help="List every sprint, active and completed")
     sprint_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
     # Optional, and only ever one default target: the current sprint, the way
     # `gh pr view` takes the current branch. Never widened to every sprint.
     sprint_viewer = sprint_sub.add_parser(
-        "view", help="one sprint: its window and its items, by Status",
+        "view", kind=TARGETED, identifier="sprint",
+        help="View one sprint: its window and its items, by Status",
         epilog=field_help([
             ("sprint", "@current|YYYY-MM-DD|title", "optional",
              "default the current sprint; a start date is its identity"),
@@ -9254,19 +9371,18 @@ only thing that can say what is in a sprint now. A completed one is read from
 the sprint:YYYY-MM-DD labels: the field is cleared by every iteration write,
 and the labels are the record of where work was done.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    sprint_viewer.add_argument("sprint", nargs="?", default="@current",
-                               help="@current (the default), a start date, or a title")
     sprint_viewer.add_argument("--format", choices=["jsonl"], help="JSONL instead of text")
     # Each help line says what the command *changes*: `ensure`, `backfill` and
     # `unstamp` keep their names, and none is plain English the way gh's verbs are.
     sprint_ensure = sprint_sub.add_parser(
-        "ensure", help="append sprints until one is current and N lie ahead; "
-                       "rewrites the iterations"
+        "ensure", kind=GENERAL,
+        help="Append sprints until one is current and N lie ahead; rewrites the iterations"
     )
     sprint_ensure.add_argument("--ahead", type=int,
                                help="future sprints to keep; default from the profile")
     sprint_fix = sprint_sub.add_parser(
-        "reconcile", help="set each item's Sprint field from its sprint: labels, board-wide",
+        "reconcile", kind=GENERAL,
+        help="Set each item's Sprint field from its sprint: labels, board-wide",
         epilog=field_help([
             ("--dry-run", "flag", "optional", "list what would change and change nothing"),
         ]) + """
@@ -9288,7 +9404,8 @@ why this exists:
                                  "disagreement is somebody's decision")
 
     sprint_fill = sprint_sub.add_parser(
-        "backfill", help="add sprint: labels to issues that predate them, from history",
+        "backfill", kind=GENERAL,
+        help="Add sprint: labels to issues that predate them, from history",
         epilog=field_help([
             ("--source", "field|timeline", "optional", "where to recover the sprint from"),
             ("--dry-run", "flag", "optional", "list what would be stamped and change nothing"),
@@ -9310,7 +9427,7 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
     sprint_fill.add_argument("--dry-run", action="store_true")
 
     sprint_clear = sprint_sub.add_parser(
-        "unstamp", help="remove sprint: labels from epics and initiatives",
+        "unstamp", kind=GENERAL, help="Remove sprint: labels from epics and initiatives",
         epilog=field_help([
             ("--dry-run", "flag", "optional", "list what would be cleared and change nothing"),
         ]) + """
@@ -9334,7 +9451,7 @@ why this exists:
     sprint_clear.add_argument("--dry-run", action="store_true")
 
     sprint_new = sprint_sub.add_parser(
-        "create", help="append one sprint; rewrites the iterations")
+        "create", kind=GENERAL, help="Append one sprint; rewrites the iterations")
     sprint_new.add_argument("--start", help="ISO date; defaults to the day after the last ends")
     sprint_new.add_argument("--weeks", type=int, help="length; defaults to the field's own duration")
     sprint_new.add_argument("-t", "--title", help="defaults to 'Sprint <n>'")
@@ -9346,12 +9463,12 @@ why this exists:
     # `key` read or wrote depending on whether `--key` was given -- the trap
     # `epic list` fell into, in a different coat. Now a verb each, `add` paired
     # with `delete` as `gh ssh-key` and `gh gpg-key` pair them (#203).
-    key = sub.add_parser("key", help="the keys that label each repository's issues")
+    key = sub.add_parser("key", help="The keys that label each repository's issues")
     key_sub = key.add_subparsers(dest="key_command", required=True)
-    key_lister = key_sub.add_parser("list", help="every key in the profile")
+    key_lister = key_sub.add_parser("list", kind=GENERAL, help="List every key in the profile")
     key_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
     key_lister.set_defaults(func=cmd_key_list, projectless=True)
-    key_adder = key_sub.add_parser("add", help="record a key for a repository")
+    key_adder = key_sub.add_parser("add", kind=GENERAL, help="Record a key for a repository")
     key_adder.add_argument("key", help="uppercase; Jira's rules apply, e.g. ZMBNI")
     key_adder.add_argument("-R", "--repo", help="owner/name; defaults to the working "
                                                 "directory")
@@ -9359,7 +9476,8 @@ why this exists:
                                           "description when it is the project's key")
     key_adder.set_defaults(func=cmd_key_add, needs_repo=True, projectless=True)
     key_deleter = key_sub.add_parser(
-        "delete", help="remove a key from the profile; refused while issues carry it")
+        "delete", kind=GENERAL,
+        help="Remove a key from the profile; refused while issues carry it")
     key_deleter.add_argument("key")
     key_deleter.set_defaults(func=cmd_key_delete, projectless=True)
 
@@ -9367,21 +9485,21 @@ why this exists:
     # way `gh issue` holds them (#202). `move`, `set` and `fix` were top-level;
     # each now takes the issue as its first positional, as every targeted `gh`
     # command does.
-    issue_group = sub.add_parser("issue", help="any work item: list, view, move, "
+    issue_group = sub.add_parser("issue", help="Any work item: list, status, view, move, "
                                                 "edit, close, reopen, reconcile")
     issue_sub = issue_group.add_subparsers(dest="issue_command", required=True)
     add_list(issue_sub, None, "every work item")
     issue_status = issue_sub.add_parser(
-        "status", help="the current sprint: yours by Status, what is in review, "
-                       "what nobody holds")
+        "status", kind=GENERAL,
+        help="The current sprint: yours by Status, what is in review, what nobody holds")
     issue_status.add_argument("--format", choices=["json"], help="JSON instead of text")
     issue_status.set_defaults(func=cmd_issue_status)
     add_view(issue_sub, None, "any work item")
     move = issue_sub.add_parser(
-        "move", help="change status, with the evidence that status requires",
+        "move", kind=TARGETED, identifier="issue",
+        help="Change status, with the evidence that status requires",
         epilog=field_help(MOVE_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    move.add_argument("issue", help=ISSUE_REF_HELP)
     # A second positional, not `--status`: a required second value on a
     # targeted `gh` command is one -- `gh issue transfer <issue> <repo>` -- as
     # in jira-cli's `issue move KEY STATE`. Statuses take a hyphen, so
@@ -9405,7 +9523,8 @@ why this exists:
     move.set_defaults(func=cmd_move, needs_repo=True)
 
     editor = issue_sub.add_parser(
-        "edit", help="edit issues: gh issue edit's flags, the board's fields, the plan",
+        "edit", kind=TARGETED, identifier="issue", many=True,
+        help="Edit issues: gh issue edit's flags, the board's fields, the plan",
         epilog=field_help(EDIT_FIELDS) + """
 
 Several issues at once, as `gh issue edit` takes them: every refusal is
@@ -9417,7 +9536,6 @@ drops `AGILE-12 `; this rebuilds it from the issue's key: and type: labels.
 No --status, and --field Status is refused: Status changes through
 `issue move`, which asks for the evidence Done needs.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    editor.add_argument("issue", nargs="+", help=ISSUE_REF_HELP)
     editor.add_argument("-t", "--title", help="new words for the title; the prefix is kept")
     editor.add_argument("-b", "--body", help="replace the body")
     editor.add_argument("-F", "--body-file", metavar="FILE",
@@ -9447,10 +9565,10 @@ No --status, and --field Status is refused: Status changes through
                                              "its repository")
     editor.set_defaults(func=cmd_edit, needs_repo=True)
     closer = issue_sub.add_parser(
-        "close", help="close it, as gh issue close does, and set Status to Done",
+        "close", kind=TARGETED, identifier="issue",
+        help="Close an issue, as gh issue close does, and set Status to Done",
         epilog=field_help(CLOSE_FIELDS),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    closer.add_argument("issue", help=ISSUE_REF_HELP)
     closer.add_argument("-r", "--reason", choices=list(CLOSE_REASONS), default="completed",
                         help="completed (the default) needs Evidence, as Done does; "
                              "not planned needs none")
@@ -9462,8 +9580,8 @@ No --status, and --field Status is refused: Status changes through
     closer.set_defaults(func=cmd_close, needs_repo=True)
 
     reopener = issue_sub.add_parser(
-        "reopen", help="reopen it, as gh issue reopen does, and move Status back")
-    reopener.add_argument("issue", help=ISSUE_REF_HELP)
+        "reopen", kind=TARGETED, identifier="issue",
+        help="Reopen an issue, as gh issue reopen does, and move Status back")
     reopener.add_argument("--status", default="Todo",
                           help="where it goes back to (default %(default)s); In Progress "
                                "claims it and its sprint")
@@ -9473,8 +9591,8 @@ No --status, and --field Status is refused: Status changes through
     reopener.set_defaults(func=cmd_reopen, needs_repo=True)
 
     fix = issue_sub.add_parser(
-        "reconcile", help="repair one issue's Sprint field from its sprint: labels")
-    fix.add_argument("issue", help=ISSUE_REF_HELP)
+        "reconcile", kind=TARGETED, identifier="issue",
+        help="Repair one issue's Sprint field from its sprint: labels")
     fix.add_argument("--overwrite", action="store_true",
                      help="also change a field that disagrees with its label; by default only "
                           "an empty field is repaired, because a disagreement is somebody's "
@@ -9488,7 +9606,7 @@ No --status, and --field Status is refused: Status changes through
     # and flags because installed hooks call it by them. Renaming it would break
     # every clone's hook silently, which is worse than a usage error.
     unfinished = sub.add_parser(
-        "unfinished",
+        "unfinished", kind=GENERAL,
         description="issues a merged range closed and nobody finished; for a git hook")
     unfinished.add_argument("--range", default="ORIG_HEAD..HEAD",
                             help="the revision range just merged (default: %(default)s)")
@@ -9497,7 +9615,8 @@ No --status, and --field Status is refused: Status changes through
     unfinished.set_defaults(func=cmd_unfinished)
 
 
-    export = sub.add_parser("export", help="items, field values and status history")
+    export = sub.add_parser("export", kind=GENERAL,
+                            help="Export items, field values and status history")
     # `--format`, as `gh project` spells machine output. It was `--csv`.
     export.add_argument("--format", choices=["json", "csv"], default="json",
                         help="json (the default) or csv")
@@ -9533,11 +9652,30 @@ No --status, and --field Status is refused: Status changes through
     )
     export.set_defaults(func=cmd_export)
 
-    validate = sub.add_parser("validate", help="check the conventions in POLICY.md")
+    validate = sub.add_parser("validate", kind=GENERAL,
+                              help="Check the conventions in POLICY.md")
     validate.set_defaults(func=cmd_validate)
 
     inherit_global_flags(parser)
+    describe_from_help(parser)
     return parser
+
+
+def describe_from_help(parser: argparse.ArgumentParser) -> None:
+    """Give each command the one-line help it is listed with, as its description.
+
+    `gh issue --help` opens with *Work with GitHub issues.* -- the same words
+    `gh --help` lists `issue` with. argparse keeps the two apart, so a group's
+    own help opened with nothing at all.
+    """
+    for action in parser._actions:
+        if not isinstance(action, argparse._SubParsersAction):
+            continue
+        for shown in action._choices_actions:
+            child = action.choices[shown.dest]
+            if child.description is None:
+                child.description = shown.help
+            describe_from_help(child)
 
 
 def add_global_flags(parser: argparse.ArgumentParser, *, default) -> None:
