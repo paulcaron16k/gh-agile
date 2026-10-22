@@ -72,7 +72,8 @@ class TestGlobalFlagsEitherSide:
 #: own, meaning the same thing there.
 GH_SHORT_FLAGS = {"-h": "--help", "-R": "--repo", "-L": "--limit", "-s": "--state",
                   "-t": "--title", "-r": "--reason", "-c": "--comment", "-S": "--search",
-                  "-w": "--web"}
+                  "-w": "--web", "-b": "--body", "-F": "--body-file", "-a": "--assignee",
+                  "-l": "--label", "-m": "--milestone", "-e": "--editor"}
 
 
 class TestShortFlagsAreGhs:

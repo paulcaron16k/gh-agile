@@ -1,4 +1,7 @@
-"""`gh agile plan` -- dates on an epic or initiative that already exists. AGILE-183.
+"""`issue edit --start/--target` -- dates on an existing epic or initiative. AGILE-183.
+
+It was `gh agile plan` until #207 folded it into `issue edit`, the verb `gh`
+has for every change to an existing issue.
 
 **The dates arrive after the plan does.** A team designs, breaks the work into
 epics, and schedules later -- when somebody is free, when a quarter is agreed,
@@ -68,8 +71,8 @@ class TestPlannedDates:
 
 
 @pytest.fixture
-def plan(monkeypatch, tool, capsys):
-    """Drive `cmd_plan`, capturing every write and never touching a board."""
+def plan(monkeypatch, tool, capsys, edit_args):
+    """Drive `issue edit`'s dates, capturing every write and never touching a board."""
     def go(start=None, target=None, *, labels=EPIC, on_board=True):
         written, cleared = [], []
         monkeypatch.setattr(tool, "parse_issue_ref", lambda *a, **k: ("o/r", 7))
@@ -81,9 +84,9 @@ def plan(monkeypatch, tool, capsys):
         monkeypatch.setattr(tool, "clear_field",
                             lambda login, project, item, name: cleared.append(name))
         go.written, go.cleared = written, cleared    # survive a SystemExit
-        args = argparse.Namespace(issue="7", repo="o/r", owner="o", project=1,
-                                  start=start, target=target, _config={})
-        tool.cmd_plan(args)
+        argv = [*(["--start", start] if start else []),
+                *(["--target", target] if target else [])]
+        tool.cmd_edit(edit_args("7", *argv))
         return written, cleared, capsys.readouterr().out
     return go
 
@@ -168,7 +171,7 @@ class TestSetRefusesTheSameThing:
     """The sanctioned path and the generic one agree, or the rule is a hope."""
 
     @pytest.fixture
-    def setter(self, monkeypatch, tool):
+    def setter(self, monkeypatch, tool, edit_args):
         def go(field, labels):
             written = []
             monkeypatch.setattr(tool, "parse_issue_ref", lambda *a, **k: ("o/r", 7))
@@ -177,9 +180,7 @@ class TestSetRefusesTheSameThing:
             monkeypatch.setattr(tool, "set_field",
                                 lambda login, project, item, name, v: written.append((name, v)))
             go.written = written
-            args = argparse.Namespace(issue="7", repo="o/r", owner="o", project=1,
-                                      field=field, value="2026-10-01", number=None, _config={})
-            tool.cmd_set(args)
+            tool.cmd_edit(edit_args("7", "--field", field, "--value", "2026-10-01"))
             return written
         return go
 
@@ -189,10 +190,10 @@ class TestSetRefusesTheSameThing:
             setter(field, STORY)
         assert "not an epic or an initiative" in str(caught.value)
 
-    def test_the_refusal_names_plan(self, setter):
+    def test_the_refusal_names_what_a_story_uses(self, setter):
         with pytest.raises(SystemExit) as caught:
             setter("Start date", STORY)
-        assert "gh agile plan" in str(caught.value)
+        assert "--field Sprint" in str(caught.value)
 
     def test_nothing_is_written(self, setter):
         with pytest.raises(SystemExit):
@@ -223,7 +224,6 @@ class TestEveryIssueCommandCanResolveARepository:
         `needs_repo` is the effective value: a group's declaration reaches its
         subcommands, so `issue` declaring it covers `issue move`.
         """
-        import argparse
         found = []
 
         def walk(parser, prefix="", inherited=False):

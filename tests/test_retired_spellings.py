@@ -126,6 +126,12 @@ class TestTheCommandsThatMovedUnderIssue:
          "gh agile issue edit ZMBNI-34 --field Sprint --value @current"),
         (["--project", "4", "fix", "--id", "26", "--dry-run"],
          "gh agile --project 4 issue reconcile 26 --dry-run"),
+        (["set", "--issue", "12", "--field", "Story Points", "--number", "3"],
+         "gh agile issue edit 12 --field 'Story Points' --value 3"),
+        (["issue", "edit", "12", "--field", "Story Points", "--number", "3"],
+         "gh agile issue edit 12 --field 'Story Points' --value 3"),
+        (["plan", "AGILE-12", "--start", "2026-11-02", "--for", "6w"],
+         "gh agile issue edit AGILE-12 --start 2026-11-02 --for 6w"),
     ])
     def test_it_names_the_new_spelling(self, tool, monkeypatch, capsys, argv, suggested):
         code, err = run(tool, monkeypatch, capsys, *argv)
@@ -140,13 +146,14 @@ class TestTheCommandsThatMovedUnderIssue:
 
     @pytest.mark.parametrize("argv,func,dest", [
         (["issue", "move", "12", "in-progress"], "cmd_move", "status"),
-        (["issue", "edit", "12", "--field", "FR", "--value", "x"], "cmd_set", "field"),
+        (["issue", "edit", "12", "--field", "FR", "--value", "x"], "cmd_edit", "field"),
         (["issue", "reconcile", "12", "--dry-run"], "cmd_fix", "dry_run"),
     ])
     def test_each_reaches_its_command(self, tool, argv, func, dest):
         args = tool.build_parser().parse_args(argv)
         assert args.func is getattr(tool, func)
-        assert args.issue == "12" and getattr(args, dest)
+        # `issue edit` takes several, as `gh issue edit` does.
+        assert args.issue in ("12", ["12"]) and getattr(args, dest)
         assert args.needs_repo is True
 
     def test_the_status_is_the_second_positional(self, tool):
@@ -154,7 +161,7 @@ class TestTheCommandsThatMovedUnderIssue:
         args = tool.build_parser().parse_args(["issue", "move", "AGILE-3", "In Progress"])
         assert (args.issue, args.status) == ("AGILE-3", "In Progress")
 
-    @pytest.mark.parametrize("old", ["move", "set", "fix"])
+    @pytest.mark.parametrize("old", ["move", "set", "fix", "plan"])
     def test_the_old_top_level_command_is_gone(self, tool, old):
         with pytest.raises(SystemExit):
             tool.build_parser().parse_args([old, "1"])

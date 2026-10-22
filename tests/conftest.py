@@ -94,3 +94,19 @@ def no_network(monkeypatch, tool):
     monkeypatch.setattr(tool, "gh", forbidden)
     monkeypatch.setattr(tool, "graphql", forbidden)
     return forbidden
+
+
+@pytest.fixture
+def edit_args(tool):
+    """`issue edit ...` parsed by the real parser, with the board already resolved.
+
+    Through the parser rather than a hand-built Namespace, so a test cannot pass
+    an attribute the command line has no way to set -- `--number` lived on in
+    tests for that reason after the flag was gone.
+    """
+    def build(*argv, config=None):
+        args = tool.build_parser().parse_args(["issue", "edit", *argv])
+        args.owner, args.project, args.repo = "o", 1, "o/r"
+        args._config = config or {}
+        return args
+    return build

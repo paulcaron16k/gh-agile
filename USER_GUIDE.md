@@ -1939,16 +1939,17 @@ update a field of type date*. Nothing caught it: the flag is chosen one layer
 below every test that stubs the write, and the fields did not yet exist on the
 board the author used. It is chosen from the field's `dataType` now.
 
-### Dates after the fact: `plan`
+### Dates after the fact: `issue edit --start`
 
 The flags above only exist while the issue is being created, which is the one
 moment a team usually does not know the answer. **A team designs and plans
 before it staffs and schedules** — the epics are broken out first, and the dates
 arrive when somebody is free, when a quarter is agreed, when a dependency lands.
-So `plan` sets them on an epic or an initiative that already exists:
+So `issue edit` sets them on an epic or an initiative that already exists, with
+the same three flags `epic create` takes:
 
 ```bash
-gh agile plan AGILE-173 --start 2026-10-01 --target 2026-12-19
+gh agile issue edit AGILE-173 --start 2026-10-01 --target 2026-12-19
 #   #173 Start date = 2026-10-01
 #   #173 Target date = 2026-12-19
 ```
@@ -1956,7 +1957,7 @@ gh agile plan AGILE-173 --start 2026-10-01 --target 2026-12-19
 Either flag alone is fine, and says nothing about the other:
 
 ```bash
-gh agile plan AGILE-173 --target 2027-03-31
+gh agile issue edit AGILE-173 --target 2027-03-31
 ```
 
 **A plan that slips is re-planned, and a date set in error has to come off.**
@@ -1964,7 +1965,7 @@ gh agile plan AGILE-173 --target 2027-03-31
 reads as a decision rather than a typo:
 
 ```bash
-gh agile plan AGILE-173 --start none --target 2027-03-31
+gh agile issue edit AGILE-173 --start none --target 2027-03-31
 #   #173 Start date cleared
 #   #173 Target date = 2027-03-31
 ```
@@ -1974,7 +1975,7 @@ and works out the target — which is what a WBS has always done, and what the
 roadmap bar is:
 
 ```bash
-gh agile plan AGILE-173 --start 2026-10-01 --for 6w
+gh agile issue edit AGILE-173 --start 2026-10-01 --for 6w
 #   #173 Start date = 2026-10-01
 #   #173 Target date = 2026-11-11 (6w from 2026-10-01)
 ```
@@ -1999,7 +2000,7 @@ the sprint windows the tool already prints:
 gh agile sprint list
 #   0005 W40-2026 2026-09-28 .. 2026-10-11  (current)
 
-gh agile plan AGILE-173 --start 2026-09-28 --for 1sprint
+gh agile issue edit AGILE-173 --start 2026-09-28 --for 1sprint
 #   #173 Target date = 2026-10-11 (1sprint from 2026-09-28)
 ```
 
@@ -2007,7 +2008,7 @@ gh agile plan AGILE-173 --start 2026-09-28 --for 1sprint
 re-sizing a phase does not mean restating a start that has not changed:
 
 ```bash
-gh agile plan AGILE-173 --for 8w
+gh agile issue edit AGILE-173 --for 8w
 ```
 
 `--for` and `--target` together are refused. They answer the same question and
@@ -2020,22 +2021,22 @@ not the sprints the children sat in. The duration is typed by a planner, which
 is what keeps the result a plan rather than a forecast wearing a plan's clothes
 — and it is why `Target date` can be compared against what actually happened.
 
-**Both dates are one decision, which is why this is one command.** The precedent
-is `issue move`: starting work is one call because Status, Sprint, the label and the
-assignee all follow from it. `gh agile issue edit ISSUE --field "Start date"` still works and
-writes one field per invocation, so re-planning through it is two commands, two
-board writes, and a window where the plan is half one thing and half another.
+**Both dates are one decision, which is why they are written together.** Both
+are parsed before either is written, in one `issue edit`. `--field "Start date"
+--value ...` still reaches the same field, one at a time; the date flags are
+the spelling for a plan. (They were a command of their own, `plan`, until #207
+folded it into `issue edit` -- the verb `gh` has for every change to an
+existing issue.)
 
 **Only an epic or an initiative can be planned.** A story's dates are its sprint
 — a level that spans sprints holds no `Sprint` field, which is why these two
-date fields exist for the levels above and not below. `issue edit` refuses a date on a
-story for the same reason, so the sanctioned path and the generic one agree:
+date fields exist for the levels above and not below. `--field "Start date"` is
+refused on a story too, so the two spellings agree:
 
 ```bash
-gh agile plan AGILE-164 --start 2026-10-01
+gh agile issue edit AGILE-164 --start 2026-10-01
 #   o/r#164 is not an epic or an initiative, and only those carry a plan.
-#     A story's dates are its sprint -- #115 is the rule that a level which spans
-#     sprints holds none, which is why these two fields exist for the levels above.
+#     A story's dates are its sprint: `gh agile issue edit 164 --field Sprint --value ...`.
 ```
 
 Both dates are parsed **before either is written**, so one bad date writes
@@ -2341,6 +2342,21 @@ gh agile epic create -t "Snapshot expiry and orphan removal" --intent "..." --ac
 #   epic #31: Snapshot expiry and orphan removal
 ```
 
+Every `create` takes `gh issue create`'s flags: `-b/--body` and `-F/--body-file`
+(`-` for stdin), `-a/--assignee`, `-l/--label` and `-m/--milestone`. A body is
+read as `## Heading` sections, so a file with `## Intent` and `## Acceptance`
+files the same issue as the two flags, and text with no heading is the Intent:
+
+```bash
+gh agile epic create -t "Snapshot expiry and orphan removal" -F epic.md -a @me
+```
+
+Two differences from `gh`, both on purpose. A `type:`, `key:`, `initiative:` or
+`sprint:` label given to `-l` is refused: the tool writes those, and each one
+means something another command keeps true. And there is no `-e/--editor` and
+no prompting -- a missing title is refused and names `-t`, so a script and a
+person type the same command.
+
 **2 — a story under it**
 
 ```bash
@@ -2396,6 +2412,22 @@ To place it in a different sprint, say so:
 ```bash
 gh agile issue edit ZMBNI-32 --field Sprint --value "Sprint 2"
 ```
+
+`issue edit` is `gh issue edit` with the board added. It takes several issues,
+`gh`'s own flags -- `-b`, `-F`, `--add-label`, `--remove-label`,
+`--add-assignee`, `--remove-assignee`, `-m`, `--remove-milestone` -- and the
+same field flags `story create` takes, so a value is written the same way
+whichever command writes it:
+
+```bash
+gh agile issue edit ZMBNI-32 ZMBNI-33 --points 3
+gh agile issue edit ZMBNI-32 -t "Compute the reachable set, once"
+#   #32 title = ZMBNI-32 Compute the reachable set, once
+```
+
+`-t` keeps the prefix: on a profile with `issue_title_prefix` set, plain `gh
+issue edit -t` drops `ZMBNI-32 `, and this rebuilds it. Every refusal is
+checked on every issue named before anything is written to any of them.
 
 **A story may stand alone, if you say so.** `--epic none` files one with no
 parent:
@@ -2849,9 +2881,9 @@ gh agile issue move --help
 | `board list` / `board show` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint create` | Show or append iterations |
-| `initiative create` / `epic create` / `story create` | Create work items with their parent, labels and fields; the title is `-t`, as in `gh issue create` |
+| `initiative create` / `epic create` / `story create` / `task create` | Create work items with their parent, labels and fields; `gh issue create`'s flags, the title as `-t` |
 | `initiative` / `epic` / `story` / `issue` `list` and `view` | List one level from the board, by Status; view one item with its children, its `sprint:` labels and its checks. `issue` takes any level |
-| `issue edit` | Set one field on an item already on the board |
+| `issue edit` | Edit one or more issues: `gh issue edit`'s flags, the board's fields, an epic's dates; `-t` keeps the prefix |
 | `issue move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
 | `issue close` / `issue reopen` | Close as completed (needs Evidence) or `-r "not planned"`, setting Status to `Done`; reopen and move Status back |
 | `issue reconcile` | Repair one issue's Sprint field from its `sprint:` labels |
