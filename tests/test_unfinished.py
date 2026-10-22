@@ -264,28 +264,28 @@ class TestInstallingTheHook:
         return tmp_path / ".git" / "hooks" / "post-merge"
 
     def test_it_writes_the_hook(self, hook, repo, capsys):
-        assert hook.cmd_hooks(argparse.Namespace()) == 0
+        assert hook.install_hook().startswith("installed")
         assert repo.exists()
 
     def test_the_hook_is_executable(self, hook, repo):
-        hook.cmd_hooks(argparse.Namespace())
+        hook.install_hook()
         assert repo.stat().st_mode & 0o111
 
     def test_the_hook_reaches_no_path_inside_the_extension(self, hook, repo):
         """The defect this story exists for: `$root/scripts/...` resolves
         against the *consumer's* repository, where nothing of the sort is."""
-        hook.cmd_hooks(argparse.Namespace())
+        hook.install_hook()
         text = repo.read_text()
         assert "scripts/" not in text and "python3" not in text
 
     def test_it_calls_the_command(self, hook, repo):
-        hook.cmd_hooks(argparse.Namespace())
+        hook.install_hook()
         assert "gh agile unfinished --quiet" in repo.read_text()
 
     def test_it_cannot_fail_a_pull(self, hook, repo):
         """Every `exit` in it, not merely the last one: the failure branch
         added by #192 is a second way out of the script."""
-        hook.cmd_hooks(argparse.Namespace())
+        hook.install_hook()
         text = repo.read_text()
         exits = [line.strip() for line in text.splitlines()
                  if line.strip().startswith("exit ")]
@@ -296,30 +296,26 @@ class TestInstallingTheHook:
         """Somebody who installed one last month gets this by running it again,
         not by reading a changelog."""
         repo.write_text(f"#!/bin/sh\n{hook.HOOK_MARKER} -- older\n")
-        assert hook.cmd_hooks(argparse.Namespace()) == 0
+        said = hook.install_hook()
         assert "gh agile unfinished" in repo.read_text()
-        assert "replaced" in capsys.readouterr().out
+        assert "replaced" in said
 
     def test_somebody_elses_hook_is_not(self, hook, repo):
         """Overwriting a hook because the filename matched would be the worst
         kind of helpfulness."""
         repo.write_text("#!/bin/sh\necho mine\n")
-        with pytest.raises(SystemExit) as caught:
-            hook.cmd_hooks(argparse.Namespace())
-        assert "not mine to replace" in str(caught.value)
+        assert "not mine to replace" in hook.install_hook()
         assert repo.read_text() == "#!/bin/sh\necho mine\n"
 
     def test_and_says_what_to_add_instead(self, hook, repo):
         repo.write_text("#!/bin/sh\necho mine\n")
-        with pytest.raises(SystemExit) as caught:
-            hook.cmd_hooks(argparse.Namespace())
-        assert "gh agile unfinished --quiet" in str(caught.value)
+        assert "gh agile unfinished --quiet" in hook.install_hook()
 
-    def test_outside_a_repository_it_refuses(self, hook, monkeypatch):
+    def test_outside_a_repository_it_says_so(self, hook, monkeypatch):
+        """Said, not fatal: `init` has done its real work by the time it gets
+        here, and a clone-less run is not a failed one."""
         monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(128, ""))
-        with pytest.raises(SystemExit) as caught:
-            hook.cmd_hooks(argparse.Namespace())
-        assert "not inside a git repository" in str(caught.value)
+        assert "not inside a git repository" in hook.install_hook()
 
 
 class TestThisRepositorysOwnHookAgrees:

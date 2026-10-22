@@ -35,8 +35,8 @@ WITHOUT_NUMBER = {"keys": [{"key": "AGILE", "repo": "o/r"}]}
 #: A runnable command line for each command these tests name.
 COMMAND_LINES = {
     "validate": ["validate"], "export": ["export"], "board": ["board", "list"],
-    "sprint": ["sprint", "list"], "sync": ["sync"], "project": ["project", "owner"],
-    "key": ["key"], "self-test": ["self-test", "--repo", "o/r"],
+    "sprint": ["sprint", "list"], "sync": ["sync"], "project": ["project", "edit", "--title-prefix", "off"],
+    "key": ["key", "list"], "self-test": ["self-test", "--repo", "o/r"],
 }
 
 
@@ -129,7 +129,7 @@ class TestAProfileThatNamesNoNumber:
         assert ".github/agile.json" in message
 
     def test_it_points_at_the_bootstrap(self, message):
-        assert "gh agile project create" in message
+        assert "gh agile init" in message
 
     def test_it_renders_no_none(self, message):
         assert "None" not in message
@@ -145,8 +145,9 @@ class TestWhatMustStillWork:
 
     @pytest.mark.parametrize("command", ["project", "key", "self-test"])
     def test_the_projectless_commands_are_exempt(self, tool, defaults, outside, command):
-        """`project create` is what *writes* project.number; demanding one here
-        would mean needing a board before you could record the board."""
+        """`init` is what *writes* project.number, and `project edit` and `key`
+        touch only the profile; demanding a number would mean needing a board
+        before you could record the board."""
         assert defaults(command).project is None
 
     def test_the_exemptions_are_exactly_these(self, tool):
@@ -163,7 +164,7 @@ class TestWhatMustStillWork:
 
         exempt = {path[0] for path, parser in walk(tool.build_parser())
                   if parser.get_default("projectless")}
-        assert exempt == {"project", "key", "self-test", "task", "init", "hooks"}
+        assert exempt == {"project", "key", "self-test", "task", "init"}
 
 
 class TestItCostsNoNetworkCall:

@@ -46,10 +46,10 @@ class TestItReadsTheRealParser:
         assert ("validate",) in leaves and ("sync",) in leaves
 
     def test_it_finds_leaves_not_just_parents(self, guard):
-        """A guide showing `board list` and never `board show` has not
-        documented `board show`."""
+        """A guide showing `board list` and never `board view` has not
+        documented `board view`."""
         leaves = guard.parser_leaves()
-        assert ("board", "show") in leaves
+        assert ("board", "view") in leaves
         assert ("board",) not in leaves
 
     def test_an_option_s_choices_are_not_mistaken_for_subcommands(self, guard):
@@ -66,14 +66,14 @@ class TestItReadsTheRealParser:
 
 
 class TestItCannotPassByFindingNothing:
-    def test_an_unreadable_help_is_fatal(self, guard, monkeypatch):
-        """This reads the help by pattern. A help format that changed would
-        otherwise make every command exempt and the check green -- which is
-        what happened once, spotted only by a summary line reading
-        `-2 command(s) require documenting`."""
-        monkeypatch.setattr(guard, "help_for", lambda words: "no positionals here")
+    def test_a_parser_with_nothing_found_is_fatal(self, guard):
+        """An extraction that stopped matching would otherwise make every
+        command exempt and the check green -- which is what happened once,
+        spotted only by a summary line reading `-2 command(s) require
+        documenting`."""
+        import argparse
         with pytest.raises(SystemExit) as exit_info:
-            guard.parser_leaves()
+            guard.parser_leaves(argparse.ArgumentParser())
         assert "stopped matching" in str(exit_info.value)
 
 
@@ -121,7 +121,7 @@ class TestTheReport:
         assert guard.coverage_problems([(1, "gh agile validate")]) == []
 
     def test_an_exempt_command_is_not(self, guard, monkeypatch):
-        monkeypatch.setattr(guard, "parser_leaves", lambda: {("self-test",)})
+        monkeypatch.setattr(guard, "parser_leaves", lambda: {("task", "create")})
         assert guard.coverage_problems([]) == []
 
 
@@ -138,8 +138,11 @@ class TestTheExemptions:
         leaves = guard.parser_leaves()
         assert set(guard.UNDOCUMENTED_OK) <= leaves
 
-    def test_self_test_is_exempt_as_a_maintainer_target(self, guard):
-        assert ("self-test",) in guard.UNDOCUMENTED_OK
+    @pytest.mark.parametrize("hidden", ["self-test", "unfinished"])
+    def test_a_hidden_command_is_owed_no_documentation(self, guard, hidden):
+        """Hidden from `--help` (#203), so not part of what a reader is shown:
+        `self-test` is a maintainer target and `unfinished` is called by a hook."""
+        assert (hidden,) not in guard.parser_leaves()
 
     def test_task_is_exempt_deliberately_not_accidentally(self, guard):
         """Filing tasks as issues is not promoted: POLICY.md §2 still

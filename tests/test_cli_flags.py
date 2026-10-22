@@ -99,11 +99,12 @@ class TestShortFlagsAreGhs:
         assert flag.option_strings == ["--add-assignee"]
 
     def test_export_state_is_not_s(self, tool):
-        """`export --state` is a watermark file, not open/closed/all; `-s` there
-        would be `gh`'s letter on a different meaning. #203 renames the flag."""
+        """`export`'s watermark file is `--state-file` (#203): `--state` is
+        open/closed/all everywhere else, as in `gh`."""
         export = dict(subparsers(tool.build_parser()))["export"]
-        flag = next(a for a in export._actions if "--state" in a.option_strings)
-        assert "-s" not in flag.option_strings
+        flag = next(a for a in export._actions if "--state-file" in a.option_strings)
+        assert flag.option_strings == ["--state-file"]
+        assert not any("--state" in a.option_strings for a in export._actions)
 
 
 class TestOneIssueGrammar:

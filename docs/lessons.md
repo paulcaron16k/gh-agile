@@ -131,6 +131,16 @@ issue created moments earlier. **Target by issue number, never by a title search
 writes.** The recovery from that miss — `sync --adopt --state all` — swept every live issue onto a scratch
 project and labelled all of them, which is a large blast radius for a lookup.
 
+**A project's item list can omit an item the issue says it is on, for longer than any lag.** On
+2026-10-22, `story create` boarded agile-test#57: `issue.projectItems` named project 19 and item
+`PVTI_lAHOAAxIms4BgnrQzhCx3Vs`, `isArchived: false`, and the item held its Story Points. `projectV2.items`
+reported `totalCount: 14` without it for over 30 minutes, polled every 30 seconds, and `gh project
+item-add` returned the *same* item id without changing the count. Every board-side command — `issue edit`,
+`issue close`, anything through `board_item_for` — answered *not on project 19*. The other issues created
+the same way that day were listed. **When the board and the issue disagree about membership, read both
+before believing either**, and do not file a bug against the tool's lookup on the strength of one; the
+probe was closed with `gh issue close` directly.
+
 ## About destructive operations
 
 **Destroy-then-repair needs the repair budgeted first.** The GraphQL budget ran out mid-restore during

@@ -165,3 +165,43 @@ class TestTheCommandsThatMovedUnderIssue:
     def test_the_old_top_level_command_is_gone(self, tool, old):
         with pytest.raises(SystemExit):
             tool.build_parser().parse_args([old, "1"])
+
+
+class TestTheBoardsDialect:
+    """#203: everything that is not a work item, renamed to `gh`'s words."""
+
+    @pytest.mark.parametrize("argv,suggested", [
+        (["board", "show", "Backlog", "--format", "jsonl"],
+         "gh agile board view Backlog --format jsonl"),
+        (["board", "create", "--name", "Team X", "--type", "scrum", "--save"],
+         "gh agile board create 'Team X' --type scrum --save"),
+        (["setup"], "gh agile init"),
+        (["setup", "--spec", "f.json"], "gh agile init --spec f.json"),
+        (["hooks"], "gh agile init"),
+        (["project", "create", "--title", "B", "--key", "K"], "gh agile init -t B --key K"),
+        (["project", "owner"], "gh agile init"),
+        (["--owner", "org", "project", "owner"], "gh agile --owner org init"),
+        (["project", "sprint-template", "--template", "2-week"],
+         "gh agile project edit --sprint-template 2-week"),
+        (["project", "title-prefix", "--mode", "key", "--backfill", "--dry-run"],
+         "gh agile project edit --title-prefix key --backfill --dry-run"),
+        (["key", "--key", "ZMBNI", "--name", "Z"], "gh agile key add ZMBNI --name Z"),
+        (["key"], "gh agile key list"),
+        (["export", "--csv", "--out-dir", "x"], "gh agile export --format csv --out-dir x"),
+        (["export", "--state", "w.json"], "gh agile export --state-file w.json"),
+        (["export", "--state=w.json"], "gh agile export --state-file=w.json"),
+        (["export", "--grain", "both"], "gh agile export --grain issues,events"),
+        (["sync", "--query", "label:x"], "gh agile sync --search label:x"),
+    ])
+    def test_it_names_the_new_spelling(self, tool, monkeypatch, capsys, argv, suggested):
+        code, err = run(tool, monkeypatch, capsys, *argv)
+        assert code == 2
+        assert suggested in err
+
+    @pytest.mark.parametrize("argv", [
+        ["key", "list"], ["key", "add", "Z"], ["key", "--help"], ["export"],
+        ["export", "--format", "csv"], ["sync", "--state", "all"], ["board", "view", "x"],
+        ["board", "create", "X", "--type", "scrum"],
+    ])
+    def test_the_current_spelling_is_left_alone(self, tool, argv):
+        assert tool.retired_spelling(argv) is None

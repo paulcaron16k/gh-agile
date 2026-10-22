@@ -117,4 +117,4 @@ class TestCallersReachTheOrganisation:
         roots({"user": {"projectV2": {"field": None}}, "organization": None})
         with pytest.raises(SystemExit) as exit_info:
             tool.sprint_field("someone", 4)
-        assert "gh agile setup" in str(exit_info.value)
+        assert "gh agile init" in str(exit_info.value)

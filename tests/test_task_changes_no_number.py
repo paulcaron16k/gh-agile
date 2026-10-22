@@ -144,7 +144,7 @@ class TestSyncLeavesTasksOffTheBoard:
                                 lambda cfg: [{"key": "AGILE", "repo": "o/r"}])
             monkeypatch.setattr(tool, "gh", lambda a, **k: json.dumps(issues))
             args = argparse.Namespace(owner="o", project=1, repo=None, key=None,
-                                      state="open", limit=200, query=query,
+                                      state="open", limit=200, search=query,
                                       dry_run=True, adopt=False, yes=False,
                                       _config={"keys": [{"key": "AGILE", "repo": "o/r"}]})
             tool.cmd_sync(args)

@@ -23,6 +23,8 @@ SANDBOX_PROJECT := 19
 
 OWNER ?= $(SANDBOX_OWNER)
 REPO  ?= $(SANDBOX_REPO)
+# The key `make scratch` gives `init`: the sandbox's own, whose labels exist.
+SCRATCH_KEY ?= TEST
 
 VENV  ?= .venv
 PY    := $(VENV)/bin/python
@@ -177,9 +179,12 @@ self-test:
 # target in this repository that only works when a checkout of another repository
 # happens to be beside it is a worse failure than a duplicated 14.
 #
-# No `boards` in it, so a scratch project gets fields and labels only. Add one by
-# hand when the thing under test is a board:
-#     ./gh-agile --config <profile> --project <n> board create --name X --type scrum
+# `init` converges it, as it would any project: fields, labels and the starter
+# boards. `--no-hooks`, because this runs in this checkout, whose post-merge hook
+# is `make hooks`'s and not init's. `--key` is the sandbox's own, so the only
+# label it can add to the sandbox is one already there. Add a board by hand when
+# the thing under test is one:
+#     ./gh-agile --config <profile> --project <n> board create X --type scrum
 scratch:
 	$(require_sandbox)
 	@set -e; \
@@ -190,13 +195,14 @@ scratch:
 	 trap 'rm -f "$$prof"' EXIT; \
 	 printf '{"project": {"number": %s}, "sprint": {"template": "2-week", ' "$$num" > "$$prof"; \
 	 printf '"cadence_days": 14, "start_day": "monday", "ahead": 2}}\n' >> "$$prof"; \
-	 if ./gh-agile --config "$$prof" --owner $(OWNER) --project $$num setup --repo $(REPO); then \
+	 if ./gh-agile --config "$$prof" --owner $(OWNER) --project $$num init --repo $(REPO) \
+	      --key $(SCRATCH_KEY) --no-hooks; then \
 	   echo; \
 	   echo "  scratch project #$$num  https://github.com/users/$(OWNER)/projects/$$num"; \
 	   echo "  tear down with: make teardown NUM=$$num"; \
 	 else \
 	   echo; \
-	   echo "  setup FAILED on scratch project #$$num, which is now incomplete."; \
+	   echo "  init FAILED on scratch project #$$num, which is now incomplete."; \
 	   echo "  tear down with: make teardown NUM=$$num"; \
 	   exit 2; \
 	 fi
