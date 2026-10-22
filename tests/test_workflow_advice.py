@@ -279,7 +279,7 @@ class TestTheGuideAgreesWithTheTable:
         """And names it as the command a consumer can run, not as a Makefile
         target of this repository -- #193."""
         text = self.guide()
-        assert "gh agile hooks" in text and "post-merge" in text
+        assert "gh agile init" in text and "post-merge" in text
 
     def test_auto_close_is_still_refused_in_both(self, tool):
         row = next(line for line in self.guide().splitlines()

@@ -118,7 +118,7 @@ class TestRefusals:
     def test_an_absent_field_is_still_refused(self, written):
         with pytest.raises(SystemExit) as caught:
             written("Nonexistent", "x")
-        assert "gh agile setup" in str(caught.value)
+        assert "gh agile init" in str(caught.value)
 
 
 class TestTheRecordTheDispatchReads:

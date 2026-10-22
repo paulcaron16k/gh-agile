@@ -27,7 +27,10 @@ import pytest
 def args_for(tool, tmp_path, **overrides):
     base = {"key": "AGILE", "title": "A board", "sprint_template": "2-week",
             "title_prefix": "off", "repo": "o/r", "owner": "o", "project": None,
-            "config": str(tmp_path / "agile.json"), "_config": {}}
+            "config": str(tmp_path / "agile.json"), "_config": {},
+            # The hook is stubbed where it is tested; a real one would land in
+            # this checkout's own `.git/hooks`.
+            "spec": None, "no_hooks": True}
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -42,9 +45,9 @@ def run(monkeypatch, tool, tmp_path, capsys):
                                              "Item closed": True,
                                              "Auto-add sub-issues to project": True})
         calls = {"project": [], "setup": [], "workflows": []}
-        monkeypatch.setattr(tool, "cmd_project",
-                            lambda a: calls["project"].append(a) or 0)
-        monkeypatch.setattr(tool, "cmd_setup",
+        monkeypatch.setattr(tool, "create_project",
+                            lambda a, config, target: calls["project"].append(a) or 0)
+        monkeypatch.setattr(tool, "converge_project",
                             lambda a: calls["setup"].append(a) or 0)
         monkeypatch.setattr(tool, "project_workflows",
                             lambda login, number:
@@ -137,8 +140,8 @@ class TestTheSequence:
 
     def test_a_project_is_created_when_none_is_named(self, tool, run):
         _code, calls, _out, _args = run(project=None)
-        assert calls["project"], "expected `project create`"
-        assert calls["project"][0].project_command == "create"
+        assert calls["project"], "expected the project to be created"
+        assert calls["project"][0].title == "A board"
 
     def test_and_not_created_when_one_is_adopted(self, tool, run):
         _code, calls, _out, _args = run(project=7)
@@ -257,8 +260,8 @@ class TestAFreshCloneIsNotRefused:
     Step 1 created the project through `cmd_project` with `sprint_template=None`,
     and `project create` refuses without a template unless the profile already
     has one. `init` recorded its own only in step 2. Every test above stubs
-    `cmd_project`, which is how it shipped -- so this one runs the real one and
-    stubs only `gh`.
+    the creation, which is how it shipped -- so this one runs the real
+    `create_project` (which replaced `project create` in #203) and stubs only `gh`.
     """
 
     @pytest.fixture
@@ -272,7 +275,8 @@ class TestAFreshCloneIsNotRefused:
             raise AssertionError(f"unexpected gh call: {argv}")
 
         monkeypatch.setattr(tool, "gh", fake_gh)
-        monkeypatch.setattr(tool, "cmd_setup", lambda a: calls["setup"].append(a) or 0)
+        monkeypatch.setattr(tool, "converge_project",
+                            lambda a: calls["setup"].append(a) or 0)
         monkeypatch.setattr(tool, "project_workflows", lambda *a: {})
         monkeypatch.setattr(tool, "pull_request_items", lambda *a: 0)
 
@@ -339,13 +343,13 @@ class TestASecondKeySaysSo:
             args = argparse.Namespace(key="ZMBNI", repo="o/zamboni", name=None,
                                       project=None, owner="o", _config=config,
                                       config=str(tmp_path / "agile.json"))
-            tool.cmd_key(args)
+            tool.cmd_key_add(args)
             return capsys.readouterr().out
         return go
 
     def test_the_second_key_names_the_board(self, tool, record):
         out = record({"keys": [{"key": "AGILE", "repo": "o/agile"}]})
-        assert 'board create --name "Engineering: all work" --type kanban --save' in out
+        assert 'board create "Engineering: all work" --type kanban --save' in out
 
     def test_the_first_key_does_not(self, tool, record):
         assert "board create" not in record({})
@@ -354,3 +358,106 @@ class TestASecondKeySaysSo:
         out = record({"keys": [{"key": "AGILE", "repo": "o/agile"}],
                       "boards": [{"name": "Flow", "type": "kanban"}]})
         assert "board create" not in out
+
+
+class TestTheHook:
+    """`init` installs the post-merge hook, which `gh agile hooks` used to (#203).
+
+    `init` is what a person runs in a fresh clone, it is idempotent, and the
+    hook is per-clone setup like everything else it converges.
+    """
+
+    def test_it_is_installed_by_default(self, tool, run, monkeypatch):
+        monkeypatch.setattr(tool, "install_hook", lambda: "installed .git/hooks/post-merge")
+        _code, _calls, out, _args = run(project=7, no_hooks=False)
+        assert "post-merge hook: installed" in out
+
+    def test_no_hooks_leaves_it_alone(self, tool, run, monkeypatch):
+        monkeypatch.setattr(tool, "install_hook",
+                            lambda: pytest.fail("installed despite --no-hooks"))
+        _code, _calls, out, _args = run(project=7, no_hooks=True)
+        assert "not installed (--no-hooks)" in out
+
+    def test_hooks_is_no_longer_a_command(self, tool):
+        with pytest.raises(SystemExit):
+            tool.build_parser().parse_args(["hooks"])
+
+    @pytest.fixture
+    def git_dir(self, tool, tmp_path, monkeypatch):
+        import subprocess as sp
+        real = sp.run
+
+        def fake_run(argv, **kwargs):
+            if argv[:2] == ["git", "rev-parse"]:
+                return sp.CompletedProcess(argv, 0, stdout=f"{tmp_path}\n", stderr="")
+            return real(argv, **kwargs)
+        monkeypatch.setattr(tool.subprocess, "run", fake_run)
+        return tmp_path / "hooks" / "post-merge"
+
+    def test_a_first_run_installs(self, tool, git_dir):
+        assert tool.install_hook().startswith("installed")
+        assert git_dir.read_text() == tool.POST_MERGE_HOOK
+
+    def test_a_second_run_reports_it_present(self, tool, git_dir):
+        tool.install_hook()
+        assert tool.install_hook().startswith("present")
+
+    def test_a_stale_one_is_replaced_and_says_so(self, tool, git_dir):
+        git_dir.parent.mkdir(parents=True)
+        git_dir.write_text(f"#!/bin/sh\n{tool.HOOK_MARKER} -- an older one\n")
+        assert tool.install_hook().startswith("replaced a stale")
+        assert git_dir.read_text() == tool.POST_MERGE_HOOK
+
+    def test_somebody_elses_is_named_and_kept(self, tool, git_dir):
+        git_dir.parent.mkdir(parents=True)
+        git_dir.write_text("#!/bin/sh\necho mine\n")
+        said = tool.install_hook()
+        assert "not mine to replace" in said and "unfinished --quiet" in said
+        assert git_dir.read_text() == "#!/bin/sh\necho mine\n"
+
+
+class TestASecondRunKeepsTheTitlePrefix:
+    """A bare re-run reset `key+type` to `off` on the sandbox: the flag
+    defaulted to `off` and was written every time. Now that running `init`
+    again *is* the converge, that was a silent rename of every new issue."""
+
+    PROFILE = {"project": {"number": 4, "owner": "o", "issue_title_prefix": "key+type"},
+               "keys": [{"key": "AGILE", "repo": "o/r"}], "sprint": {"template": "2-week"}}
+
+    def test_absent_leaves_the_profiles(self, tool, run, tmp_path):
+        run(project=None, title_prefix=None, _config=json.loads(json.dumps(self.PROFILE)))
+        assert written(tmp_path)["project"]["issue_title_prefix"] == "key+type"
+
+    def test_given_replaces_it(self, tool, run, tmp_path):
+        run(project=None, title_prefix="key", _config=json.loads(json.dumps(self.PROFILE)))
+        assert written(tmp_path)["project"]["issue_title_prefix"] == "key"
+
+    def test_a_new_profile_gets_off(self, tool, run, tmp_path):
+        run(project=7, title_prefix=None)
+        assert written(tmp_path)["project"]["issue_title_prefix"] == "off"
+
+    def test_the_flag_has_no_default(self, tool):
+        assert tool.build_parser().parse_args(["init"]).title_prefix is None
+
+
+class TestTheOwnerIsRecorded:
+    """`project owner` went in #203; `init` records the owner a profile lacks."""
+
+    def test_an_older_profile_gets_its_owner(self, tool, run, tmp_path):
+        run(project=None, _config={"project": {"number": 4}, "keys": [
+            {"key": "AGILE", "repo": "o/r"}], "sprint": {"template": "2-week"}})
+        assert written(tmp_path)["project"]["owner"] == "o"
+
+    def test_a_recorded_owner_is_left_alone(self, tool, run, tmp_path):
+        run(project=None, _config={"project": {"number": 4, "owner": "team"}, "keys": [
+            {"key": "AGILE", "repo": "o/r"}], "sprint": {"template": "2-week"}})
+        assert written(tmp_path)["project"]["owner"] == "team"
+
+    @pytest.mark.parametrize("old", [["setup"], ["project", "create", "-t", "x"],
+                                     ["project", "owner"]])
+    def test_the_other_doors_are_gone(self, tool, old):
+        with pytest.raises(SystemExit):
+            tool.build_parser().parse_args(old)
+
+    def test_spec_moved_onto_init(self, tool):
+        assert tool.build_parser().parse_args(["init", "--spec", "f.json"]).spec == "f.json"

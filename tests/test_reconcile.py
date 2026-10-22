@@ -138,7 +138,7 @@ class TestDamageVersusDecision:
         gap reopens in whichever one was missed."""
         import inspect
 
-        for function in (tool.cmd_setup, tool.ensure_sprints, tool.cmd_sprint):
+        for function in (tool.converge_project, tool.ensure_sprints, tool.cmd_sprint):
             source = inspect.getsource(function)
             if "restore_assignments" not in source:
                 continue

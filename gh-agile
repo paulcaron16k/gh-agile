@@ -32,7 +32,7 @@ What it is for
     natural home and are organization-only.
 
 **3. A CLI-forward epic and story tool, for a developer or an agent.**
-    `epic`, `story`, `move` and `set` do in one call what the web UI does in
+    `epic create`, `story create`, `issue move` and `issue edit` do in one call what the web UI does in
     several: create the issue, attach it to its epic as a sub-issue, board it,
     label it, and set its fields. Every command is non-interactive when given
     explicit input, so an agent can drive the same sequence a person types;
@@ -41,7 +41,7 @@ What it is for
 **4. Project and team boards: scrum, kanban, backlog, roadmap.**
     A board is a *view with a filter*, and the filter is what makes it scrum
     (time-boxed to `sprint:@current`) or kanban (continuous). `board create
-    --type` builds them, `--save` records them in the profile, and `setup`
+    --type` builds them, `--save` records them in the profile, and `init`
     converges them thereafter. One project, many boards — a second project would
     give each item a second, independently divergent set of field values.
 
@@ -61,7 +61,7 @@ Also, because Jira has them and their absence is felt
     "current" is never ambiguous. Moving a story to `In Progress` assigns the
     current sprint if it has none.
 
-**A validated issue template.** `move --status Done` requires an `## Evidence`
+**A validated issue template.** `issue move N Done` requires an `## Evidence`
     section and refuses a body that is missing it, empty, or still `_TBD_`. A
     template nobody validates is a suggestion, and a closed issue saying only
     "done" has thrown away the reasoning.
@@ -95,11 +95,11 @@ is ever read, stored or passed by this tool.
 Commands
 --------
 
-    gh agile project create --title "..." [--key ZMBNI]
-    gh agile setup                          fields, labels and saved boards
-    gh agile key --key ZMBNI [--repo ...]   record or list repository keys
-    gh agile board create --name "..." --type scrum|kanban|backlog|roadmap
-    gh agile sprint create|list
+    gh agile init --key ZMBNI -t "..." --sprint-template 2-week
+    gh agile key list | add ZMBNI [-R ...] | delete ZMBNI
+    gh agile board create "..." --type scrum|kanban|backlog|roadmap
+    gh agile board list | view NAME
+    gh agile sprint list | view [SPRINT] | create | ensure
     gh agile epic  create -t "Title" [--key ...]
     gh agile story create -t "Title" --epic 4 [--points 3] [--priority high]
     gh agile epic  list | view N                  likewise story, initiative, issue
@@ -107,8 +107,7 @@ Commands
     gh agile issue edit ZMBNI-34 --field Sprint --value @current
     gh agile sync [--dry-run]
     gh agile validate
-    gh agile export [--csv] [--out-dir DIR] [--since ...]
-    gh agile self-test --repo owner/repo
+    gh agile export [--format csv] [--out-dir DIR] [--since ...]
 
 `--project` and `--repo` default from the profile and the working directory.
 The rules are in POLICY.md, the walkthrough in USER_GUIDE.md, and the data
@@ -1888,7 +1887,8 @@ def cmd_init(args) -> int:
                  "sprint starts and\n  ends, and an unchosen one blocks `epic`, "
                  "`story` and `ensure`. One of: "
                  f"{', '.join(SPRINT_TEMPLATES)}")
-    title_prefix_mode({"project": {"issue_title_prefix": args.title_prefix}})
+    if args.title_prefix is not None:
+        title_prefix_mode({"project": {"issue_title_prefix": args.title_prefix}})
 
     print(f"  profile: {target}")
 
@@ -1900,18 +1900,15 @@ def cmd_init(args) -> int:
             {"number": args.project, "owner": args.owner, "name": args.title or ""})
         print(f"  project #{args.project} adopted")
     else:
-        cmd_project(argparse.Namespace(
-            project_command="create", title=args.title, key=args.key,
-            repo=args.repo, owner=args.owner, project=None, force=False,
-            # Passed through, not `None`. `project create` refuses without a
-            # template unless the profile already has one, and `init` records
-            # its own only in step 2 -- so a fresh clone was refused despite
-            # `--sprint-template`, with a message telling the person to write the
-            # profile by hand. Found by the first adopter outside this repo (#210).
-            sprint_template=args.sprint_template, _config=config,
-            config=getattr(args, "config", None)))
-        config = read_config(getattr(args, "config", None))
-        args._config = config
+        # Every refusal above has passed -- the cadence included, which #210
+        # found refused on a fresh clone when this went through `project create`.
+        create_project(args, config, target)
+    # `project owner` went in #203: an older profile names a number and no
+    # owner, which works only for the one account holding that number, and
+    # `init` is already what somebody runs to put a profile right.
+    if not (config.get("project") or {}).get("owner"):
+        config.setdefault("project", {})["owner"] = args.owner
+        print(f"  project.owner recorded: {args.owner}")
 
     # 2. The decisions, written down so nothing has to ask again.
     if args.key:
@@ -1921,7 +1918,15 @@ def cmd_init(args) -> int:
                             "repo": args.repo})
             config["keys"] = entries
         config.setdefault("project", {})["key"] = args.key
-    config.setdefault("project", {})["issue_title_prefix"] = args.title_prefix
+    # Written when given, and `off` only when the profile has none. A default
+    # of `off` written on every run turned a second `init` -- which is now how
+    # a project is converged -- into a silent reset of the prefix: measured on
+    # the sandbox, `key+type` became `off` on a bare re-run (#203).
+    project = config.setdefault("project", {})
+    if args.title_prefix is not None:
+        project["issue_title_prefix"] = args.title_prefix
+    else:
+        project.setdefault("issue_title_prefix", "off")
     if args.sprint_template:
         write_sprint_template(config, args.sprint_template, target)
     # Only ever added, never removed: a profile that already carries a board --
@@ -1938,27 +1943,33 @@ def cmd_init(args) -> int:
     # 3. Fields, labels and the boards -- `setup` converges all three, so there
     #    is one mechanism for creating a board rather than two.
     args.project = args.project or (config.get("project") or {}).get("number")
-    cmd_setup(argparse.Namespace(spec=None, repo=args.repo, owner=args.owner,
-                                 project=args.project, _config=config,
-                                 config=getattr(args, "config", None)))
+    converge_project(argparse.Namespace(spec=getattr(args, "spec", None), repo=args.repo,
+                                        owner=args.owner, project=args.project,
+                                        _config=config,
+                                        config=getattr(args, "config", None)))
 
-    # 4. What is left, and what it costs.
+    # 4. The post-merge hook. **Installed, unless `--no-hooks`.** It was named
+    #    and left to `gh agile hooks`, on the reasoning that an executable in
+    #    `.git/hooks` is not a thing to write on the strength of an unrelated
+    #    command. But `init` is not unrelated: it is what a person runs in a
+    #    fresh clone, it is idempotent, and the hook is per-clone setup like
+    #    everything else it converges -- and an offer printed at the end of a
+    #    long run is an offer nobody takes. `--no-hooks` is the opt-out (#203).
+    if args.no_hooks:
+        print("\n  post-merge hook: not installed (--no-hooks)")
+    else:
+        print(f"\n  post-merge hook: {install_hook()}")
+
+    # 5. What is left, and what it costs.
     report_manual_steps(args.owner, args.project)
-    # **Named, not installed.** `init` takes flags rather than prompts so it runs
-    # in a script, on an agent's behalf, in CI -- and writing an executable into
-    # somebody's `.git/hooks` is not a thing to do on the strength of an
-    # unrelated command. Saying it here is the offer; `gh agile hooks` is the
-    # acceptance, and it is also how the repositories that will never run `init`
-    # again get it.
-    print("\n  One more, and it is per clone because git never brings hooks with "
-          "a clone:")
-    print("    gh agile hooks     # `git pull` then names what a merge left "
-          "unfinished")
     return 0
 
 
-def cmd_setup(args) -> int:
+def converge_project(args) -> int:
     """Create the project's fields and labels, converging rather than duplicating.
+
+    `init`'s third step. It was the `setup` command as well, until #203: `init`
+    is idempotent, so running it again *is* the converge.
 
     Idempotent because it will be run again -- after a field is added to the
     spec, after someone deletes one by hand. `gh project field-create` happily
@@ -2193,7 +2204,7 @@ def title_prefix_mode(config: dict) -> str:
             f"  Fix the profile before running anything else -- this setting decides "
             f"what every\n  issue is called, so a guess here is a guess written into "
             f"issue titles:\n\n{options}\n\n"
-            f"    gh agile project title-prefix --mode key\n\n"
+            f"    gh agile project edit --title-prefix key\n\n"
             f"  Or edit `project.issue_title_prefix` in the profile by hand."
         )
     return mode
@@ -2290,7 +2301,7 @@ def set_field(login: str, project: int, item_id: str, field_name: str, value) ->
     """
     field = fields_of(login, project).get(field_name)
     if not field:
-        sys.exit(f"no field named {field_name!r} on project {project}; run `gh agile setup`")
+        sys.exit(f"no field named {field_name!r} on project {project}; run `gh agile init`")
     cmd = ["project", "item-edit", "--id", item_id,
            "--project-id", project_id(login, project), "--field-id", field["id"]]
     kind = field["data_type"]
@@ -2334,7 +2345,7 @@ def clear_field(login: str, project: int, item_id: str, field_name: str) -> None
     """
     field = fields_of(login, project).get(field_name)
     if not field:
-        sys.exit(f"no field named {field_name!r} on project {project}; run `gh agile setup`")
+        sys.exit(f"no field named {field_name!r} on project {project}; run `gh agile init`")
     graphql(
         "mutation($p: ID!, $i: ID!, $f: ID!) { clearProjectV2ItemFieldValue(input: "
         "{projectId: $p, itemId: $i, fieldId: $f}) { projectV2Item { id } } }",
@@ -2644,7 +2655,7 @@ def require_key_for_prefix(config: dict, key) -> None:
         sys.exit(
             "project.issue_title_prefix is set, but no key applies to this repository, "
             "so there is\n  nothing to prefix the title with. Pass --key, or list one:\n\n"
-            "    gh agile key --key ZMBNI --repo owner/name"
+            "    gh agile key add ZMBNI --repo owner/name"
         )
 
 
@@ -2906,7 +2917,7 @@ def create_initiative(args) -> int:
         # gave an epic dates because GitHub's roadmap places an item from a date
         # or an iteration field and a container has no Sprint by rule. #176 put
         # initiatives on that roadmap, which reproduced the defect one level up:
-        # `board show` renders them, the web UI drops them into the undated
+        # `board view` renders them, the web UI drops them into the undated
         # bucket.
         #
         # **Typed, never derived.** The tool could compute these from the epics
@@ -2972,10 +2983,10 @@ def attach_to_initiative(target: dict, repo: str, number: int, node: str) -> Non
 #: GitHub's roadmap layout places an item from a date field or an iteration
 #: field, and an epic has neither: #115 made it a rule that a container carries
 #: no Sprint. So every epic landed in the web roadmap's undated bucket while
-#: `board show` looked right -- it reconstructs an axis from the `sprint:`
+#: `board view` looked right -- it reconstructs an axis from the `sprint:`
 #: labels of an epic's *descendants*, which the web UI has no way to do.
 #:
-#: **They are a plan, and the derived axis is a measurement.** `board show`
+#: **They are a plan, and the derived axis is a measurement.** `board view`
 #: keeps deriving *when did this start* from the labels beneath an epic; these
 #: say when somebody intended it to. The two are not interchangeable and neither
 #: replaces the other.
@@ -3261,7 +3272,7 @@ def sprint_field(login: str, number: int) -> dict:
         sys.exit(f"no project {number} found for {login!r} as either a user or an organization")
     field = node.get("field")
     if not field:
-        sys.exit("no Sprint iteration field on this project; run `gh agile setup`")
+        sys.exit("no Sprint iteration field on this project; run `gh agile init`")
     return field
 
 
@@ -3815,8 +3826,25 @@ def cmd_sprint(args) -> int:
         ensure_sprints(args.owner, args.project, args._config, ahead)
         return 0
 
+    if args.sprint_command == "view":
+        return cmd_sprint_view(args)
+
     if args.sprint_command == "list":
         active, completed = iterations(args.owner, args.project)
+        if args.format == "json" or not stdout_is_terminal():
+            listed = ([{**it, "end": _iteration_end(it),
+                        "state": "current" if index == 0 else "future"}
+                       for index, it in enumerate(active)]
+                      + [{**it, "end": _iteration_end(it), "state": "completed"}
+                         for it in completed])
+            if args.format == "json":
+                print(json.dumps([{k: it[k] for k in ("title", "startDate", "end",
+                                                       "duration", "state")}
+                                  for it in listed], indent=2))
+            else:
+                print_rows([[it["title"], it["startDate"], it["end"], it["state"]]
+                            for it in listed])
+            return 0
         if not active and not completed:
             print("  no sprints; create one with `gh agile sprint create`")
         for index, it in enumerate(active):
@@ -3918,6 +3946,51 @@ def cmd_sprint(args) -> int:
     heal_sprint_fields(args.owner, args.project)
     print(f"  {title}: {start}, {duration} day(s)")
     return 0
+
+
+def find_sprint(login: str, project: int, wanted: str) -> tuple[dict, str]:
+    """One sprint and whether it is current, future or completed.
+
+    Named three ways, in the order that cannot be ambiguous: `@current`; a
+    start date, which is a sprint's identity -- the same `YYYY-MM-DD` its
+    `sprint:` labels carry, and immune to the naming seam where one board has
+    three spellings; or a title, compared without case.
+    """
+    active, completed = iterations(login, project)
+    text = wanted.strip()
+    if text.casefold() in ("@current", "current"):
+        if not active:
+            sys.exit("no active sprint; create one with `gh agile sprint create`")
+        return active[0], "current"
+    tagged = ([(it, "current" if index == 0 else "future") for index, it in enumerate(active)]
+              + [(it, "completed") for it in completed])
+    for match in (lambda it: it["startDate"] == text,
+                  lambda it: it["title"].casefold() == text.casefold()):
+        found = [(it, state) for it, state in tagged if match(it)]
+        if found:
+            return found[0]
+    known = "\n".join(f"    {it['startDate']}  {it['title']}  ({state})"
+                      for it, state in tagged) or "    none"
+    sys.exit(f"no sprint starts on or is titled {wanted!r}. There is:\n{known}")
+
+
+def cmd_sprint_view(args) -> int:
+    """`sprint view [SPRINT]`: one sprint's window and its items, by Status.
+
+    **Field for the present, labels for the past.** The current and future
+    sprints are read from the `Sprint` field -- the only thing that can say
+    what is in a sprint now, and the thing a scrum board filters on. A
+    completed sprint is read from its `sprint:YYYY-MM-DD` labels, because every
+    iteration write clears the field board-wide, including on closed issues in
+    completed sprints, and the labels are the record that survives it.
+    """
+    iteration, state = find_sprint(args.owner, args.project, args.sprint)
+    start, end = iteration["startDate"], _iteration_end(iteration)
+    term = (f"label:{SPRINT_LABEL}{start}" if state == "completed"
+            else f"sprint:{json.dumps(iteration['title'])}")
+    view = {"name": f"{iteration['title']}  {start} .. {end}  ({state})",
+            "layout": "BOARD_LAYOUT", "filter": term}
+    return show_board(args, view, "sprint", None, announce_unfiltered=False)
 
 
 def _iteration_end(iteration: dict) -> str:
@@ -4058,7 +4131,7 @@ def require_sprint_config(config: dict, doing: str) -> None:
         f"no sprint cadence is configured, and {doing} depends on it.\n"
         f"  Choose one before creating work, so every sprint follows the same "
         f"rhythm:\n\n{options}\n\n"
-        f"    gh agile project sprint-template --template 2-week\n\n"
+        f"    gh agile project edit --sprint-template 2-week\n\n"
         f"  Or write a `sprint` block into the profile by hand. `none` is a\n"
         f"  legitimate answer for a kanban team, and is recorded as a decision."
     )
@@ -4101,7 +4174,7 @@ def views_of(login: str, number: int) -> list[dict]:
 
     Was the fourth place running the two-root walk without catching the
     `SystemExit` it produces -- found the day after the other three, by needing
-    it for `board show`. Verified before the change: `views_of("github", 1)`
+    it for `board view`. Verified before the change: `views_of("github", 1)`
     reported "Could not resolve to a User with the login of 'github'".
     """
     node = project_node(
@@ -4113,7 +4186,7 @@ def views_of(login: str, number: int) -> list[dict]:
     return node["views"]["nodes"]
 
 
-#: The filter vocabulary `board show` can evaluate, and the only one it will.
+#: The filter vocabulary `board view` can evaluate, and the only one it will.
 #:
 #: **`ProjectV2View` has no `items` field.** Introspected 2026-08-24: a view
 #: exposes `filter` as an opaque string, plus `layout`, `verticalGroupByFields`
@@ -4193,7 +4266,7 @@ def item_matches(item: dict, terms: list[tuple[bool, str, str]],
         # because a board's filter comes *back* from the view it was written
         # to. `github_filter` expands `level:container` to
         # `label:type:initiative,type:epic` so the web UI agrees -- and
-        # `board show` then reads that string back and has to understand it.
+        # `board view` then reads that string back and has to understand it.
         # Measured: without this the roadmap it had just written matched 0 of
         # 86 items. A shorthand that expands must also parse on the way home.
         hit = any(matches_one(key, part, content, labels, status, sprint,
@@ -4288,7 +4361,7 @@ def github_filter(text: str) -> str:
 
     `initiative:<slug>` is exactly `label:initiative:<slug>`, and GitHub knows
     `label:` and does not know `initiative:`. Saving the short form onto a view
-    would put the web UI and `board show` into disagreement about what the board
+    would put the web UI and `board view` into disagreement about what the board
     shows -- which is the one thing a reconstructed board must never do, since the
     whole claim is that it renders *that* definition rather than something
     retyped beside it.
@@ -4306,7 +4379,7 @@ def github_filter(text: str) -> str:
             # GitHub knows `label:` and does not know `level:`, and it ORs the
             # comma-separated values of one qualifier. So the shorthand is
             # written out as the labels it stands for, and the web UI shows
-            # what `board show` shows -- the whole point of this function.
+            # what `board view` shows -- the whole point of this function.
             wanted = bare.split(":", 1)[1].casefold()
             levels = CONTAINER_TYPES if wanted == "container" else (wanted,)
             bare = "label:" + ",".join(f"type:{level}" for level in levels)
@@ -4323,7 +4396,7 @@ def make_board(login: str, project: int, name: str, kind: str, extra: str | None
     spec = BOARD_TYPES[kind]
     clauses = [spec["filter"]] + ([extra] if extra else [])
     # Expanded before it is written, so the view carries a filter GitHub can
-    # evaluate and the web UI shows what `board show` shows.
+    # evaluate and the web UI shows what `board view` shows.
     combined = github_filter(" ".join(c for c in clauses if c))
 
     existing = next((v for v in views_of(login, project) if v["name"] == name), None)
@@ -4600,7 +4673,7 @@ def report_tasks_skipped(count: int) -> None:
     if count:
         print(f"  {count} task(s) left off the board; a task is story-internal. "
               f"To board them anyway:\n"
-              f"    gh agile sync --query \"label:type:{TASK_TYPE}\"")
+              f"    gh agile sync --search \"label:type:{TASK_TYPE}\"")
 
 
 def cmd_sync(args) -> int:
@@ -4643,8 +4716,8 @@ def cmd_sync(args) -> int:
     for repo in repos:
         cmd = ["issue", "list", "--repo", repo, "--state", args.state,
                "--limit", str(args.limit), "--json", "number,title,url,state,labels"]
-        if args.query:
-            cmd += ["--search", args.query]
+        if args.search:
+            cmd += ["--search", args.search]
         for issue in json.loads(gh(cmd)):
             key = (repo.rsplit("/", 1)[-1], issue["number"])
             if key in numbers_on_board:
@@ -4654,10 +4727,10 @@ def cmd_sync(args) -> int:
             # `task` adds nothing to the project, but `sync` sweeps the whole
             # repository, so without this one run puts every task on the board
             # and the default quietly becomes the opposite of what POLICY.md
-            # says. `--query "label:type:task"` still reaches them for a team
+            # says. `--search "label:type:task"` still reaches them for a team
             # that wants them there: excluded by default, not excluded outright.
             names = {lb["name"] for lb in issue.get("labels") or []}
-            if f"type:{TASK_TYPE}" in names and not args.query:
+            if f"type:{TASK_TYPE}" in names and not args.search:
                 tasks += 1
                 continue
             candidates.append((repo, issue))
@@ -5073,6 +5146,30 @@ def display_width(stream=None) -> int:
     except (AttributeError, ValueError):   # a closed or substituted stream
         return BOARD_WIDTH
     return shutil.get_terminal_size((BOARD_WIDTH, 24)).columns
+
+
+def stdout_is_terminal() -> bool:
+    """Whether a person is reading, or a pipe. Decides a `list`'s shape.
+
+    A function rather than an inline `isatty()` so a test can say which it is:
+    under pytest stdout is never a terminal.
+    """
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):   # a closed or substituted stream
+        return False
+
+
+def print_rows(rows: list[list[str]]) -> None:
+    """A `list` for a pipe: tab-separated, no header, no padding -- as `gh` does.
+
+    `gh issue list | cut -f1` works because a piped list is data, not a
+    rendering (#203). A tab inside a value would split its row, so it is
+    replaced; nothing here legitimately carries one.
+    """
+    for row in rows:
+        print("\t".join(str(cell if cell is not None else "").replace("\t", " ")
+                        for cell in row))
 
 
 #: What the `who` column says when an issue is in progress and nobody has it.
@@ -5498,13 +5595,13 @@ def find_view(login: str, project: int, wanted: str) -> dict:
     """One view by number, or by name: exact, then unique prefix, then unique substring.
 
     **The number is the stable handle.** `board list` prints it, GitHub assigns
-    it, and it survives the rename that a name does not -- so `board show 3` is
+    it, and it survives the rename that a name does not -- so `board view 3` is
     accepted, and an all-digit argument is a number unless some board is actually
     called that. The name is tried first for exactly that case.
 
     Prefix before substring so "Sprint" reaches "Sprint board" even when another
     board mentions sprints halfway through its name; substring after it so
-    `board show agile` still finds "Team: AGILE" without the quoting a colon and a
+    `board view agile` still finds "Team: AGILE" without the quoting a colon and a
     space demand. Ambiguity surviving all four is **refused and listed** rather
     than resolved by picking the first -- rendering the wrong team's board under
     the right team's name is the kind of wrong answer nobody checks.
@@ -5543,7 +5640,7 @@ def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
                limit: int | None = None, announce_unfiltered: bool = True) -> int:
     """Read the board once, select by `view`'s filter plus `typed_filter`, render.
 
-    `board show` passes a real view. The work-item `list` commands pass one made
+    `board view` passes a real view. The work-item `list` commands pass one made
     up for the occasion -- `label:type:epic` -- so a list reads the board the way
     a board does, through one query and one filter evaluator, and prints the same
     columns (#202). `limit` keeps the first N rows, as `gh issue list -L` does.
@@ -5576,7 +5673,7 @@ def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
               f"project.\n"
               f"    A board that excludes nothing is usually a view that was named "
               f"and never configured.\n"
-              f"    `gh agile board create --name {view['name']!r} --type "
+              f"    `gh agile board create {view['name']!r} --type "
               f"{'|'.join(BOARD_TYPES)}` converges an\n"
               f"    existing view by name and gives it the filter for that type.",
               file=sys.stderr)
@@ -5611,6 +5708,16 @@ def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
     # kanban or backlog board the parents are already there and a band would
     # repeat them.
     containers = board_containers(issues, shown, keys) if kind == "scrum" else []
+
+    if (kind == "list" and getattr(args, "format", None) is None
+            and not stdout_is_terminal()):
+        # A list into a pipe is data: one row per item, tab-separated, no
+        # header, as `gh issue list` prints it (#203). A board stays a rendering
+        # wherever it goes -- it is sections, not rows.
+        print_rows([[r["key"], r["status"] or "", r["type"] or "", r["title"],
+                     r["sprint"] or "", r["story_points"] if r["story_points"] is not None
+                     else "", ",".join(r["assignees"])] for r in rows])
+        return 0
 
     stamp = _now()
     if getattr(args, "format", None) == "jsonl":
@@ -5656,7 +5763,7 @@ def cmd_list(args) -> int:
     `gh agile epic list` used to file an epic called "list" (ZMBNI-185). This is
     the command that was expected. **It is a board read, not a search**: a work
     item's Status, Sprint and points live on the project item, so only the board
-    can say them, and a list that disagreed with `board show` about what an epic
+    can say them, and a list that disagreed with `board view` about what an epic
     is would be a second source of truth. So it reuses `show_board` with a filter
     of its own -- one query, the same evaluator, the same columns.
     """
@@ -5721,6 +5828,10 @@ def cmd_task_list(args) -> int:
     rows = rows[:args.limit]
     if args.format == "jsonl":
         sys.stdout.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+        return 0
+    if not stdout_is_terminal():
+        print_rows([[r["key"], r["state"].lower(), r["story"] or "", r["title"]]
+                    for r in rows])
         return 0
     if not rows:
         print("  no tasks" if args.state == "all" else f"  no {args.state} tasks")
@@ -6012,7 +6123,7 @@ def board_jsonl(view: dict, kind: str, rows: list[dict], sections, args,
 def render_board_list(views: list[dict], config: dict) -> str:
     """The index of boards: number, name, type, layout, filter.
 
-    The number is first and bare, because it is what `board show` takes. Widths
+    The number is first and bare, because it is what `board view` takes. Widths
     come from the values rather than from a guess -- the name column was a fixed
     28 and "Engineering: all work" ran into the type beside it.
     """
@@ -6039,12 +6150,49 @@ def render_board_list(views: list[dict], config: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+def project_url(owner: str, number: int) -> str:
+    """The project's page. `users/` serves an organization's project too: GitHub
+    redirects it, so the owner's kind need not be looked up to open a page."""
+    return f"https://github.com/users/{owner}/projects/{number}"
+
+
+def open_in_browser(url: str) -> int:
+    """`-w/--web`: open `url`, as `gh ... --web` does, and say which.
+
+    `gh browse` would want a repository; a project view is not in one. The
+    standard library's `webbrowser` is what `gh` itself falls back to in spirit:
+    the platform's opener, and the URL printed for a terminal with none.
+    """
+    import webbrowser
+
+    print(f"  Opening {url} in your browser.")
+    webbrowser.open(url)
+    return 0
+
+
 def cmd_board(args) -> int:
     if args.board_command == "list":
-        print(render_board_list(views_of(args.owner, args.project), args._config), end="")
+        if args.web:
+            return open_in_browser(project_url(args.owner, args.project))
+        views = views_of(args.owner, args.project)
+        if args.format == "json":
+            print(json.dumps([{"number": v["number"], "name": v["name"],
+                               "type": board_kind(v, args._config),
+                               "layout": v["layout"], "filter": v.get("filter") or ""}
+                              for v in views], indent=2))
+        elif not stdout_is_terminal():
+            print_rows([[str(v["number"]), v["name"], board_kind(v, args._config),
+                         v["layout"].replace("_LAYOUT", "").lower(), v.get("filter") or ""]
+                        for v in views])
+        else:
+            print(render_board_list(views, args._config), end="")
         return 0
 
-    if args.board_command == "show":
+    if args.board_command == "view":
+        if args.web:
+            view = find_view(args.owner, args.project, args.name)
+            return open_in_browser(f"{project_url(args.owner, args.project)}"
+                                   f"/views/{view['number']}")
         return cmd_board_show(args)
 
     result = make_board(args.owner, args.project, args.name, args.type,
@@ -6060,7 +6208,7 @@ def cmd_board(args) -> int:
         config["boards"] = boards
         target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
         target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-        print(f"  saved to {target}; `gh agile setup` will keep it in step")
+        print(f"  saved to {target}; `gh agile init` will keep it in step")
     return 0
 
 
@@ -6131,111 +6279,149 @@ def backfill_titles(args, config: dict, mode: str) -> int:
     return 0
 
 
-def cmd_project(args) -> int:
-    """Create the board and record it in the profile, or set its cadence.
+def save_profile(config: dict, target: pathlib.Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+
+def create_project(args, config: dict, target: pathlib.Path) -> int:
+    """Create the project and record it in the profile. `init`'s first step.
 
     Creation belongs to this tool rather than `gh project create` because two
     things have to happen with it: `project.number` is written to the profile so
-    every later command can default `--project`, and a second project in the
-    same repository is refused -- with one profile holding one number, a second
-    board would make that default ambiguous.
+    every later command can default `--project`, and the owner beside it -- a
+    number alone means "project N belonging to whoever typed this".
+
+    It was `project create` as well, one of three ways to stand a project up;
+    `gh` has one create per noun, and `init` is it (#203).
     """
-    config = args._config
-    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
-    if args.project_command == "title-prefix":
-        # Existing issues are left alone unless `--backfill` asks otherwise.
-        # Renaming a board's worth of issues emits a RenamedTitleEvent for each
-        # and changes titles under people mid-sprint, so it stays something
-        # somebody chooses rather than something the setting does on their behalf.
-        if args.dry_run and not args.backfill:
-            sys.exit("--dry-run only means something with --backfill.\n"
-                     "  Without it this command writes one line to the profile and "
-                     "renames nothing.")
-        project = config.setdefault("project", {})
-        project["issue_title_prefix"] = args.mode
-        if args.mode != "off" and not (config.get("keys") or []):
-            sys.exit("no keys are listed in the profile, so there is nothing to prefix "
-                     "titles with.\n  Add one first: gh agile key --key ZMBNI")
-        print(f"  issue title prefix: {args.mode}  e.g. {TITLE_PREFIX_MODES[args.mode]}")
-        if args.dry_run:
-            # Nothing is written, the profile included: a preview that quietly
-            # changed the setting would be a preview nobody could trust.
-            print(f"  would write to {target}")
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-            print(f"  written to {target}")
-        if not args.backfill:
-            print("  applies to issues created from now on; "
-                  "`--backfill` renames the ones already there")
-            return 0
-        return backfill_titles(args, config, args.mode)
-
-    if args.project_command == "owner":
-        # For a profile written before the owner was recorded. `project create`
-        # sets it from now on, and a profile naming a number with no owner works
-        # only for the one account that happens to hold that number.
-        project = config.setdefault("project", {})
-        was = project.get("owner")
-        project["owner"] = args.owner
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-        print(f"  project.owner: {args.owner}" + (f"  (was {was})" if was else ""))
-        print(f"  written to {target}; --owner now defaults to it")
-        return 0
-
-    if args.project_command == "sprint-template":
-        settings = write_sprint_template(config, args.template, target)
-        print(f"  sprint cadence: {args.template} "
-              f"({settings['cadence_days']} days from {settings['start_day']})"
-              + ("  -- no sprints; kanban" if args.template == "none" else ""))
-        print(f"  written to {target}")
-        return 0
-
-    existing = (config.get("project") or {}).get("number")
-    if existing and not args.force:
-        sys.exit(
-            f"the profile already names project #{existing}. One project per main "
-            "repository, because project.number is what every command defaults to.\n"
-            "  To start a different project: remove project.number from the profile "
-            "here, or work from the clone of that project's main repository."
-        )
-
-    # Asked before the board exists, so the cadence is a decision rather than
-    # something discovered after sprints already follow it.
-    if (args.project_command == "create" and not args.sprint_template
-            and not (config.get("sprint") or {}).get("template")):
-        require_sprint_config(config, "creating a project")
-
     created = json.loads(gh(["project", "create", "--owner", args.owner,
                              "--title", args.title, "--format", "json"]))
     number = created["number"]
     print(f"  project #{number} created: {created['url']}")
-
-    config.setdefault("project", {})
     # The owner is recorded alongside the number, because the number alone is
     # only meaningful to the account that holds it. Known for free here: this is
     # the account the project was just created under.
-    config["project"].update({"number": number, "name": args.title, "owner": args.owner})
-    if args.key:
-        config["project"]["key"] = args.key
-        entries = profile_keys(config)
-        if not any(e.get("key") == args.key for e in entries):
-            entries.append({"key": args.key, "name": args.title, "repo": args.repo})
-        config["keys"] = entries
-    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
-    if args.sprint_template:
-        settings = write_sprint_template(config, args.sprint_template, target)
-        print(f"  sprint cadence: {args.sprint_template} "
-              f"({settings['cadence_days']} days from {settings['start_day']})")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-    print(f"  profile updated: {target}")
+    config.setdefault("project", {}).update(
+        {"number": number, "name": args.title, "owner": args.owner})
+    save_profile(config, target)
+    return number
+
+
+def cmd_project_view(args) -> int:
+    """`project view`: the profile's project, as `gh project view` shows one.
+
+    What the profile says the board is -- owner, number, keys, cadence, prefix
+    -- because those are what every other command is about to act on, and a
+    wrong one is cheaper to see here than in what it writes.
+    """
+    config = args._config
+    project = config.get("project") or {}
+    if args.web:
+        return open_in_browser(project_url(args.owner, args.project))
+    sprint = config.get("sprint") or {}
+    shown = {
+        "owner": args.owner, "number": args.project, "title": project.get("name"),
+        "url": project_url(args.owner, args.project),
+        "profile": str(find_config(getattr(args, "config", None)) or ""),
+        "keys": [{"key": e.get("key"), "repo": e.get("repo"), "name": e.get("name")}
+                 for e in profile_keys(config)],
+        "sprint_template": sprint.get("template"),
+        "cadence_days": sprint.get("cadence_days"),
+        "start_day": sprint.get("start_day"),
+        "issue_title_prefix": title_prefix_mode(config),
+        "boards": [b.get("name") for b in config.get("boards") or []],
+    }
+    if args.format == "json":
+        print(json.dumps(shown, indent=2))
+        return 0
+    cadence = (f"{shown['sprint_template']} ({shown['cadence_days']} days from "
+               f"{shown['start_day']})" if shown["sprint_template"] else "not chosen")
+    print(f"  {shown['title'] or '(untitled)'}  #{args.project}, owned by {args.owner}")
+    print(f"  {shown['url']}")
+    print(f"  profile        {shown['profile'] or '(none found)'}")
+    print(f"  cadence        {cadence}")
+    print(f"  title prefix   {shown['issue_title_prefix']}  e.g. "
+          f"{TITLE_PREFIX_MODES[shown['issue_title_prefix']]}")
+    for entry in shown["keys"] or [{"key": "(none)", "repo": "", "name": ""}]:
+        print(f"  key            {entry['key']:10} {entry['repo'] or '':28} "
+              f"{entry['name'] or ''}".rstrip())
+    print(f"  boards         {', '.join(shown['boards']) or '(none recorded)'}")
     return 0
 
 
-def cmd_key(args) -> int:
-    """Record, or show, the key for a repository.
+def cmd_project_edit(args) -> int:
+    """`project edit`: the sprint cadence and the issue title prefix.
+
+    `project sprint-template --template` and `project title-prefix --mode`
+    until #203; the flag names are now `init`'s, which sets the same two.
+    """
+    config = args._config
+    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    if not args.sprint_template and not args.title_prefix:
+        sys.exit("nothing to change. Give --sprint-template, --title-prefix, or both.")
+    if (args.backfill or args.dry_run) and not args.title_prefix:
+        sys.exit("--backfill and --dry-run rename issue titles, so they go with "
+                 "--title-prefix.")
+    if args.dry_run and not args.backfill:
+        sys.exit("--dry-run only means something with --backfill.\n"
+                 "  Without it this command writes one line to the profile and "
+                 "renames nothing.")
+
+    if args.sprint_template:
+        settings = write_sprint_template(config, args.sprint_template, target)
+        print(f"  sprint cadence: {args.sprint_template} "
+              f"({settings['cadence_days']} days from {settings['start_day']})"
+              + ("  -- no sprints; kanban" if args.sprint_template == "none" else ""))
+        print(f"  written to {target}")
+    if not args.title_prefix:
+        return 0
+
+    # Existing issues are left alone unless `--backfill` asks otherwise.
+    # Renaming a board's worth of issues emits a RenamedTitleEvent for each and
+    # changes titles under people mid-sprint, so it stays something somebody
+    # chooses rather than something the setting does on their behalf.
+    if args.title_prefix != "off" and not (config.get("keys") or []):
+        sys.exit("no keys are listed in the profile, so there is nothing to prefix "
+                 "titles with.\n  Add one first: gh agile key add ZMBNI")
+    config.setdefault("project", {})["issue_title_prefix"] = args.title_prefix
+    print(f"  issue title prefix: {args.title_prefix}  e.g. "
+          f"{TITLE_PREFIX_MODES[args.title_prefix]}")
+    if args.dry_run:
+        # Nothing is written, the profile included: a preview that quietly
+        # changed the setting would be a preview nobody could trust.
+        print(f"  would write to {target}")
+    else:
+        save_profile(config, target)
+        print(f"  written to {target}")
+    if not args.backfill:
+        print("  applies to issues created from now on; "
+              "`--backfill` renames the ones already there")
+        return 0
+    if args.project is None:
+        sys.exit(missing_project_message(getattr(args, "config", None)))
+    return backfill_titles(args, config, args.title_prefix)
+
+
+def cmd_key_list(args) -> int:
+    """`key list`: what the profile records, key by key."""
+    entries = profile_keys(args._config)
+    if args.format == "json":
+        print(json.dumps([{"key": e.get("key"), "repo": e.get("repo"), "name": e.get("name")}
+                          for e in entries], indent=2))
+    elif not stdout_is_terminal():
+        print_rows([[e.get("key"), e.get("repo") or "", e.get("name") or ""]
+                    for e in entries])
+    elif not entries:
+        print("  no keys recorded; add one with `gh agile key add KEY`")
+    else:
+        for entry in entries:
+            print(f"  {entry['key']:10} {entry.get('repo', '?'):28} {entry.get('name', '')}")
+    return 0
+
+
+def cmd_key_add(args) -> int:
+    """Record the key for a repository.
 
     Also writes the project's `shortDescription`, which is the nearest GitHub
     has to a place for this: a project carries a `title` and a
@@ -6244,30 +6430,20 @@ def cmd_key(args) -> int:
     reads the config file.
     """
     config = args._config
-    entries = profile_keys(config)
     target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
-
-    if not args.key:
-        if not entries:
-            print("  no keys recorded")
-        for entry in entries:
-            print(f"  {entry['key']:10} {entry.get('repo', '?'):28} {entry.get('name', '')}")
-        return 0
-
     if problem := key_problem(args.key):
         sys.exit(f"{args.key!r}: {problem}")
-    entries = [e for e in entries if e.get("key") != args.key]
+    entries = [e for e in profile_keys(config) if e.get("key") != args.key]
     entries.append({"key": args.key, "name": args.name or args.key, "repo": args.repo})
     config["keys"] = entries
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+    save_profile(config, target)
     print(f"  {args.key} -> {args.repo}  (in {target})")
     # Said, not done: a board is a view on a shared project, and creating one
     # because a key was recorded is a write nobody asked for (#211).
     if len(entries) > 1 and not any(b.get("type") == "kanban"
                                     for b in config.get("boards") or []):
         print(f"\n  {len(entries)} keys now, so a cross-team board has something to show:\n"
-              f"    gh agile board create --name \"{CROSS_TEAM_BOARD['name']}\" "
+              f"    gh agile board create \"{CROSS_TEAM_BOARD['name']}\" "
               f"--type kanban --save")
 
     # Only when the key being recorded *is* this project's key. A key's name
@@ -6282,6 +6458,50 @@ def cmd_key(args) -> int:
             p=project_id(args.owner, args.project), d=f"{args.name} [{args.key}]",
         )
         print(f"  project #{args.project} described as {args.name!r} [{args.key}]")
+    return 0
+
+
+def key_issue_count(repos: list[str], key: str) -> int:
+    """How many issues, open or closed, carry `key:KEY` in these repositories.
+
+    One search, counted server-side: `issueCount` is the total whatever the
+    page size, so nothing is transferred but the number. Searched rather than
+    read from the board, because an issue carrying the key need not be on it.
+    """
+    scope = " ".join(f"repo:{repo}" for repo in repos)
+    data = graphql("query($q: String!) { search(query: $q, type: ISSUE, first: 0) "
+                   "{ issueCount } }",
+                   q=f'{scope} is:issue label:"{KEY_LABEL}{key}"')
+    return ((data.get("data") or {}).get("search") or {}).get("issueCount") or 0
+
+
+def cmd_key_delete(args) -> int:
+    """`key delete KEY`: remove the profile entry, **refused while issues carry it**.
+
+    A `key:` label is how every board, `validate` and the export decide which
+    team an issue belongs to. Deleting the key while issues still carry its
+    label would leave them answering to a key the profile no longer knows --
+    `issue_key` falls back to a different key, and a scrum board filtering on
+    `label:key:KEY` keeps showing work nothing will ever file again.
+    """
+    config = args._config
+    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    entries = profile_keys(config)
+    if not any(e.get("key") == args.key for e in entries):
+        known = ", ".join(e.get("key") for e in entries) or "none"
+        sys.exit(f"{args.key!r} is not in the profile; it records {known}.")
+    repos = list(dict.fromkeys(e.get("repo") for e in entries if e.get("repo")))
+    carrying = key_issue_count(repos, args.key) if repos else 0
+    if carrying:
+        sys.exit(f"{carrying} issue(s) still carry {KEY_LABEL}{args.key}, so the key is "
+                 f"still in use.\n  Relabel them first -- `gh agile issue edit N "
+                 f"--remove-label {KEY_LABEL}{args.key} --add-label {KEY_LABEL}OTHER` -- "
+                 f"then delete it.")
+    config["keys"] = [e for e in entries if e.get("key") != args.key]
+    if (config.get("project") or {}).get("key") == args.key:
+        del config["project"]["key"]
+    save_profile(config, target)
+    print(f"  {args.key} removed from {target}; no issue carries {KEY_LABEL}{args.key}")
     return 0
 
 
@@ -7189,6 +7409,27 @@ def without_tasks(data: list[dict]) -> tuple[list[dict], int]:
     return kept, len(data) - len(kept)
 
 
+#: The grains `export --grain` names, in the order their files are written.
+EXPORT_GRAINS = ("issues", "events", "prs", "master")
+
+
+def grain_list(text: str) -> frozenset[str]:
+    """`--grain issues,events` -> {"issues", "events"}; `all` is every grain.
+
+    A comma list, as `gh` writes `--json a,b`. `both` meant issues and events
+    when there were two grains, and was ambiguous among four (#203).
+    """
+    wanted = {g.strip().casefold() for g in text.split(",") if g.strip()}
+    if wanted == {"all"}:
+        return frozenset(EXPORT_GRAINS)
+    unknown = sorted(wanted - set(EXPORT_GRAINS))
+    if unknown or not wanted:
+        raise argparse.ArgumentTypeError(
+            f"{', '.join(unknown) or text!r}: grains are {', '.join(EXPORT_GRAINS)}, "
+            f"comma-separated, or all")
+    return frozenset(wanted)
+
+
 def cmd_export(args) -> int:
     """Full or incremental, to stdout or to a timestamped file.
 
@@ -7205,11 +7446,14 @@ def cmd_export(args) -> int:
     # working because stdout runs happened to advance the read key -- which is
     # precisely what this release stops them doing.
     state_key = f"{args.owner}/{args.project}"
-    state = read_state(args.state) if args.state else {}
-    since = args.since or (state.get(state_key, {}).get("watermark") if args.state else None)
+    state = read_state(args.state_file) if args.state_file else {}
+    since = args.since or (state.get(state_key, {}).get("watermark")
+                           if args.state_file else None)
+    grains = args.grain
+    csv_format = args.format == "csv"
 
     started = _now()
-    events: list[dict] | None = [] if args.grain in ("events", "both", "all") else None
+    events: list[dict] | None = [] if "events" in grains else None
     data = rows(args.owner, args.project, with_history=not args.no_history,
                 since=since, events=events)
     # **Tasks are not exported, and this is a stated rule rather than an
@@ -7219,7 +7463,7 @@ def cmd_export(args) -> int:
     # task change no number anywhere; a row that changes no number is not a
     # measurement, and the export is a measurement surface.
     #
-    # Filtered here rather than in `rows`, which `validate` and `board show`
+    # Filtered here rather than in `rows`, which `validate` and `board view`
     # also read: they must keep seeing tasks, or #136's checks go blind.
     #
     # The events are filtered with them, or `github_events` would carry the
@@ -7238,13 +7482,13 @@ def cmd_export(args) -> int:
     # of this export with a server-side filter, and `--grain prs` is therefore
     # the cheapest grain to run often.
     pulls: list[dict] | None = None
-    if args.grain in ("prs", "events", "both", "all"):
+    if grains & {"prs", "events"}:
         keys = {}
         for entry in profile_keys(args._config):
             keys.setdefault(entry.get("repo"), entry.get("key"))
         project_key = (args._config.get("project") or {}).get("key") or str(args.project)
         fetched = pull_requests(args._config, since)
-        if args.grain in ("prs", "all"):
+        if "prs" in grains:
             pulls = [pr_row(pull, keys) for pull in fetched]
         if events is not None:
             for pull in fetched:
@@ -7284,29 +7528,38 @@ def cmd_export(args) -> int:
         if project_key and directory.name != project_key:
             directory = directory / project_key
         directory.mkdir(parents=True, exist_ok=True)
-        suffix = "csv" if args.csv else "json"
+        suffix = "csv" if csv_format else "json"
         # Built from what was asked for rather than filtered afterwards: the
         # skip rules were a list of exceptions per grain, and `prs` would have
         # meant two more of them.
         tables = []
-        if args.grain in ("issues", "both", "all"):
+        if "issues" in grains:
             tables.append(("issues", data))
         if events is not None:
             tables.append(("events", events))
         if pulls is not None:
             tables.append(("prs", pulls))
-        if args.grain in ("master", "all"):
+        if "master" in grains:
             tables += list(master_rows(args.owner, args.project, args._config, started).items())
         for grain, payload in tables:
             if payload is None:
                 continue
             path = directory / f"github_{grain}_{file_stamp(started)}.{suffix}"
             with path.open("w", newline="") as handle:
-                _write(payload, handle, csv_format=args.csv)
+                _write(payload, handle, csv_format=csv_format)
             print(f"  wrote {path}", file=sys.stderr)
     else:
-        _write({"events": events, "prs": pulls}.get(args.grain, data),
-               sys.stdout, csv_format=args.csv)
+        # One table to stdout, because two concatenated JSON arrays or CSVs are
+        # not one file. Several grains need --out-dir, which writes one each.
+        if len(grains) != 1:
+            sys.exit(f"--grain {','.join(sorted(grains))} is {len(grains)} tables, and "
+                     f"stdout carries one.\n  Pass --out-dir to write a file per grain.")
+        (grain,) = grains
+        if grain == "master":
+            sys.exit("--grain master is three tables -- project, boards, sprints -- and "
+                     "stdout carries one.\n  Pass --out-dir.")
+        _write({"events": events, "prs": pulls}.get(grain, data),
+               sys.stdout, csv_format=csv_format)
 
     # The watermark advances only when the rows were written to timestamped
     # files. A watermark is a promise that everything up to it has been
@@ -7318,16 +7571,16 @@ def cmd_export(args) -> int:
     # Found by reading the board with a bare `export` and getting `[]` back --
     # harmlessly, because that project keyed separately, but the same command
     # against the pipeline's own project would have moved its watermark.
-    if args.state and args.out_dir:
+    if args.state_file and args.out_dir:
         # Pulled back by the overlap, so the next run re-reads the window in
         # which the timeline may still have been catching up.
         cut = dt.datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ") - dt.timedelta(
             seconds=args.overlap_seconds
         )
         watermark = cut.strftime("%Y-%m-%dT%H:%M:%SZ")
-        write_state(args.state, state_key, watermark, len(data))
-        print(f"  watermark -> {watermark} in {args.state}", file=sys.stderr)
-    elif args.state and since:
+        write_state(args.state_file, state_key, watermark, len(data))
+        print(f"  watermark -> {watermark} in {args.state_file}", file=sys.stderr)
+    elif args.state_file and since:
         # Still incremental -- the window is the same one the pipeline would
         # see -- but the watermark stays where it is, so this run costs the
         # pipeline nothing.
@@ -7614,12 +7867,12 @@ def outstanding(args, board: list[dict], repo: str, issue: int) -> str | None:
         f'gh agile issue move {issue} Done --evidence "..."', why)
 
 
-#: The line that marks a hook as this tool's, so `hooks` knows what it may
+#: The line that marks a hook as this tool's, so `init` knows what it may
 #: replace. A hook somebody wrote themselves is theirs, and overwriting it
 #: because the filename matched would be the worst kind of helpfulness.
 HOOK_MARKER = "# gh-agile post-merge hook"
 
-#: What `gh agile hooks` writes. **No path into this extension's checkout**, and
+#: What `gh agile init` writes into `.git/hooks/post-merge`. **No path into this extension's checkout**, and
 #: no choice of interpreter: `gh` resolves the extension, and where `gh` keeps
 #: its extensions is a host-and-OS detail that would rot quietly inside every
 #: consumer's `.git/hooks`.
@@ -7628,7 +7881,7 @@ HOOK_MARKER = "# gh-agile post-merge hook"
 #: ordinary one turns `\n` into a newline and `\` at a line end into nothing,
 #: which silently reflowed this script into one line the first time.
 POST_MERGE_HOOK = rf"""#!/bin/sh
-{HOOK_MARKER} -- installed by `gh agile hooks`, and safe to delete.
+{HOOK_MARKER} -- installed by `gh agile init`, and safe to delete.
 #
 # A merged pull request closes an issue and GitHub sets no Status -- or does not
 # close it at all. Either way the wrap-up is a person's, because a project
@@ -7660,36 +7913,41 @@ exit 0
 """
 
 
-def cmd_hooks(args) -> int:
-    """Install the post-merge hook into this clone.
+def install_hook() -> str:
+    """Install the post-merge hook into this clone, and say what happened.
 
     **A hook is per clone, and that is git's decision rather than an oversight.**
     Hooks are executable code, so cloning never brings them; even the versioned
     route -- `core.hooksPath` with the hook committed -- needs one `git config`
-    per clone. Something is done once per developer per repository either way.
-    What this removes is the part that was wrong: that the something was
-    undocumented, specific to the `gh-agile` repository, and silently
-    ineffective anywhere else (#192, #193).
+    per clone. Something is done once per developer per repository either way,
+    and `init` is that once (#203). It was `gh agile hooks`, written because the
+    something had been undocumented, specific to the `gh-agile` repository, and
+    silently ineffective anywhere else (#192, #193).
+
+    **Reported, never fatal.** `init` has done its real work by the time it
+    gets here, so a hook somebody wrote themselves is named and left alone
+    rather than failing the run. Three answers on a second run: present,
+    replaced because it was stale, or somebody else's.
     """
     result = subprocess.run(["git", "rev-parse", "--git-dir"],
                             capture_output=True, text=True)
     if result.returncode != 0:
-        sys.exit("not inside a git repository, so there is nowhere to install a hook")
+        return "not inside a git repository, so there is nowhere to install one"
     path = pathlib.Path(result.stdout.strip()) / "hooks" / "post-merge"
-    if path.exists() and HOOK_MARKER not in path.read_text():
-        sys.exit(
-            f"{path} exists and was not written by this tool, so it is not mine "
-            f"to replace.\n"
-            f"  Add this line to it instead, and it will do the same thing:\n"
-            f"    gh agile unfinished --quiet || true"
-        )
+    if path.exists():
+        current = path.read_text()
+        if HOOK_MARKER not in current:
+            return (f"{path} exists and was not written by this tool, so it is not "
+                    f"mine to replace.\n    Add this line to it instead, and it will do "
+                    f"the same thing:\n      gh agile unfinished --quiet || true")
+        if current == POST_MERGE_HOOK:
+            return f"present, {path}"
     existed = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(POST_MERGE_HOOK)
     path.chmod(0o755)
-    print(f"  {'replaced' if existed else 'installed'} {path}")
-    print("  `git pull` here now names any issue a merge closed and nobody finished")
-    return 0
+    return (f"{'replaced a stale' if existed else 'installed'} {path}\n"
+            f"    `git pull` here now names any issue a merge closed and nobody finished")
 
 
 def cmd_unfinished(args) -> int:
@@ -8129,7 +8387,7 @@ def cmd_self_test(args) -> int:
         # namespaces built here are synthetic and have to carry it too.
         setup = argparse.Namespace(owner=args.owner, project=project, spec=None,
                                    repo=args.repo, _config=args._config)
-        cmd_setup(setup)
+        converge_project(setup)
 
         common = {"owner": args.owner, "project": project, "repo": args.repo,
                   "intent": "self-test", "acceptance": "self-test", "_config": args._config}
@@ -8241,11 +8499,6 @@ def field_help(rows: list[tuple[str, str, str, str]]) -> str:
     return "\n".join(lines)
 
 
-SETUP_FIELDS = [
-    ("--repo", "owner/name", "optional", "repository to create the type: labels in"),
-    ("--spec", "path", "optional", "JSON field spec; the built-in default is used without one"),
-]
-
 #: The title of a new work item: a flag, as `gh issue create -t` takes it, never
 #: a positional. `gh issue create "x"` is `unknown argument "x"`, and the
 #: positional is what made `gh agile epic list` file an epic called "list"
@@ -8262,7 +8515,7 @@ def add_list(group, item_type: str | None, what: str) -> None:
     lister.add_argument("-L", "--limit", type=int, default=30,
                         help="at most this many (default %(default)s)")
     lister.add_argument("-S", "--search", metavar="TERMS",
-                        help="extra filter terms, ANDed on, as `board show --filter`")
+                        help="extra filter terms, ANDed on, as `board view --filter`")
     lister.add_argument("--format", choices=["jsonl"],
                         help="one JSON object per line instead of the text table")
     lister.add_argument("-w", "--web", action="store_true", help="open the board instead")
@@ -8507,7 +8760,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_global_flags(parser, default=None)
     parser.add_argument("--version", action=VersionAction,
                         help="the build, the interpreter and the profile in use")
-    sub = parser.add_subparsers(dest="command", required=True)
+    # `metavar`, so the usage line does not spell out every choice -- hidden
+    # commands included. A subcommand given no `help=` is left out of the list
+    # below it, which is how `self-test` and `unfinished` are hidden (#203).
+    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
     init = sub.add_parser(
         "init", help="from a fresh clone to a working board, in one command",
@@ -8521,20 +8777,33 @@ def build_parser() -> argparse.ArgumentParser:
             ("--project", "number", "optional", "adopt an existing project "
              "instead of creating one"),
             ("--repo", "owner/name", "optional", "where labels are created"),
+            ("--spec", "path", "optional", "JSON field spec; the built-in default "
+                                           "without one"),
+            ("--no-hooks", "flag", "optional", "do not install the post-merge hook"),
         ]) + """
 
 *required only the first time: a run against a profile that already names a
 project, a key and a cadence needs none of them.
 
 what it does, in order:
-  1. creates the project and writes the profile -- number, owner, name, key
+  1. creates the project, or adopts --project, and writes the profile --
+     number, owner, name, key; an older profile missing project.owner gets it
   2. records the cadence, the title prefix and the starter boards: Sprint
      board, Backlog and Roadmap, and Engineering: all work across several keys
-  3. runs `setup`: the fields, the type: and key: labels, and those boards
-  4. prints the web-UI steps the API cannot take, with their current state
+  3. converges the fields, the type: and key: labels, and those boards
+  4. installs the post-merge hook in this clone, unless --no-hooks
+  5. prints the web-UI steps the API cannot take, with their current state
 
 Idempotent: every step converges, so an interrupted run is simply run again
-and a second run reports what is already right.
+and a second run reports what is already right. It is also how a project is
+converged later -- after a field is added to --spec, or one is deleted by hand.
+
+project fields created:
+  Story Points  number                            the Gold model's story_points
+  Priority      single-select  lowest..highest    Gold priority_id
+  FR            text                              requirement traceability
+  Sprint        iteration                         Gold sprint_id; via GraphQL, gh cannot
+  Status        single-select  Todo..Done         Gold state_id; two options added to GitHub's three
 
 It refuses what the rest of the tool refuses. A key must match Jira's rules, a
 cadence is a decision, and the title prefix is written into every issue title --
@@ -8545,17 +8814,18 @@ default chosen for you.""",
     init.add_argument("-t", "--title", help="the project's title")
     init.add_argument("--sprint-template", choices=sorted(SPRINT_TEMPLATES),
                       help="the sprint cadence")
+    # No default: absent means "leave the profile's", so a second run never
+    # resets a choice made the first time. A new profile gets `off`.
     init.add_argument("--title-prefix", choices=sorted(TITLE_PREFIX_MODES),
-                      default="off", help="what every issue is called")
+                      help="what every issue is called; off for a new profile")
     init.add_argument("-R", "--repo", help="owner/name; defaults to the working directory")
+    # `setup` was a command of its own, and `project create` a third way to the
+    # same place. `init` converges, so running it again *is* the converge (#203).
+    init.add_argument("--spec", help="JSON field spec; the built-in default is used "
+                                     "without one")
+    init.add_argument("--no-hooks", action="store_true",
+                      help="do not install the post-merge hook into this clone")
     init.set_defaults(func=cmd_init, needs_repo=True, projectless=True)
-
-    setup = sub.add_parser("setup", help="create the project's fields and labels, idempotently",
-        epilog=field_help(SETUP_FIELDS) + """\n\nproject fields created:\n  Story Points  number                            the Gold model's story_points\n  Priority      single-select  lowest..highest    Gold priority_id\n  FR            text                              requirement traceability\n  Sprint        iteration                         Gold sprint_id; via GraphQL, gh cannot\n  Status        single-select  Todo..Done         Gold state_id; two options added to GitHub's three""",
-        formatter_class=argparse.RawDescriptionHelpFormatter)
-    setup.add_argument("--spec", help="JSON spec; the built-in default is used without one")
-    setup.add_argument("-R", "--repo", help="repository to create the type: labels in")
-    setup.set_defaults(func=cmd_setup)
 
     initiative = sub.add_parser(
         "initiative", help="initiatives: the plan and WBS for a large feature",
@@ -8698,9 +8968,11 @@ default chosen for you.""",
     task.set_defaults(func=cmd_task, needs_repo=True, projectless=True)
     add_list(task_sub, TASK_TYPE, "tasks")
 
+    # Hidden from `--help`: a development command `make self-test` runs, and
+    # `gh` ships none in its help. No `help=` is what hides it.
     self_test = sub.add_parser(
-        "self-test", help="stand up a scratch project, exercise everything, tear it down"
-    )
+        "self-test", description="stand up a scratch project, exercise everything, "
+                                 "tear it down")
     self_test.add_argument("-R", "--repo", required=True, help="repository to create throwaway issues in")
     self_test.add_argument("--stamp", help="label for the scratch project's title")
     # Raised from 420. The old default was set against a measured lag of ~75s,
@@ -8721,7 +8993,8 @@ default chosen for you.""",
         epilog=field_help([
             ("--repo", "owner/name", "optional", "one repository; default is every repo in the profile keys"),
             ("--state", "open|closed|all", "optional", "which issues to consider; default open"),
-            ("--query", "search", "optional", "extra GitHub search terms, e.g. 'label:type:story'"),
+            ("-S/--search", "query", "optional", "extra GitHub search terms, e.g. "
+                                                 "'label:type:story'"),
             ("--limit", "number", "optional", "maximum issues to examine per repository"),
             ("--dry-run", "flag", "optional", "list what would be added and change nothing"),
             ("--adopt", "flag", "optional", "also give newly added issues the key: label and Status=Todo"),
@@ -8737,7 +9010,8 @@ why this is needed:
     )
     sync.add_argument("-R", "--repo")
     sync.add_argument("-s", "--state", default="open", choices=["open", "closed", "all"])
-    sync.add_argument("--query")
+    # `-S/--search`, `gh issue list`'s name for the same thing. It was `--query`.
+    sync.add_argument("-S", "--search", metavar="QUERY")
     sync.add_argument("-L", "--limit", type=int, default=200)
     sync.add_argument("--dry-run", action="store_true")
     sync.add_argument("--adopt", action="store_true",
@@ -8750,28 +9024,28 @@ why this is needed:
 
     board = sub.add_parser(
         "board", help="scrum, kanban, backlog or roadmap boards over one project",
-        epilog=field_help([
-            ("--name", "text", "required", "the board's name, and its identity for convergence"),
-            ("--type", "|".join(BOARD_TYPES), "required", "what kind of board; sets layout and base filter"),
-            ("--filter", "query", "optional", "extra filter, ANDed with the type's own"),
-            ("--save", "flag", "optional", "record it in the profile so setup keeps it in step"),
-        ]) + "\n\nboard types:\n" + "\n".join(
+        epilog="board types:\n" + "\n".join(
             f"  {k:<9} {v['layout'].replace('_LAYOUT','').lower():<8} {v['filter']:<22} {v['about']}"
             for k, v in BOARD_TYPES.items()
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     board_sub = board.add_subparsers(dest="board_command", required=True)
-    board_sub.add_parser("list", help="every board on the project")
-    board_show = board_sub.add_parser(
-        "show", help="render one board's contents as text, or as JSONL",
+    board_lister = board_sub.add_parser("list", help="every board on the project")
+    board_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
+    board_lister.add_argument("-w", "--web", action="store_true",
+                              help="open the project in the browser")
+    # `view`, as `gh issue/pr/project/repo/run view` all say. It was `show`.
+    board_view = board_sub.add_parser(
+        "view", help="render one board's contents as text, or as JSONL",
         epilog=field_help([
             ("name", "text|number", "required", "the board: its `board list` number, "
                                                 "or a name -- exact, prefix or substring"),
-            ("--format", "display|jsonl", "optional", "display is a text view; jsonl is one "
-                                                      "metadata line then one line per item"),
+            ("--format", "jsonl", "optional", "one metadata line then one line per item; "
+                                              "text without it"),
             ("--filter", "query", "optional", "extra terms, ANDed onto the board's own filter"),
             ("--out-dir", "path", "optional", "write board_<type>_<name>_<stamp>.<ext> here"),
+            ("-w/--web", "flag", "optional", "open the board in the browser"),
         ]) + "\n\nfilter terms:\n" + "\n".join(
             # Width from the vocabulary rather than a constant, so adding a term
             # cannot silently push the column out of line.
@@ -8781,81 +9055,114 @@ why this is needed:
             "\na board that looks right and shows the wrong items.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    board_show.add_argument("name", help="the board's number as `board list` prints it, "
+    # **Only a read may match loosely.** `gh` never fuzzy-matches an identifier,
+    # and `board create` converges by exact name, so a write takes a number or
+    # the exact name; a read showing the wrong board is visible at once.
+    board_view.add_argument("name", help="the board's number as `board list` prints it, "
                                          "or its name; a unique prefix or substring is enough")
-    board_show.add_argument("--format", default="display", choices=["display", "jsonl"])
-    board_show.add_argument("--filter")
-    board_show.add_argument("--out-dir")
-    board_new = board_sub.add_parser("create", help="create or converge a board")
-    board_new.add_argument("--name", required=True)
+    # No `display`: `gh` prints for a person with no flag at all (#203).
+    board_view.add_argument("--format", choices=["jsonl"],
+                            help="JSONL instead of the text view")
+    board_view.add_argument("--filter")
+    board_view.add_argument("--out-dir")
+    board_view.add_argument("-w", "--web", action="store_true",
+                            help="open the board in the browser")
+    board_new = board_sub.add_parser(
+        "create", help="create a board, or converge the one with exactly this name",
+        epilog=field_help([
+            ("name", "text", "required", "the board's name, and its identity for "
+                                         "convergence: exact"),
+            ("--type", "|".join(BOARD_TYPES), "required", "what kind of board; sets layout "
+                                                          "and base filter"),
+            ("--filter", "query", "optional", "extra filter, ANDed with the type's own"),
+            ("--save", "flag", "optional", "record it in the profile so init keeps it "
+                                           "in step"),
+        ]),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    # A named thing takes its name as a positional, as `gh label create <name>`
+    # does. It was `--name`.
+    board_new.add_argument("name", help="the board's exact name")
     board_new.add_argument("--type", required=True, choices=sorted(BOARD_TYPES))
     board_new.add_argument("--filter")
     board_new.add_argument("--save", action="store_true")
     board.set_defaults(func=cmd_board)
 
-    project = sub.add_parser(
-        "project", help="create the board and record it in the profile",
-        epilog=field_help([
-            ("--title", "text", "required", "the board's title"),
-            ("--key", "KEY", "optional", "project key, e.g. ZMBNI; added to the profile keys"),
-            ("--repo", "owner/name", "optional", "defaults to the repository this is run in"),
-            ("--force", "flag", "optional", "create a second project despite the profile"),
-        ]),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    # One create per noun, as `gh` has: `init` creates and adopts a project, so
+    # `project create`, `project owner` and `setup` went (#203). What is left is
+    # reading the profile's project and changing its two settings.
+    project = sub.add_parser("project", help="the profile's project: view it, edit its "
+                                             "settings")
     project_sub = project.add_subparsers(dest="project_command", required=True)
-    project_new = project_sub.add_parser("create", help="create it")
-    project_new.add_argument("-t", "--title", required=True)
-    project_new.add_argument("--key")
-    project_new.add_argument("-R", "--repo")
-    project_new.add_argument("--force", action="store_true")
-    project_new.add_argument("--sprint-template", choices=sorted(SPRINT_TEMPLATES),
-                             help="cadence, chosen once at creation; 'none' for kanban")
-    tmpl = project_sub.add_parser(
-        "sprint-template", help="choose the sprint cadence for an existing project"
-    )
-    tmpl.add_argument("--template", required=True, choices=sorted(SPRINT_TEMPLATES))
-    prefix = project_sub.add_parser(
-        "title-prefix", help="whether new issue titles carry their key and type",
-        epilog="modes:\n" + "\n".join(
+    project_viewer = project_sub.add_parser(
+        "view", help="the project's owner, number, keys, cadence and title prefix")
+    project_viewer.add_argument("--format", choices=["json"], help="JSON instead of text")
+    project_viewer.add_argument("-w", "--web", action="store_true",
+                                help="open the project in the browser")
+    project_viewer.set_defaults(func=cmd_project_view)
+    project_editor = project_sub.add_parser(
+        "edit", help="change the sprint cadence or the issue title prefix",
+        epilog="title prefix modes:\n" + "\n".join(
             f"  {name:<10} {example}" for name, example in TITLE_PREFIX_MODES.items()
         ) + """
+
+The flag names are init's, for the same settings.
 
 Existing issues are not renamed unless --backfill says so. It rebuilds each
 title rather than testing whether one looks prefixed already, so a second run
 changes nothing and an issue carrying another issue's id is corrected rather
 than prefixed twice.
 
---mode off strips a prefix this tool would have written -- `KEY-12 ` and an
-optional `Epic: ` -- and nothing else. A title that merely begins like one,
-`RFC-2119 keywords`, is somebody's own words and is left alone.""",
+--title-prefix off strips a prefix this tool would have written -- `KEY-12 `
+and an optional `Epic: ` -- and nothing else. A title that merely begins like
+one, `RFC-2119 keywords`, is somebody's own words and is left alone.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    prefix.add_argument("--mode", required=True, choices=list(TITLE_PREFIX_MODES))
-    prefix.add_argument("--backfill", action="store_true",
-                        help="also rename the issues already on the project")
-    prefix.add_argument("--dry-run", action="store_true",
-                        help="with --backfill: list the renames and write nothing at all")
-    project_sub.add_parser(
-        "owner", help="record whose account holds this project, for an older profile",
-        epilog="Takes the resolved --owner: `gh agile --owner LOGIN project owner`, or\n"
-               "no flag at all to record yourself. `project create` sets this itself.\n\n"
-               "A profile naming project.number with no project.owner only works for\n"
-               "the one account that happens to hold that number.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    project.set_defaults(func=cmd_project, needs_repo=True, projectless=True)
+    project_editor.add_argument("--sprint-template", choices=sorted(SPRINT_TEMPLATES),
+                                help="the sprint cadence; 'none' for kanban")
+    project_editor.add_argument("--title-prefix", choices=list(TITLE_PREFIX_MODES),
+                                help="what every new issue is called")
+    project_editor.add_argument("--backfill", action="store_true",
+                                help="with --title-prefix: also rename the issues "
+                                     "already on the project")
+    project_editor.add_argument("--dry-run", action="store_true",
+                                help="with --backfill: list the renames and write "
+                                     "nothing at all")
+    # Projectless: the cadence and the prefix live in the profile, and a backfill
+    # asks for the project itself.
+    project_editor.set_defaults(func=cmd_project_edit, projectless=True)
 
-    sprint = sub.add_parser("sprint", help="list or create sprint iterations")
+    sprint = sub.add_parser("sprint", help="sprint iterations, and the repairs around them")
     sprint_sub = sprint.add_subparsers(dest="sprint_command", required=True)
-    sprint_sub.add_parser("list", help="every sprint, active and completed")
+    sprint_lister = sprint_sub.add_parser("list", help="every sprint, active and completed")
+    sprint_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
+    # Optional, and only ever one default target: the current sprint, the way
+    # `gh pr view` takes the current branch. Never widened to every sprint.
+    sprint_viewer = sprint_sub.add_parser(
+        "view", help="one sprint: its window and its items, by Status",
+        epilog=field_help([
+            ("sprint", "@current|YYYY-MM-DD|title", "optional",
+             "default the current sprint; a start date is its identity"),
+            ("--format", "jsonl", "optional", "JSONL instead of text"),
+        ]) + """
+
+The current and future sprints are read from the Sprint field, which is the
+only thing that can say what is in a sprint now. A completed one is read from
+the sprint:YYYY-MM-DD labels: the field is cleared by every iteration write,
+and the labels are the record of where work was done.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sprint_viewer.add_argument("sprint", nargs="?", default="@current",
+                               help="@current (the default), a start date, or a title")
+    sprint_viewer.add_argument("--format", choices=["jsonl"], help="JSONL instead of text")
+    # Each help line says what the command *changes*: `ensure`, `backfill` and
+    # `unstamp` keep their names, and none is plain English the way gh's verbs are.
     sprint_ensure = sprint_sub.add_parser(
-        "ensure", help="guarantee a current sprint plus N ahead, aligned to start_day"
+        "ensure", help="append sprints until one is current and N lie ahead; "
+                       "rewrites the iterations"
     )
     sprint_ensure.add_argument("--ahead", type=int,
                                help="future sprints to keep; default from the profile")
     sprint_fix = sprint_sub.add_parser(
-        "reconcile", help="set each item's Sprint field from its sprint: labels",
+        "reconcile", help="set each item's Sprint field from its sprint: labels, board-wide",
         epilog=field_help([
             ("--dry-run", "flag", "optional", "list what would change and change nothing"),
         ]) + """
@@ -8877,7 +9184,7 @@ why this exists:
                                  "disagreement is somebody's decision")
 
     sprint_fill = sprint_sub.add_parser(
-        "backfill", help="stamp sprint: labels on issues that predate the stamping",
+        "backfill", help="add sprint: labels to issues that predate them, from history",
         epilog=field_help([
             ("--source", "field|timeline", "optional", "where to recover the sprint from"),
             ("--dry-run", "flag", "optional", "list what would be stamped and change nothing"),
@@ -8899,7 +9206,7 @@ Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
     sprint_fill.add_argument("--dry-run", action="store_true")
 
     sprint_clear = sprint_sub.add_parser(
-        "unstamp", help="clear sprint: labels from epics and initiatives",
+        "unstamp", help="remove sprint: labels from epics and initiatives",
         epilog=field_help([
             ("--dry-run", "flag", "optional", "list what would be cleared and change nothing"),
         ]) + """
@@ -8922,7 +9229,8 @@ why this exists:
     )
     sprint_clear.add_argument("--dry-run", action="store_true")
 
-    sprint_new = sprint_sub.add_parser("create", help="append a sprint iteration")
+    sprint_new = sprint_sub.add_parser(
+        "create", help="append one sprint; rewrites the iterations")
     sprint_new.add_argument("--start", help="ISO date; defaults to the day after the last ends")
     sprint_new.add_argument("--weeks", type=int, help="length; defaults to the field's own duration")
     sprint_new.add_argument("-t", "--title", help="defaults to 'Sprint <n>'")
@@ -8931,12 +9239,25 @@ why this exists:
                                  "and write nothing")
     sprint.set_defaults(func=cmd_sprint)
 
-    key = sub.add_parser("key", help="record a repository's key, e.g. ZMBNI, or list them")
-    key.add_argument("-R", "--repo", help="owner/name")
-    key.add_argument("--key", help="uppercase key; omit to list what is recorded")
-    key.add_argument("--name", help="human-readable project name, written to shortDescription")
-
-    key.set_defaults(func=cmd_key, needs_repo=True, projectless=True)
+    # `key` read or wrote depending on whether `--key` was given -- the trap
+    # `epic list` fell into, in a different coat. Now a verb each, `add` paired
+    # with `delete` as `gh ssh-key` and `gh gpg-key` pair them (#203).
+    key = sub.add_parser("key", help="the keys that label each repository's issues")
+    key_sub = key.add_subparsers(dest="key_command", required=True)
+    key_lister = key_sub.add_parser("list", help="every key in the profile")
+    key_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
+    key_lister.set_defaults(func=cmd_key_list, projectless=True)
+    key_adder = key_sub.add_parser("add", help="record a key for a repository")
+    key_adder.add_argument("key", help="uppercase; Jira's rules apply, e.g. ZMBNI")
+    key_adder.add_argument("-R", "--repo", help="owner/name; defaults to the working "
+                                                "directory")
+    key_adder.add_argument("--name", help="what it is called; also the project's "
+                                          "description when it is the project's key")
+    key_adder.set_defaults(func=cmd_key_add, needs_repo=True, projectless=True)
+    key_deleter = key_sub.add_parser(
+        "delete", help="remove a key from the profile; refused while issues carry it")
+    key_deleter.add_argument("key")
+    key_deleter.set_defaults(func=cmd_key_delete, projectless=True)
 
     # `issue` holds the verbs that act on any work item, whatever its type, the
     # way `gh issue` holds them (#202). `move`, `set` and `fix` were top-level;
@@ -9054,38 +9375,43 @@ No --status, and --field Status is refused: Status changes through
     fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
     fix.set_defaults(func=cmd_fix, needs_repo=True)
 
+    # Hidden: a machine calls it -- the post-merge hook -- and it keeps its name
+    # and flags because installed hooks call it by them. Renaming it would break
+    # every clone's hook silently, which is worse than a usage error.
     unfinished = sub.add_parser(
         "unfinished",
-        help="issues a merged range closed and nobody finished; for a git hook")
+        description="issues a merged range closed and nobody finished; for a git hook")
     unfinished.add_argument("--range", default="ORIG_HEAD..HEAD",
                             help="the revision range just merged (default: %(default)s)")
     unfinished.add_argument("--quiet", action="store_true",
                             help="print nothing when there is nothing to finish")
     unfinished.set_defaults(func=cmd_unfinished)
 
-    hooks = sub.add_parser(
-        "hooks", help="install the post-merge hook into this clone")
-    hooks.set_defaults(func=cmd_hooks, projectless=True)
 
     export = sub.add_parser("export", help="items, field values and status history")
-    export.add_argument("--csv", action="store_true", help="CSV instead of JSON")
-    export.add_argument("--grain", default="issues",
-                        choices=["issues", "events", "prs", "both", "master", "all"],
-                        help="issues is one row per work item; events one row per timeline "
+    # `--format`, as `gh project` spells machine output. It was `--csv`.
+    export.add_argument("--format", choices=["json", "csv"], default="json",
+                        help="json (the default) or csv")
+    # A comma list, as `gh` writes `--json a,b`. `both` was ambiguous among four.
+    export.add_argument("--grain", default="issues", type=grain_list,
+                        metavar=",".join(EXPORT_GRAINS),
+                        help="comma-separated, or all. "
+                             "issues is one row per work item; events one row per timeline "
                              "event, from the same queries, plus a pull request's opened, "
                              "reviewed, commented and merged; prs is one row per pull "
                              "request with its size, review round-trips and the issues it "
                              "closes; master is the configuration -- project, boards and "
                              "sprints -- always a full refresh (default: %(default)s)")
     export.add_argument("--since", help="ISO8601 lower bound on updated_at; overrides the state file")
+    # `--state-file`: `--state` is open/closed/all everywhere else, as in `gh`.
     export.add_argument(
-        "--state",
+        "--state-file",
         default=".gh_agile_export.json",
         help="watermark file, keyed by owner/project. JSON rather than YAML: there is no "
         "YAML parser in the standard library, and a partial one that reads only what this "
         "tool writes is a trap the first time someone edits it by hand",
     )
-    export.add_argument("--no-state", dest="state", action="store_const", const=None,
+    export.add_argument("--no-state", dest="state_file", action="store_const", const=None,
                         help="do not read or write a watermark; always a full export")
     export.add_argument("--out-dir", help="write agile_issues_<ISO8601>.<ext> here instead of stdout")
     export.add_argument("--overlap-seconds", type=int, default=DEFAULT_OVERLAP_SECONDS,
@@ -9266,6 +9592,82 @@ def retired_spelling(argv: list[str]) -> str | None:
         new = shlex.join(["gh", "agile", *head, "issue", verb, *positionals, *after])
         return (f"`{command}` is now `issue {verb}`, with the issue first as every "
                 f"targeted `gh` command takes it:\n  {new}")
+    return renamed_spelling(head, command, tail)
+
+
+#: Spellings #203 retired that are a rename and nothing more: the command words
+#: typed, the words they became, and the flags renamed within them -- a flag to
+#: a flag, or to a flag and the value it now takes.
+RENAMED_COMMANDS = [
+    (("board", "show"), ("board", "view"), {}),
+    (("setup",), ("init",), {}),
+    (("hooks",), ("init",), {}),
+    (("project", "create"), ("init",), {"--title": "-t"}),
+    (("project", "owner"), ("init",), {}),
+    (("project", "sprint-template"), ("project", "edit"), {"--template": "--sprint-template"}),
+    (("project", "title-prefix"), ("project", "edit"), {"--mode": "--title-prefix"}),
+    (("export",), ("export",), {"--csv": ("--format", "csv"), "--state": "--state-file"}),
+    (("sync",), ("sync",), {"--query": "--search"}),
+]
+
+#: Why each rename happened, said once in the hint.
+RENAMED_WHY = {
+    "board": "`view`, as every `gh` noun says it",
+    "init": "`init` creates, adopts and converges a project, and installs the hook",
+    "project": "the flag names `init` uses for the same settings",
+    "export": "`--format` as `gh` spells output, `--state` meaning open/closed/all "
+              "everywhere",
+    "sync": "`gh issue list`'s name for the same thing",
+}
+
+
+def renamed_spelling(head: list[str], command: str, tail: list[str]) -> str | None:
+    """The hint for a #203 rename, rebuilt from what was typed, or None."""
+    import shlex
+
+    words = [command, *tail]
+    if (command == "key" and not {"-h", "--help"} & set(tail)
+            and _first_positional(list(tail)) not in ("list", "add", "delete")):
+        # `key --key K` wrote and bare `key` read: the trap `epic list` fell
+        # into, in a different coat.
+        value, after = _pull_flag(tail, "--key")
+        new = (["key", "add", value, *after] if value else ["key", "list", *after])
+        return (f"`key` is now `key list`, `key add KEY` and `key delete KEY`, a verb "
+                f"each:\n  {shlex.join(['gh', 'agile', *head, *new])}")
+    if words[:2] == ["board", "create"]:
+        name, after = _pull_flag(tail[1:], "--name")
+        if name is None:
+            return None
+        new = shlex.join(["gh", "agile", *head, "board", "create", name, *after])
+        return (f"`board create --name N` is now `board create N`, a named thing "
+                f"taking its name as `gh label create <name>` does:\n  {new}")
+    for was, now, flags in RENAMED_COMMANDS:
+        if tuple(words[:len(was)]) != was:
+            continue
+        rest = words[len(was):]
+        changed = was != now
+        out = []
+        for token in rest:
+            name, eq, value = token.partition("=")
+            renamed = flags.get(name)
+            if renamed is None:
+                out.append(token)
+                continue
+            changed = True
+            if isinstance(renamed, tuple):
+                out.extend(renamed)
+            else:
+                out.append(f"{renamed}{eq}{value}" if eq else renamed)
+        if was == ("export",):
+            # `--grain both` meant issues and events when there were two grains.
+            out = ["issues,events" if index and out[index - 1] == "--grain"
+                   and token == "both" else token for index, token in enumerate(out)]
+            changed = changed or "both" in rest
+        if not changed:
+            return None
+        new = shlex.join(["gh", "agile", *head, *now, *out])
+        return (f"`{' '.join(was)}` is spelled differently now -- "
+                f"{RENAMED_WHY[now[0]]}:\n  {new}")
     return None
 
 
@@ -9402,7 +9804,7 @@ def missing_project_message(explicit: str | None) -> str:
         return (
             f"{found} names no project.number, and no --project was given.\n"
             f"  Create the board and record it in one step:\n\n"
-            f"    gh agile project create --title \"Your board\"\n\n"
+            f"    gh agile init --key KEY -t \"Your board\" --sprint-template 2-week\n\n"
             f"  Or name an existing one outright:  --project <n> --owner <login>"
         )
     searched = "\n".join(f"      {c}" for c in CONFIG_PATHS)
@@ -9422,7 +9824,7 @@ def missing_project_message(explicit: str | None) -> str:
         f"      config_from pointer to it\n"
         f"    pass --config path/to/agile.json\n"
         f"    name the board outright: --project <n> --owner <login>\n"
-        f"    or, for a repository that has no board yet: gh agile project create"
+        f"    or, for a repository that has no board yet: gh agile init"
     )
 
 

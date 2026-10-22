@@ -77,7 +77,7 @@ class TestClearField:
         monkeypatch.setattr(tool, "fields_of", lambda *a, **k: {})
         with pytest.raises(SystemExit) as exit_info:
             tool.clear_field("o", 1, "PVTI_9", "Sprint")
-        assert "gh agile setup" in str(exit_info.value)
+        assert "gh agile init" in str(exit_info.value)
 
 
 class TestUnstampClearsTheField:

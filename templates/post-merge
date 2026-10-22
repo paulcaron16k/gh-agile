@@ -17,7 +17,7 @@ python3 "$(git rev-parse --show-toplevel)/scripts/ci_status.py" --branch main --
 # `Item closed -> Done` is deliberately off, because it would write Status and
 # nothing else, leaving the issue reading Done with no Evidence.
 #
-# **This block is the whole hook that `gh agile hooks` installs elsewhere.** It
+# **This block is the whole hook that `gh agile init` installs elsewhere.** It
 # reaches no path inside this checkout, which is what makes it work in a
 # repository that is not this one (#193). The `ci_status.py` line above does,
 # and is this repository's own business.

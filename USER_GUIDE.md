@@ -79,8 +79,8 @@ gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an exis
 ```
 
 It creates the project, writes the profile, records the cadence and the starter
-boards, then runs `setup` — the fields, the `type:` and `key:` labels, and those
-boards.
+boards, then converges the fields, the `type:` and `key:` labels and those
+boards, and installs the post-merge hook in this clone (`--no-hooks` skips it).
 
 The starter boards are **Sprint board**, **Backlog** and **Roadmap**. A profile
 listing more than one key — several repositories, or a mono-repo carrying several
@@ -100,10 +100,12 @@ later. Nothing is written before every one of them is settled.
 an agent's behalf. A prompt would mean a second path, and the scripted one would
 rot.
 
-**It is idempotent.** Every step converges — `project create` refuses a second
-project, `setup` creates what is missing, a board is converged by name — so an
-interrupted run is simply run again, and a second run reports what is already
-right.
+**It is idempotent.** Every step converges — a profile that names a project is
+never given a second, a field or label is created only when missing, a board is
+converged by name, the hook is reported present — so an interrupted run is
+simply run again, and a second run reports what is already right. That is also
+how a project is converged later: after a field is added to a `--spec`, or one
+is deleted by hand, run `init` again.
 
 **And it stops honestly.** GitHub's built-in project workflows cannot be
 created, enabled or configured through the API: the schema has
@@ -139,9 +141,9 @@ workflows that read it.
 | `keys` | **ordered list** | yes | One entry per key: `{"key", "name", "repo"}`. **The order is the default** — the first entry for a repository is the key used when `--key` is not given |
 | `keys[].key` | string | yes | Short uppercase key, `[A-Z0-9]+`. No hyphen: the hyphen separates key from number in `ZMBNI-34` |
 | `keys[].repo` | string | yes | `owner/name` the key applies to. Several keys may name the same repo — see Mono-repo support |
-| `keys[].name` | string | no | What that key is for, shown by `gh agile key` |
-| `project.number` | integer | no | The board's **number**, not its node id — what `--project` takes. Written by `gh agile project create`, and what every command defaults to |
-| `project.owner` | string | no | **The account that holds the project**, and what `--owner` defaults to. Written by `gh agile project create`; `gh agile project owner` adds it to an older profile. Without it a number means "project N belonging to whoever ran this", which is only ever right for one person — see below |
+| `keys[].name` | string | no | What that key is for, shown by `gh agile key list` |
+| `project.number` | integer | no | The board's **number**, not its node id — what `--project` takes. Written by `gh agile init`, and what every command defaults to |
+| `project.owner` | string | no | **The account that holds the project**, and what `--owner` defaults to. Written by `gh agile init`, which also adds it to an older profile. Without it a number means "project N belonging to whoever ran this", which is only ever right for one person — see below |
 | `project.name` | string | no | Human-readable project name |
 | `project.key` | string | no | The main repository's key; a convenience copy of the matching `keys` entry |
 | `project.issue_title_prefix` | `off` \| `key` \| `key+type` | no | Whether new issue titles carry `KEY-ID` and the type — see Issue titles. Default `off`; an unrecognised value stops every command |
@@ -172,12 +174,12 @@ invisibly correct. For anybody else it resolves to nothing — so `export`,
 read access — or, worse, it resolves to an unrelated project 5 of *their* own,
 and then `sync --adopt` labels issues onto it.
 
-So record the owner. `project create` does it from now on; for a profile written
-before that:
+So record the owner. `init` does it when it creates the project, and adds it
+to a profile written before that -- run it again, naming whose project it is:
 
 ```bash
-gh agile project owner                  # records you
-gh agile --owner some-org project owner  # records an organization
+gh agile init                            # records you
+gh agile --owner some-org init           # records an organization
 ```
 
 Precedence is: `--owner` if given, then `project.owner`, then you. `--owner @me`
@@ -267,19 +269,18 @@ because in `gh` `-a` is `--assignee`, and `--add-assignee` has no short form.
 
 ### One project per main repository
 
-`gh agile project create` writes `project.number` into the profile, and refuses
-to create a second while one is recorded:
+`gh agile init` writes `project.number` into the profile, and never creates a
+second while one is recorded -- a profile that names a project is converged,
+not replaced:
 
 ```
-the profile already names project #4. One project per main repository, because
-project.number is what every command defaults to.
-  To start a different project: remove project.number from the profile here, or
-  work from the clone of that project's main repository.
+  project #4 already in the profile
 ```
 
 A second board would make the default ambiguous, and an ambiguous default is
-worse than typing the flag. `--force` overrides it for the case where you mean
-it.
+worse than typing the flag. To start a different project, remove
+`project.number` from the profile here, or work from the clone of that
+project's main repository.
 
 ### What is *not* checked in
 
@@ -303,26 +304,26 @@ Change directory to the main repo for this project. Files will be created which
 need to be checked in.
 
 ```bash
-# The board, its key, and the sprint cadence -- all three at creation.
-gh agile project create --title "Zamboni Iceberg table maintainer" \
-                        --key ZMBNI --sprint-template 2-week
-
-# Its fields and labels. Idempotent -- run it again after editing the spec.
-gh agile setup
+# The board, its key, and the sprint cadence -- all three at creation, then its
+# fields, labels and boards. Idempotent -- run it again after editing a --spec.
+gh agile init -t "Zamboni Iceberg table maintainer" --key ZMBNI --sprint-template 2-week
 
 # Further keys, for a mono-repo holding several components.
-gh agile key --key SPARK --repo paulcaron16k/Zamboni \
-             --name "Zamboni Spark maintainer"
+gh agile key add SPARK --repo paulcaron16k/Zamboni --name "Zamboni Spark maintainer"
+gh agile key list
 ```
 
 After this, `--project` and `--repo` are unnecessary in the same repository.
 
-If a project is created in a repo where one already exists, as identified by a
-existing profile .github/gh-agile.json with project.id = INT present, an errors
-is printed and no over-writing action is taken. Manually remove the existing
-profile project.id, or change to the folder where that new project main repo resides.
+A key is removed with `key delete`, which refuses while any issue still carries
+`key:SPARK` and says how many do -- the label is how every board, `validate` and
+the export decide whose an issue is:
 
-`setup` creates five fields. `Status` already exists with three options and
+```bash
+gh agile key delete SPARK
+```
+
+`init` creates five fields. `Status` already exists with three options and
 gains the two the policy declares:
 
 | Field | Type | Values |
@@ -446,18 +447,18 @@ gantt
 - **An item can be on three boards at once** and has one status on all of them.
   That is the property a second project would destroy.
 
-### Reading a board from the terminal: `board show`
+### Reading a board from the terminal: `board view`
 
 `board list` is the index — every view, its type, layout and filter.
-`board show` renders one:
+`board view` renders one, as `gh issue view` and `gh project view` render theirs:
 
 ```bash
-gh agile board show "Engineering: all work"
-gh agile board show 3                     # the number `board list` prints
-gh agile board show Eng                   # a prefix, or any unambiguous substring
-gh agile board show Backlog --filter "label:type:epic"
-gh agile board show Backlog --format jsonl
-gh agile board show Backlog --out-dir exports/
+gh agile board view "Engineering: all work"
+gh agile board view 3                     # the number `board list` prints
+gh agile board view Eng                   # a prefix, or any unambiguous substring
+gh agile board view Backlog --filter "label:type:epic"
+gh agile board view Backlog --format jsonl
+gh agile board view Backlog --out-dir exports/
 ```
 ```
 Backlog
@@ -627,10 +628,10 @@ quarter's promise land a quarter late is what makes this quarter's plan readable
 — needs a baseline to compare against, and there is none here. These sections
 record when work *began*; nothing records when it was *planned*. So a completed
 epic shows that a thing happened, not that it slipped, and `export` answers that
-question with dates. Ask `board show` for the history directly when you want it:
+question with dates. Ask `board view` for the history directly when you want it:
 
 ```bash
-gh agile board show Roadmap --filter=status:Done
+gh agile board view Roadmap --filter=status:Done
 ```
 
 **Two terms, because closed and `Done` are not the same fact.** An epic closed as
@@ -720,7 +721,7 @@ section at the same time:
   'Backlog' has no filter, so it shows every item on the project.
     A board that excludes nothing is usually a view that was named and never
     configured.
-    `gh agile board create --name 'Backlog' --type scrum|kanban|backlog|roadmap`
+    `gh agile board create 'Backlog' --type scrum|kanban|backlog|roadmap`
     converges an existing view by name and gives it the filter for that type.
 ```
 
@@ -843,9 +844,9 @@ choice Jira makes at board creation, which is why the command names it the same
 way:
 
 ```bash
-gh agile board create --name "Team SPARK" --type scrum  --filter "label:key:SPARK" --save
-gh agile board create --name "Engineering"  --type kanban --save
-gh agile board create --name "Backlog"      --type backlog --save
+gh agile board create "Team SPARK"  --type scrum  --filter "label:key:SPARK" --save
+gh agile board create "Engineering" --type kanban --save
+gh agile board create "Backlog"     --type backlog --save
 gh agile board list
 ```
 ```
@@ -856,11 +857,18 @@ gh agile board list
   4  Backlog      backlog  table   no:sprint -status:Done
 ```
 
-That first column is the board's number, and `board show` takes it.
+That first column is the board's number, and `board view` takes it. Into a
+pipe, `board list` prints the same rows tab-separated with no header, as every
+`list` does, and `--format json` gives them as JSON; `-w` opens the project.
+
+**Only a read matches a name loosely.** `board view Eng` finds "Engineering"
+by prefix, and a wrong guess there is visible at once. `board create` converges
+the board with *exactly* the name given -- `gh` never fuzzy-matches an
+identifier, and a write that matched "Eng" to someone's board would change it.
 
 `--filter` is ANDed with the type's own, so a scrum board for one key is the
 type plus one clause. `--save` records the board in the profile, after which
-`gh agile setup` converges it like any field — boards become reproducible rather
+`gh agile init` converges it like any field — boards become reproducible rather
 than hand-built.
 
 Across repositories the team filter is `repo:owner/name`; in a mono-repo it is
@@ -929,7 +937,7 @@ query { user { projectV2(number: 4) { workflows(first: 20) {
 returns each workflow's `name` and whether it is `enabled`. What it does **not**
 return is the workflow's filter or action, and the only mutation in the schema is
 `deleteProjectV2Workflow` — nothing creates, enables or configures one. So the
-profile cannot carry these settings and `setup` cannot converge them: enabling a
+profile cannot carry these settings and `init` cannot converge them: enabling a
 workflow is a web-UI step, once, per project.
 
 ### Which ones to enable, and which to leave alone
@@ -980,15 +988,15 @@ than at the next `validate` run. That is the whole gap, and `#174` sat in it for
 days.
 
 ```bash
-gh agile hooks
+gh agile init
 ```
 
 installs `.git/hooks/post-merge` into the clone you are standing in, so `git
 pull` — the moment somebody is already at the terminal — names any issue the
-merge closed and nobody finished. `gh agile init` prints the same line at the
-end of a fresh setup, and running `hooks` again replaces a hook this tool wrote.
-A hook somebody else wrote is refused rather than overwritten, with the one line
-to add to it.
+merge closed and nobody finished. A second run reports the hook present, or
+replaces a stale one this tool wrote, and says which; `--no-hooks` leaves the
+clone alone. A hook somebody else wrote is named and kept rather than
+overwritten, with the one line to add to it.
 
 **It is per clone, and that is git's decision rather than an oversight.** Hooks
 are executable code, so cloning never brings them — and even the versioned route,
@@ -1101,7 +1109,7 @@ So:
 gh agile sync --dry-run                 # what is missing, changing nothing
 gh agile sync                           # every repo in the profile keys
 gh agile sync --repo owner/other-repo   # just one
-gh agile sync --query "label:type:story" --state all
+gh agile sync --search "label:type:story" --state all
 gh agile sync --adopt                   # and give what it adds the convention
 ```
 ```
@@ -1351,6 +1359,21 @@ gh agile sprint list
 Without `--start`, a new sprint begins the day after the last one ends, because
 overlapping sprints make "the current sprint" ambiguous.
 
+One sprint, with its items by Status:
+
+```bash
+gh agile sprint view                  # the current sprint, as `gh pr view` takes the current branch
+gh agile sprint view 2026-08-17       # by start date: a sprint's identity
+gh agile sprint view "Sprint 1"       # or by title
+```
+
+With no argument it is the current sprint and never every sprint -- an
+identifier left out picks one default target, it does not widen the command.
+The current and future sprints are read from the `Sprint` field, the only thing
+that can say what is in a sprint *now*; a completed one from its
+`sprint:YYYY-MM-DD` labels, because every iteration write clears the field and
+the labels are the record that survives it.
+
 Creating a sprint writes the iteration configuration, which clears every item's
 `Sprint` value board-wide; the tool re-applies them afterwards (see *Which sprint
 was this worked in?*). `--dry-run` says what would be appended and how many
@@ -1402,8 +1425,8 @@ which clears every assignment, since iterations carry no id. The cost of getting
 this wrong is paid later, and by someone else.
 
 ```bash
-gh agile project create --title "…" --key ZMBNI --sprint-template 2-week
-gh agile project sprint-template --template 2-week    # an existing project
+gh agile init -t "…" --key ZMBNI --sprint-template 2-week
+gh agile project edit --sprint-template 2-week        # an existing project
 ```
 
 | Template | Cadence |
@@ -1513,7 +1536,7 @@ iterations carry no id.
 > `start_day` is this tool's alignment rule, not a GitHub setting. The API's
 > configuration input has no `startDay`, and GitHub does not derive one from a
 > start date — sending a Monday left the field reporting Sunday. It affects only
-> what the web UI suggests. `setup` therefore converges `cadence_days` and
+> what the web UI suggests. `init` therefore converges `cadence_days` and
 > leaves `startDay` alone.
 
 ### Which sprint was this worked in?
@@ -1598,7 +1621,7 @@ winning — an item carried across a boundary holds where it is *now*, which is
 the last sprint it lived in.
 
 **It also runs automatically.** Every write that clears assignments — the
-cadence converging in `setup`, `sprint ensure`, `sprint create` — restores from
+cadence converging in `init`, `sprint ensure`, `sprint create` — restores from
 a snapshot taken moments before and then heals from the labels, in that order
 and in the same run. The snapshot covers items the labels know nothing about,
 such as one assigned by hand and never moved through `issue move`; the heal covers
@@ -1773,7 +1796,7 @@ Everything here was checked against the live API, not inferred. The README's
 | What | Consequence |
 |---|---|
 | **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit — see the note above. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
-| **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `setup` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
+| **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `init` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
 | **A user-owned project has no auto-add-issues workflow** | The six built-ins are: auto-add sub-issues to project, auto-close issue, item added to project, item closed, pull request linked to issue, pull request merged. Nothing puts a newly opened repository issue on the board — hence `sync` |
 | **The series anchor is write-only** | `ProjectV2IterationFieldConfigurationInput` takes `startDate`, `duration`, `iterations`; the readable `ProjectV2IterationFieldConfiguration` exposes `startDay`, `duration`, `iterations`, `completedIterations` — and no `startDate`. You cannot read back the anchor you sent |
 | **A sprint created in the web UI can be any length, on any day** | It may overlap what this tool would place. `ensure` then reports that it cannot place one without overlapping, and creates nothing |
@@ -1795,7 +1818,7 @@ configuration:
 - Renaming or re-dating a sprint. There is no safe web-UI path: it clears
   assignments board-wide. Prefer changing `name_template`, which affects only
   sprints created afterwards.
-- Creating fields and boards — `setup` converges them; a hand-made one drifts.
+- Creating fields and boards — `init` converges them; a hand-made one drifts.
 
 **Two manual steps the API cannot do for you.** Enable the built-in *Item added
 to project* workflow to set `Status` on anything added by any path, and the
@@ -1902,7 +1925,7 @@ gh agile initiative create -t "Hierarchy visibility" --start 2026-09-01 --target
 has a Sprint. An initiative without dates is dropped by the web roadmap exactly
 as an undated epic was.
 
-`setup` creates `Start date` and `Target date` as project **DATE** fields. Both
+`init` creates `Start date` and `Target date` as project **DATE** fields. Both
 are optional everywhere: an epic with neither behaves exactly as it did before
 they existed, on every board and in `validate`.
 
@@ -1912,7 +1935,7 @@ epic carries no `Sprint` by rule — a level that spans sprints is never asked f
 one. So both of the layout's inputs were absent and every epic landed in the
 undated bucket.
 
-**`board show` hid that, and is unchanged.** Its roadmap sections derive *when
+**`board view` hid that, and is unchanged.** Its roadmap sections derive *when
 work began* from the `sprint:` labels of an epic's descendants — a reconstruction
 the web UI has no way to perform. So the text roadmap looked right while the one
 a stakeholder opens drew nothing.
@@ -2147,17 +2170,17 @@ goes.
 `initiative:<slug>` is a filter term of its own:
 
 ```bash
-gh agile board show "Engineering: all work" --filter initiative:large-new-feature
-gh agile board create --name "Large new feature" --type scrum --filter initiative:large-new-feature --save
+gh agile board view "Engineering: all work" --filter initiative:large-new-feature
+gh agile board create "Large new feature" --type scrum --filter initiative:large-new-feature --save
 ```
 
 **It takes the same three forms `--initiative` does** — the slug, the issue
 number, or a keyed reference:
 
 ```bash
-gh agile board show "Engineering: all work" --filter initiative:large-new-feature
-gh agile board show "Engineering: all work" --filter initiative:91
-gh agile board show "Engineering: all work" --filter initiative:AGILE-91
+gh agile board view "Engineering: all work" --filter initiative:large-new-feature
+gh agile board view "Engineering: all work" --filter initiative:91
+gh agile board view "Engineering: all work" --filter initiative:AGILE-91
 ```
 
 A reference is resolved to its slug before the filter is evaluated, and the
@@ -2173,7 +2196,7 @@ rather than failing, the same as an unmatched label.
 
 **A saved board is written as `label:initiative:<slug>`.** GitHub knows `label:`
 and does not know `initiative:`, so saving the short form would leave the web UI
-and `board show` disagreeing about what the board contains — the one thing a
+and `board view` disagreeing about what the board contains — the one thing a
 reconstructed board must never do, since the whole claim is that it renders *that*
 definition rather than something retyped beside it. The shorthand is expanded on
 the way in; you can write either.
@@ -2197,9 +2220,9 @@ gh agile issue view 201 --format json  # any level, as JSON
 ```
 
 A **list is a board read**, not a search: Status, Sprint and points live on the
-project item, so only the board can say them. It reuses `board show` with a
+project item, so only the board can say them. It reuses `board view` with a
 filter of its own — `label:type:epic is:open` — so a list and a board never
-disagree about what an epic is, and `-S` takes the same terms as `board show
+disagree about what an epic is, and `-S` takes the same terms as `board view
 --filter`. `-s` is `open`, `closed` or `all`, and `-L` keeps the first N, both
 as in `gh issue list`. `-w` opens the board in the browser instead.
 
@@ -2238,7 +2261,8 @@ values, `off` by default:
 | `key+type` | `ZMBNI-34 Epic: Retention policy` | Epics stand out from stories in a flat list |
 
 ```bash
-gh agile project title-prefix --mode key
+gh agile project edit --title-prefix key
+gh agile project view                      # what the profile now says
 ```
 
 **It applies to issues created after it is set.** Existing issues are left
@@ -2254,8 +2278,8 @@ it was taken up, 18 of 19 issues predated it. So when you *do* want the sweep, a
 for it:
 
 ```bash
-gh agile project title-prefix --mode key --backfill --dry-run
-gh agile project title-prefix --mode key --backfill
+gh agile project edit --title-prefix key --backfill --dry-run
+gh agile project edit --title-prefix key --backfill
 ```
 ```
   issue title prefix: key  e.g. ZMBNI-34 Retention policy
@@ -2276,7 +2300,7 @@ issue, not on how many times the command has run — so a second run reports
 `renamed 0`, and an issue mistakenly carrying `ZMBNI-12` is corrected to
 `ZMBNI-34` rather than becoming `ZMBNI-34 ZMBNI-12 …`.
 
-**`--mode off --backfill` strips only what this tool would have written** —
+**`--title-prefix off --backfill` strips only what this tool would have written** —
 `KEY-12 ` and an optional `Epic: `. A title that merely begins that way,
 `RFC-2119 keywords in requirement levels`, is somebody's own words and is left
 alone. A backfill that guessed at what looked like a prefix would quietly destroy
@@ -2589,7 +2613,7 @@ Close it when its stories are closed. `gh agile validate` reports an epic marked
 
 ```bash
 gh agile validate
-gh agile export --csv --out-dir exports/
+gh agile export --format csv --out-dir exports/
 ```
 
 ---
@@ -2642,8 +2666,8 @@ Three grains, because they answer different questions and cannot share a file:
 | `prs` | pull request: size, review round-trips, and the issues it closes | — |
 
 ```bash
-gh agile export --grain both --csv --out-dir exports/
-gh agile export --grain prs --csv --out-dir exports/
+gh agile export --grain issues,events --format csv --out-dir exports/
+gh agile export --grain prs --format csv --out-dir exports/
 ```
 ```
   full export: 24 row(s)
@@ -2702,7 +2726,7 @@ with the same hash, so the target overwrites rather than duplicating.
 
 ### A daily incremental export
 
-06:00 UTC, both grains, into a per-key folder:
+06:00 UTC, issues and events, into a per-key folder:
 
 ```cron
 CRON_TZ=UTC
@@ -2710,7 +2734,7 @@ PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
 HOME=/home/you
 LOG=/home/you/.local/state/gh-agile/export.log
 
-0 6 * * *  cd /srv/projects/Zamboni && gh-agile export --grain both --csv --out-dir /srv/exports >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
+0 6 * * *  cd /srv/projects/Zamboni && gh-agile export --grain issues,events --format csv --out-dir /srv/exports >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
 ```
 
 `CRON_TZ=UTC` because cron otherwise uses the system timezone, and a job named
@@ -2868,19 +2892,20 @@ destroy the very information the board is there to show.
 Every command lists its own fields with type, obligation and description:
 
 ```bash
-gh agile setup --help
+gh agile init --help
 gh agile story create --help
 gh agile issue move --help
 ```
 
 | Command | Does |
 |---|---|
-| `setup` | Create fields and labels; converge on re-run |
-| `key` | Record a repository's key; list what is recorded |
-| `project create` / `project sprint-template` / `project title-prefix` | Create the board and record it; choose the sprint cadence; choose the issue-title form and optionally backfill it |
-| `board list` / `board show` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |
+| `init` | Create or adopt the project, record it, converge its fields, labels and boards, install the post-merge hook; run again to converge |
+| `key list` / `key add` / `key delete` | The keys in the profile; record one for a repository; remove one no issue carries |
+| `project view` / `project edit` | The profile's project -- owner, number, keys, cadence, prefix; change the sprint cadence or the issue-title form, optionally backfilling it |
+| `board list` / `board view` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |
 | `sync` | Add issues that belong on the board and are not on it |
-| `sprint list` / `sprint create` | Show or append iterations |
+| `sprint list` / `sprint view` / `sprint create` | Show the iterations; one sprint with its items; append one |
+| `sprint ensure` / `sprint reconcile` / `sprint backfill` / `sprint unstamp` | Append sprints until one is current and enough lie ahead; set Sprint fields from the labels; add labels from history; remove labels from containers |
 | `initiative create` / `epic create` / `story create` / `task create` | Create work items with their parent, labels and fields; `gh issue create`'s flags, the title as `-t` |
 | `initiative` / `epic` / `story` / `issue` `list` and `view` | List one level from the board, by Status; view one item with its children, its `sprint:` labels and its checks. `issue` takes any level |
 | `issue edit` | Edit one or more issues: `gh issue edit`'s flags, the board's fields, an epic's dates; `-t` keeps the prefix |
@@ -2889,4 +2914,9 @@ gh agile issue move --help
 | `issue reconcile` | Repair one issue's Sprint field from its `sprint:` labels |
 | `validate` | Check the conventions a machine can check |
 | `export` | Issues and events, full or incremental, to stdout or timestamped files |
-| `self-test` | Stand up a scratch project, exercise everything, tear it down |
+
+**A `list` into a pipe is data**: tab-separated, one row per item, no header, as
+`gh issue list` prints it -- so `gh agile epic list | cut -f1` is the keys.
+`--format json` (or `jsonl`, where a list offers it) is the structured form;
+there is no `--jq` or `--template`, which the standard library cannot provide,
+so pipe JSON to `jq`.

@@ -79,7 +79,7 @@ class TestSyncDefaultsToEveryRepository:
 
 
 class TestEveryOtherCommandKeepsItsWorkingDirectoryDefault:
-    @pytest.mark.parametrize("argv", [EPIC, STORY, SET, MOVE, FIX, ["project", "owner"]])
+    @pytest.mark.parametrize("argv", [EPIC, STORY, SET, MOVE, FIX, ["key", "add", "ZMBNI"]])
     def test_the_clone_is_the_right_guess(self, tool, defaults, argv):
         assert defaults(argv).repo == "o/gh-agile"
 
@@ -112,7 +112,7 @@ class TestTheSweep:
             monkeypatch.setattr(tool, "gh", fake_gh)
             monkeypatch.setattr(tool, "board_items", lambda *a, **k: [])
             args = argparse.Namespace(
-                owner="o", project=4, repo=repo, state="open", query=None,
+                owner="o", project=4, repo=repo, state="open", search=None,
                 limit=200, dry_run=True, adopt=False, _config=config or PROFILE)
             tool.cmd_sync(args)
             return capsys.readouterr().out

@@ -553,8 +553,11 @@ class TestTheUnfilteredWarning:
                 "filter": view_filter})
             monkeypatch.setattr(tool, "iterations", lambda *a, **k: ([], []))
             monkeypatch.setattr(tool, "fetch_items", lambda *a, **k: ("t", []))
+            # It asks `gh` which repository this is, to resolve an initiative
+            # filter; unstubbed it shelled out from inside the suite.
+            monkeypatch.setattr(tool, "current_repo", lambda: None)
             args = argparse.Namespace(owner="o", project=4, name="View 1",
-                                      filter=extra, format="display", out_dir=None,
+                                      filter=extra, format=None, out_dir=None,
                                       _config={})
             tool.cmd_board_show(args)
             return capsys.readouterr()

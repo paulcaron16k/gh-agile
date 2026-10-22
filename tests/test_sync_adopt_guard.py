@@ -52,7 +52,7 @@ def board(monkeypatch, tool):
 
 def args_for(*, adopt=False, yes=False, dry_run=False, limit=200):
     return argparse.Namespace(
-        repo="o/r", state="open", query=None, limit=limit, dry_run=dry_run,
+        repo="o/r", state="open", search=None, limit=limit, dry_run=dry_run,
         adopt=adopt, yes=yes, owner="o", project=4, _config={},
         command="sync", config=None,
     )

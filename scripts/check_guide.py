@@ -17,7 +17,7 @@ Two levels, because they catch different things:
    cron's, so a command that only works because of an interactive shell's PATH
    fails here rather than at 07:00.
 
-Mutating examples -- epic, story, move, project create -- are checked but not
+Mutating examples -- epic, story, issue move, init -- are checked but not
 run; `make self-test` covers those against a scratch project.
 """
 
@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import functools
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -40,7 +39,8 @@ TOOL = ROOT / "gh-agile"
 #: board the profile names, and a view names one issue, which on another board
 #: is somebody else's issue or none -- the reason `board show` is absent too.
 SAFE = {
-    ("key",), ("board", "list"), ("sprint", "list"),
+    ("key", "list"), ("board", "list"), ("sprint", "list"), ("sprint", "view"),
+    ("project", "view"),
     ("validate",), ("sync",), ("export",),
     ("initiative", "list"), ("epic", "list"), ("story", "list"), ("issue", "list"),
 }
@@ -164,9 +164,6 @@ def check(command: str) -> list[str]:
 #: exists to catch -- so anything added later has to argue for itself in this
 #: dict, where a reviewer will see it.
 UNDOCUMENTED_OK = {
-    ("self-test",):
-        "a maintainer target, not a user command: it stands up and tears down a "
-        "scratch project and is driven by `make self-test`",
     ("task", "create"):
         "filing tasks as GitHub issues is deliberately not promoted -- POLICY.md "
         "§2 still recommends a markdown checklist inside the story, and the "
@@ -179,48 +176,55 @@ UNDOCUMENTED_OK = {
 }
 
 
-def parser_leaves() -> set[tuple[str, ...]]:
+def load_parser():
+    """The CLI's own parser, built in-process from the file `gh` would run."""
+    import importlib.machinery
+    import importlib.util
+
+    loader = importlib.machinery.SourceFileLoader("gh_agile_cli", str(TOOL))
+    spec = importlib.util.spec_from_loader("gh_agile_cli", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module.build_parser()
+
+
+def parser_leaves(parser=None) -> set[tuple[str, ...]]:
     """Every subcommand a user can actually invoke, leaves only.
 
-    Read from the CLI's own help rather than from a list kept beside it, for the
-    reason this direction exists at all: a list maintained by hand drifts from
-    the thing it describes, and then the check is checking the list.
+    Read from the CLI's own parser rather than from a list kept beside it, for
+    the reason this direction exists at all: a list maintained by hand drifts
+    from the thing it describes, and then the check is checking the list.
 
-    Leaves, because a guide showing `board list` and never `board show` has not
-    documented `board show`. Reporting the parent as covered would be the false
+    **Walked, not scraped from `--help`.** It read the `{a,b,c}` line under
+    `positional arguments:`, which matched an option's choices the same way
+    (`sync all`), then matched nothing at all once the commands took a
+    `<command>` metavar and `--help` grew `gh`'s sections (#203, #204). A
+    command with no `help=` is hidden from `--help` -- `self-test`,
+    `unfinished` -- and so is not one the guide owes a reader.
+
+    Leaves, because a guide showing `board list` and never `board view` has not
+    documented `board view`. Reporting the parent as covered would be the false
     assurance the whole script exists to remove.
     """
-    def choices(words):
-        # **Read from the `positional arguments:` block, not from the usage
-        # line.** argparse prints an option's choices the same way it prints a
-        # subparser group -- `--state {open,closed,all}` against `{list,show,
-        # create}` -- so matching `{...}` anywhere reported `sync all`,
-        # `sync open` and `sync closed` as undocumented commands. Found by
-        # running it. Only a subparser group appears as a line of its own under
-        # the positional heading.
-        text = help_for(words)
-        block = text.partition("positional arguments:")[2]
-        # First *non-empty* line: `partition` leaves the newline, so taking
-        # `splitlines()[0]` read the empty remainder of the heading and matched
-        # nothing. That made `parser_leaves()` empty and the whole check pass
-        # vacuously -- the exact failure this story exists to prevent, found by
-        # a summary line reading `-2 command(s) require documenting`.
-        first = next((line for line in block.splitlines() if line.strip()), "")
-        match = re.match(r"\s*\{([a-z0-9,\-]+)\}\s*$", first)
-        return match.group(1).split(",") if match else []
+    import argparse
 
-    leaves = set()
-    for command in choices(()):
-        children = choices((command,))
-        if children:
-            leaves.update((command, child) for child in children)
-        else:
-            leaves.add((command,))
+    def walk(node, path):
+        for action in node._actions:
+            if not isinstance(action, argparse._SubParsersAction):
+                continue
+            # `_choices_actions` holds only the subcommands given a `help=`:
+            # exactly the ones `--help` shows.
+            for shown in action._choices_actions:
+                child = action.choices[shown.dest]
+                deeper = list(walk(child, (*path, shown.dest)))
+                yield from deeper or [(*path, shown.dest)]
+
+    leaves = set(walk(parser or load_parser(), ()))
     if not leaves:
-        # **A check that can pass by finding nothing is not a check.** This read
-        # the parser's help by pattern, and a help format that changes would
-        # otherwise silently make every command exempt.
-        sys.exit("check_guide: no subcommands found in the CLI's help; "
+        # **A check that can pass by finding nothing is not a check.** An
+        # extraction that stops matching would otherwise make every command
+        # exempt and the check green -- which happened once.
+        sys.exit("check_guide: no subcommands found in the CLI's parser; "
                  "the extraction stopped matching")
     return leaves
 
