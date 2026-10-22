@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 
 import pytest
 
@@ -171,5 +172,6 @@ class TestTheStoryFlag:
         task standing alone is a mislabelled issue, so no such escape exists."""
         import pathlib as _p
         source = _p.Path(tool.__file__).read_text()
-        body = source.split("def cmd_task(")[1].split("\ndef ")[0]
+        # To the next top-level statement, whatever it is.
+        body = re.split(r"\n(?=\S)", source.split("def cmd_task(")[1])[0]
         assert '"none"' not in body

@@ -2254,11 +2254,13 @@ def apply_title_prefix(config, repo: str, number: int, key, kind: str, title: st
     return new
 
 
-def create_issue(repo: str, title: str, body: str, labels: list[str]) -> tuple[int, str]:
-    """Create an issue and return (number, node id)."""
+def create_issue(repo: str, title: str, body: str, labels: list[str],
+                 options: list[str] = ()) -> tuple[int, str]:
+    """Create an issue and return (number, node id). `options` go to `gh` as given."""
     cmd = ["issue", "create", "--repo", repo, "--title", title, "--body", body]
     for label in labels:
         cmd += ["--label", label]
+    cmd += list(options)
     url = gh(cmd).strip().splitlines()[-1]
     number = int(url.rsplit("/", 1)[-1])
     node = json.loads(gh(["issue", "view", str(number), "--repo", repo, "--json", "id"]))["id"]
@@ -2305,7 +2307,13 @@ def set_field(login: str, project: int, item_id: str, field_name: str, value) ->
     elif kind == "DATE":
         cmd += ["--date", iso_date(str(value), field_name)]
     elif kind == "NUMBER":
-        cmd += ["--number", str(value)]
+        # `--number` went from `issue edit` in #207: the field's type says how a
+        # value is written, so a number arrives as text and is checked here.
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            sys.exit(f"{field_name!r} is a number field, and {value!r} is not a number")
+        cmd += ["--number", str(int(number)) if number.is_integer() else str(number)]
     else:
         cmd += ["--text", str(value)]
     gh(cmd)
@@ -2453,6 +2461,124 @@ BODY_TEMPLATE = """## Intent
 
 ## Evidence
 """
+
+
+def read_body_flag(body: str | None, body_file: str | None) -> str | None:
+    """`-b TEXT` or `-F PATH` (`-` for stdin), as `gh issue create` reads them.
+
+    Both at once is refused, as `gh` refuses it: one of them would have to be
+    dropped, and nothing says which the person meant.
+    """
+    if body is not None and body_file is not None:
+        sys.exit("-b/--body and -F/--body-file both give the body; pass one.")
+    if body_file is not None:
+        return sys.stdin.read() if body_file == "-" else pathlib.Path(body_file).read_text()
+    return body
+
+
+def create_body(args) -> str:
+    """The body a new work item is filed with, from `-b`/`-F` and the section flags.
+
+    **Read as `## Heading` sections, the way `--evidence-file` is**, because a
+    work item's body is POLICY.md §4's three sections and nothing else checks
+    them: `## Intent` and `## Acceptance` land in theirs, an unheaded body is the
+    Intent, and any other heading is kept after Evidence in the order given.
+
+    `--intent` and `--acceptance` stay as the per-section spellings. Given with
+    a body that already has that section, it is refused rather than one winning
+    -- the two can disagree, and a silent choice files words nobody typed last.
+    """
+    text = read_body_flag(getattr(args, "body", None), getattr(args, "body_file", None))
+    sections = {}
+    if text is not None and text.strip():
+        sections = parse_sections(text) or {"Intent": text.strip()}
+    for name, flag in (("Intent", "--intent"), ("Acceptance", "--acceptance")):
+        given = getattr(args, name.casefold(), None)
+        if given is None:
+            continue
+        if sections.get(name):
+            sys.exit(f"{flag} and the body's ## {name} both give the {name}; pass one.")
+        sections[name] = given
+    body = BODY_TEMPLATE.format(intent=sections.pop("Intent", "") or PLACEHOLDER,
+                                acceptance=sections.pop("Acceptance", "") or PLACEHOLDER)
+    evidence = sections.pop("Evidence", "")
+    if evidence:
+        body += f"{evidence}\n"
+    for name, value in sections.items():
+        body += f"\n## {name}\n{value}\n"
+    return body
+
+
+#: Label prefixes the tool writes and a person may not hand to `create -l`.
+#: Each carries a meaning another command keeps true: `type:` is the level
+#: `create` is named for, `key:` comes from `--key` and the profile,
+#: `initiative:` follows the sub-issue edge, and `sprint:` records where work
+#: was done, stamped as it is done. A hand-given one says something no command
+#: checked.
+OWNED_LABELS = ("type:", KEY_LABEL, INITIATIVE_LABEL, SPRINT_LABEL)
+
+
+def extra_labels(labels: list[str] | None) -> list[str]:
+    """`-l` labels for a create, with the tool's own refused by name."""
+    labels = list(labels or [])
+    owned = [lb for lb in labels if lb.casefold().startswith(OWNED_LABELS)]
+    if owned:
+        sys.exit(f"{', '.join(owned)}: the tool writes {'/'.join(OWNED_LABELS)} labels "
+                 f"itself.\n  The type is the command, the key is --key, an initiative "
+                 f"is --initiative,\n  and a sprint: label is stamped when the work is "
+                 f"done in it.")
+    return labels
+
+
+def add_create_flags(parser: argparse.ArgumentParser) -> None:
+    """`gh issue create`'s flags, on every work item's `create` (#207).
+
+    Not `-e/--editor` and no prompting: `gh` prompts for what is missing, this
+    tool refuses and names the flag -- *refuse rather than guess* -- so a
+    missing title is an error, and `-e` and `-w` say why they are absent.
+    """
+    parser.add_argument("-b", "--body", help="the body, read as ## Heading sections; "
+                                             "unheaded text is the Intent")
+    parser.add_argument("-F", "--body-file", metavar="FILE",
+                        help="read the body from FILE; - for stdin")
+    parser.add_argument("-a", "--assignee", action="append", metavar="LOGIN",
+                        help='assign by login; "@me" for you. Repeatable')
+    parser.add_argument("-l", "--label", action="append", metavar="NAME",
+                        help="add a label; repeatable. Not type:, key:, initiative: or "
+                             "sprint:, which the tool writes")
+    parser.add_argument("-m", "--milestone", metavar="NAME", help="the milestone, by name")
+    parser.add_argument("-e", "--editor", action=RefusedFlag,
+                        why="this tool does not prompt: give -t and -b or -F, so a "
+                            "script and a person type the same command")
+    parser.add_argument("-w", "--web", action=RefusedFlag,
+                        why="the browser's form files an issue this tool never sees, "
+                            "so it would reach no board, no key and no parent")
+
+
+class RefusedFlag(argparse.Action):
+    """A `gh` flag this tool has on purpose not got, refused with the reason.
+
+    Accepting it and doing nothing would be the `--not-planned`-without-`--close`
+    trap again; argparse's own `unrecognized arguments` says nothing about why.
+    """
+
+    def __init__(self, option_strings, dest, why: str, **kwargs):
+        self.why = why
+        kwargs.setdefault("help", f"refused: {why}")
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.error(f"{option_string}: {self.why}")
+
+
+def create_issue_options(args) -> list[str]:
+    """`-a` and `-m` for `gh issue create`, passed through as given."""
+    out = []
+    for login in getattr(args, "assignee", None) or []:
+        out += ["--assignee", login]
+    if getattr(args, "milestone", None):
+        out += ["--milestone", args.milestone]
+    return out
 
 
 @contextlib.contextmanager
@@ -2754,13 +2880,15 @@ def create_initiative(args) -> int:
             f"filter.\n"
             f"  Pass --slug to choose another."
         )
+    # Read and checked before anything is created: an issue number is never
+    # reused, so a refused body or label must cost nothing.
+    body, extras = create_body(args), extra_labels(getattr(args, "label", None))
     labels = ["type:initiative", f"{INITIATIVE_LABEL}{slug}"] + (
         [f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, _node = create_issue(
         args.repo, args.title,
-        BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
-        labels,
+        body, labels + extras, create_issue_options(args),
     )
     title = apply_title_prefix(
         args._config, args.repo, number, getattr(args, "key", None), "initiative", args.title
@@ -2982,12 +3110,14 @@ def cmd_epic(args) -> int:
     targets_on = spanned_target(starts_on,
                                 iso_date(getattr(args, "target", None), "--target"),
                                 getattr(args, "span", None), args._config)
+    # Read and checked before anything is created: an issue number is never
+    # reused, so a refused body or label must cost nothing.
+    body, extras = create_body(args), extra_labels(getattr(args, "label", None))
     labels = ["type:epic"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, _node = create_issue(
         args.repo, args.title,
-        BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
-        labels,
+        body, labels + extras, create_issue_options(args),
     )
     title = apply_title_prefix(
         args._config, args.repo, number, getattr(args, "key", None), "epic", args.title
@@ -3060,12 +3190,14 @@ def cmd_story(args) -> int:
         if parent_type and parent_type != "epic":
             sys.exit(f"{epic_repo}#{epic} is a {parent_type}, and a story belongs to an "
                      f"epic.\n  Nothing was created.")
+    # Read and checked before anything is created: an issue number is never
+    # reused, so a refused body or label must cost nothing.
+    body, extras = create_body(args), extra_labels(getattr(args, "label", None))
     labels = ["type:story"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, node = create_issue(
         args.repo, args.title,
-        BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
-        labels,
+        body, labels + extras, create_issue_options(args),
     )
     title = apply_title_prefix(
         args._config, args.repo, number, getattr(args, "key", None), "story", args.title
@@ -6195,12 +6327,14 @@ def cmd_task(args) -> int:
                  f"  A task is how one person is organising their own story; under "
                  f"anything else it is\n  a story or an epic that has been mislabelled.")
 
+    # Read and checked before anything is created: an issue number is never
+    # reused, so a refused body or label must cost nothing.
+    body, extras = create_body(args), extra_labels(getattr(args, "label", None))
     labels = ["type:task"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(repo, labels)
     number, node = create_issue(
         repo, args.title,
-        BODY_TEMPLATE.format(intent=args.intent or "_TBD_", acceptance=args.acceptance or "_TBD_"),
-        labels,
+        body, labels + extras, create_issue_options(args),
     )
     title = apply_title_prefix(
         args._config, repo, number, getattr(args, "key", None), "task", args.title
@@ -6224,69 +6358,6 @@ def cmd_task(args) -> int:
     return 0
 
 
-def cmd_set(args) -> int:
-    """Set a field on an issue already on the board.
-
-    The gap the first real repair found: `story` sets fields at creation and
-    nothing could set them afterwards, so a half-created item -- a rate limit
-    hit between two field writes -- could only be fixed by hand, which is what
-    this tool exists to avoid.
-    """
-    # **Status has one door, and it is `issue move`.** That is where Done asks for
-    # evidence, starting work claims the issue and assigns the sprint, and the
-    # `sprint:` label is stamped. A field write here skipped all of it -- the
-    # second route to Done that #202 closes. Refused before anything is read.
-    if args.field.strip().casefold() == "status":
-        sys.exit("Status changes through `gh agile issue move ISSUE STATUS`, which asks "
-                 "for the evidence\n  Done needs and claims the issue and its sprint when "
-                 "work starts; closing is\n  `gh agile issue close ISSUE`.")
-    repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
-    item = board_item_for(args.owner, args.project, repo, args.issue)
-    if not item:
-        sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
-    # **Refused, not accepted and ignored.** `task` has no `--points` flag, but
-    # `set` reaches any issue on the board, and a number written here would be
-    # summed by everything downstream that sums points. Saying so is the whole
-    # difference between a rule and a hope.
-    if args.field.casefold() in ("story points", "points"):
-        labels = issue_labels(repo, args.issue)
-        if f"type:{TASK_TYPE}" in set(labels):
-            sys.exit(
-                f"{repo}#{args.issue} is a task, and a task carries no estimate.\n"
-                f"  A task is how one person is organising their own story, so it "
-                f"changes no number\n  on the board -- points on one would be summed "
-                f"into a velocity nobody meant.\n"
-                f"  Estimate the story instead."
-            )
-    # **The same rule, at the other door.** `plan` is where a container's dates
-    # are set and it refuses a story; `set` reaches every field on every issue,
-    # so without this the sanctioned path refuses and the generic one writes it
-    # anyway. A date on a story is read by nothing -- the roadmap places a story
-    # from its Sprint, which is what #115 left it.
-    # `and` short-circuits, so the issue is read only for the two field names
-    # this rule is about.
-    if (args.field.casefold() in {name.casefold() for name in DATE_FIELDS}
-            and not container_level(issue_labels(repo, args.issue))):
-        sys.exit(
-            f"{repo}#{args.issue} is not an epic or an initiative, and only "
-            f"those carry a plan.\n"
-            f"  A story's dates are its sprint. Set one with `--field Sprint`.\n"
-            f"  For a container, `gh agile plan` writes both dates in one call "
-            f"and can clear them."
-        )
-    value = args.value
-    if args.number is not None:
-        value = args.number
-    # Same aliasing as `move`, for the one field where it matters: `set --field
-    # Status --value In-Review` should not behave differently from `move
-    # --status In-Review`.
-    if args.field.casefold() == "status":
-        value = canonical_status(str(value))
-    set_field(args.owner, args.project, item["id"], args.field, value)
-    print(f"  #{args.issue} {args.field} = {value}")
-    return 0
-
-
 #: `none` on a date flag: take the date off rather than set one. Spelled the way
 #: `story --epic none` already spells the same idea -- an explicit opt-out that
 #: reads as a decision, where a bare `--start` with no argument reads as a
@@ -6297,7 +6368,7 @@ CLEAR_DATE = "none"
 def planned_dates(start: str | None, target: str | None) -> list[tuple[str, str | None]]:
     """`(field, value)` for each date **given**, with `None` meaning clear.
 
-    Separated from `cmd_plan` so the parsing is testable without a board, and so
+    Separated from `cmd_edit` so the parsing is testable without a board, and so
     every date is parsed before any of them is written: `plan X --start
     2026-10-01 --target soon` must write nothing at all, not the half of itself
     that happened to be valid. The same rule `epic` follows for a different
@@ -6337,33 +6408,91 @@ def item_date(login: str, project: int, item_id: str, field_name: str) -> str | 
                  if (n.get("field") or {}).get("name") == field_name and n.get("date")), None)
 
 
-def cmd_plan(args) -> int:
-    """Set or clear the dates on an epic or an initiative that already exists.
+#: `gh issue edit`'s flags that `issue edit` passes through untouched, as
+#: `(argparse dest, gh flag)`. Everything `gh` already does correctly is handed
+#: to it rather than rewritten; only the title, which `gh` would strip of its
+#: prefix, and the board's fields, which `gh` cannot reach, are this tool's.
+EDIT_PASSTHROUGH = (
+    ("add_label", "--add-label"), ("remove_label", "--remove-label"),
+    ("add_assignee", "--add-assignee"), ("remove_assignee", "--remove-assignee"),
+    ("milestone", "--milestone"),
+)
 
-    **A team designs and plans before it staffs and schedules.** The dates
-    arrive when somebody is available, when a quarter is agreed, when a
-    dependency lands -- so they are inherently a later edit, and `--start` on
-    `epic` and `initiative`, which only works while the issue is being created,
-    is the wrong shape for them. Raised by the owner, who described that
-    sequence.
 
-    **Its own command rather than a mode on three others**, and the precedent is
-    `move`: starting work is one call because Status, Sprint, the label and the
-    assignee are one decision expressed in four writes. Planning is the same
-    shape -- both dates are one decision, and `set` writes one field per
-    invocation, so re-planning through `set` is two commands and two board
-    writes that can half-fail. `plan` also knows what it is writing to, which
-    `set` by design does not: `set` reaches any field on any issue.
+def edit_title(config: dict, labels: list[str], number: int, title: str) -> str:
+    """The title `issue edit -t` writes: the words given, under the issue's prefix.
 
-    Clearing is here because a plan that slips is re-planned and a date set in
-    error has to come off. `clear_field` has existed since #170 and nothing
-    reached it from a command line until now.
+    **The reason to use this over `gh issue edit -t`**, which replaces the whole
+    title and so drops `AGILE-12 ` on a prefixed profile. The prefix is rebuilt
+    from the issue's own `key:` and `type:` labels, and a prefix typed into the
+    new words is taken off first, so `-t "AGILE-12 New words"` is not doubled.
+    """
+    mode = title_prefix_mode(config)
+    if mode == "off":
+        return title
+    key = next((lb[len(KEY_LABEL):] for lb in labels if lb.startswith(KEY_LABEL)), None)
+    kind = next((lb[len("type:"):] for lb in labels if lb.startswith("type:")), None)
+    if not key or (mode == "key+type" and not kind):
+        missing = "key:" if not key else "type:"
+        sys.exit(f"#{number} carries no {missing} label, so the {mode} prefix the profile "
+                 f"names cannot be rebuilt.\n  Label it first, or set the words as given "
+                 f"with `gh issue edit {number} -t ...`.")
+    return prefixed_title(mode, key, number, kind or "", strip_title_prefix(title, key))
+
+
+#: **Status has one door, and it is `issue move`.** That is where Done asks for
+#: evidence, starting work claims the issue and assigns the sprint, and the
+#: `sprint:` label is stamped. A field write here skipped all of it -- the second
+#: route to Done that #202 closed. Refused before anything is read.
+STATUS_DOOR = ("Status changes through `gh agile issue move ISSUE STATUS`, which asks for "
+               "the evidence\n  Done needs and claims the issue and its sprint when work "
+               "starts; closing is\n  `gh agile issue close ISSUE`.")
+
+#: Fields with a rule about which level may carry them, so the issue's labels
+#: are read only when one of these is written.
+LEVEL_RULED_FIELDS = frozenset({"story points", "points",
+                                *(d.casefold() for d in DATE_FIELDS)})
+
+#: Said by both doors to a container's dates -- `--start` and `--field "Start date"`.
+NOT_A_CONTAINER = ("{repo}#{issue} is not an epic or an initiative, and only those carry a "
+                   "plan.\n  A story's dates are its sprint: `gh agile issue edit {issue} "
+                   "--field Sprint --value ...`.")
+
+
+def field_refusal(field_name: str, labels: list[str], repo: str, issue: int) -> str | None:
+    """Why this field may not be written on this issue, or None.
+
+    **A task carries no estimate.** `issue edit` reaches any issue on the board,
+    and a number written on a task would be summed by everything downstream that
+    sums points. Saying so is the whole difference between a rule and a hope.
+
+    **Only a container carries a plan.** A date on a story is read by nothing --
+    the roadmap places a story from its Sprint, which is what #115 left it, and
+    #115 is the rule that a level spanning sprints holds none, which is why the
+    two date fields exist for the levels above.
+    """
+    name = field_name.strip().casefold()
+    if name in ("story points", "points") and f"type:{TASK_TYPE}" in set(labels):
+        return (f"{repo}#{issue} is a task, and a task carries no estimate.\n"
+                f"  A task is how one person is organising their own story, so it changes "
+                f"no number\n  on the board -- points on one would be summed into a "
+                f"velocity nobody meant.\n  Estimate the story instead.")
+    if name in {d.casefold() for d in DATE_FIELDS} and not container_level(labels):
+        return NOT_A_CONTAINER.format(repo=repo, issue=issue)
+    return None
+
+
+def edit_dates(args) -> list[tuple[str, str | None]] | None:
+    """`--start`, `--target` and `--for`, parsed before any issue is read.
+
+    `None` when none was given. A span is returned as the target's *span*, still
+    to be measured from a start that may be on the item already -- which is what
+    makes `issue edit X --for 8w` a sentence: re-sizing a phase is a thing a
+    planner does without restating a start that has not changed.
     """
     span = getattr(args, "span", None)
     if args.start is None and args.target is None and span is None:
-        sys.exit("plan needs --start, --target, --for, or a combination. A date is "
-                 f"YYYY-MM-DD in UTC,\n  {CLEAR_DATE!r} removes one, and --for sizes "
-                 f"the span from the start -- 6w, 10d, 3sprints.")
+        return None
     if span and args.target:
         sys.exit(SPAN_AND_TARGET)
     # Refused rather than resolved one way: `--start none --for 6w` asks for the
@@ -6371,52 +6500,132 @@ def cmd_plan(args) -> int:
     if span and (args.start or "").strip().casefold() == CLEAR_DATE:
         sys.exit("--for measures from a start date, and --start none takes it away.\n"
                  "  Clear the dates, or give the start this span runs from.")
-    repo, args.issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
-    # **Every refusal before the first write**, in the order that costs least:
-    # the dates parse with no API call at all, the level is one issue read, and
-    # only then is the board asked for the item.
-    wanted = planned_dates(args.start, args.target)
-    level = container_level(issue_labels(repo, args.issue))
-    if not level:
-        sys.exit(
-            f"{repo}#{args.issue} is not an epic or an initiative, and only those "
-            f"carry a plan.\n"
-            f"  A story's dates are its sprint -- #115 is the rule that a level "
-            f"which spans\n  sprints holds none, which is why these two fields "
-            f"exist for the levels above.\n"
-            f"  Move the story with `gh agile issue edit {args.issue} --field "
-            f"Sprint --value ...`."
-        )
-    item = board_item_for(args.owner, args.project, repo, args.issue)
-    if not item:
-        sys.exit(f"issue {repo}#{args.issue} is not on project {args.project}")
-    # **The start a span runs from may already be on the item**, which is what
-    # makes `plan X --for 8w` a sentence: re-sizing a phase is a thing a planner
-    # does on its own, without restating a start date that has not changed. Read
-    # only when `--for` is given and `--start` is not, so nothing else pays for it.
+    return planned_dates(args.start, args.target)
+
+
+def cmd_edit(args) -> int:
+    """`issue edit ISSUE...`: `gh issue edit`'s flags, the board's fields, the plan.
+
+    **The gap the first real repair found**: `story` set fields at creation and
+    nothing could set them afterwards, so a half-created item -- a rate limit
+    hit between two field writes -- could only be fixed by hand, which is what
+    this tool exists to avoid.
+
+    **One command for every change to an existing issue, as `gh issue edit` is**
+    (#207). It was `set`, one field per call through `--field`/`--number`, and
+    `plan` for the dates -- three spellings for what `gh` calls one verb, and a
+    create flag (`--points`) that the edit spelled differently. So the flags
+    that `story create` takes, `issue edit` takes, and they write the same
+    field the same way.
+
+    **The dates are one decision, written together.** A team designs and plans
+    before it staffs and schedules, so dates arrive as a later edit; both are
+    parsed before either is written, and `none` clears one -- `clear_field` is
+    the tool's only unset.
+
+    **Every refusal before the first write, across every issue named.** The
+    flags parse with no API call at all, each issue is read once for its labels,
+    and only then is anything written: `issue edit 12 13 --points 3` on a story
+    and a task writes neither.
+    """
+    if (args.field is None) != (args.value is None):
+        sys.exit("--field and --value go together: --field NAME --value V. The field's "
+                 "type says how\n  the value is written.")
+    if args.field and args.field.strip().casefold() == "status":
+        sys.exit(STATUS_DOOR)
+    dates = edit_dates(args)
+    body = read_body_flag(args.body, args.body_file)
+    fields = [(name, value) for name, value in (("Story Points", args.points),
+                                                 ("Priority", args.priority),
+                                                 (args.field, args.value))
+              if name and value is not None]
+    passthrough = []
+    for dest, flag in EDIT_PASSTHROUGH:
+        given = getattr(args, dest, None)
+        passthrough += [(flag, value) for value in
+                        ([given] if isinstance(given, str) else given or [])]
+    if args.remove_milestone:
+        passthrough.append(("--remove-milestone", None))
+    if body is not None:
+        passthrough.append(("--body", body))
+    if not (fields or dates is not None or passthrough or args.title):
+        sys.exit("nothing to change. Give -t, -b/-F, a label, assignee or milestone flag, "
+                 "--points,\n  --priority, --field/--value, or --start/--target/--for.")
+
+    plans = []
+    for ref in args.issue:
+        repo, number = parse_issue_ref(ref, args._config, getattr(args, "repo", None))
+        # `issue_labels` only when something here depends on them: a title to
+        # prefix, or a field with a rule about which level may carry it.
+        needs_labels = (args.title or dates is not None
+                        or any(name.strip().casefold() in LEVEL_RULED_FIELDS
+                               for name, _ in fields))
+        labels = issue_labels(repo, number) if needs_labels else []
+        for name, _value in fields:
+            refusal = field_refusal(name, labels, repo, number)
+            if refusal:
+                sys.exit(refusal)
+        if dates is not None and not container_level(labels):
+            sys.exit(NOT_A_CONTAINER.format(repo=repo, issue=number))
+        title = edit_title(args._config, labels, number, args.title) if args.title else None
+        item = None
+        if fields or dates is not None:
+            item = board_item_for(args.owner, args.project, repo, number)
+            if not item:
+                sys.exit(f"issue {repo}#{number} is not on project {args.project}")
+        plans.append((repo, number, title, item))
+
+    for repo, number, title, item in plans:
+        command = ["issue", "edit", str(number), "--repo", repo]
+        if title:
+            command += ["--title", title]
+        for flag, value in passthrough:
+            command += [flag] if value is None else [flag, value]
+        if len(command) > 5:
+            gh(command)
+            if title:
+                print(f"  #{number} title = {title}")
+            for flag, value in passthrough:
+                shown = "(new body)" if flag == "--body" else (value or "")
+                print(f"  #{number} {flag} {shown}".rstrip())
+        for name, value in fields:
+            set_field(args.owner, args.project, item["id"], name, value)
+            # `--points 3` parses as 3.0, and the board shows 3.
+            shown = f"{value:g}" if isinstance(value, float) else value
+            print(f"  #{number} {name} = {shown}")
+        if dates is not None:
+            write_dates(args, repo, number, item, list(dates))
+    return 0
+
+
+def write_dates(args, repo: str, number: int, item: dict,
+                wanted: list[tuple[str, str | None]]) -> None:
+    """Write the plan's dates on one container, measuring `--for` from its start.
+
+    The start a span runs from may already be on the item, so it is read only
+    when `--for` is given and `--start` is not, and nothing else pays for it.
+    """
+    span = getattr(args, "span", None)
     note = ""
     if span:
         starts_on = next((v for name, v in wanted if name == DATE_FIELDS[0]), None)
         if starts_on is None:
             starts_on = item_date(args.owner, args.project, item["id"], DATE_FIELDS[0])
         if not starts_on:
-            sys.exit(
-                f"--for measures a span, and {repo}#{args.issue} has no start date to "
-                f"measure it from.\n  Pass --start YYYY-MM-DD as well, or set one first."
-            )
+            sys.exit(f"--for measures a span, and {repo}#{number} has no start date to "
+                     f"measure it from.\n  Pass --start YYYY-MM-DD as well, or set one first.")
         wanted.append((DATE_FIELDS[1], target_from(starts_on, span, args._config)))
         note = f" ({span} from {starts_on})"
     for field_name, value in wanted:
         if value is None:
             clear_field(args.owner, args.project, item["id"], field_name)
-            print(f"  #{args.issue} {field_name} cleared")
+            print(f"  #{number} {field_name} cleared")
         else:
             set_field(args.owner, args.project, item["id"], field_name, value)
             # The provenance is printed because the field cannot hold it: a date
             # arrived at by arithmetic looks exactly like one somebody typed.
-            print(f"  #{args.issue} {field_name} = {value}"
+            print(f"  #{number} {field_name} = {value}"
                   f"{note if field_name == DATE_FIELDS[1] else ''}")
-    return 0
 
 
 #: Who the implicit claim assigns, and what `--add-assignee @me` names: whoever
@@ -8080,11 +8289,21 @@ def add_view(group, item_type: str | None, what: str) -> None:
     viewer.set_defaults(func=cmd_view, item_type=item_type, needs_repo=True)
 
 
+#: The rows every `create` shares: `gh issue create`'s own flags (#207).
+CREATE_FIELDS = [
+    ("-b/--body", "text", "optional", "## Heading sections; unheaded text is the Intent"),
+    ("-F/--body-file", "path or -", "optional", "the body from a file, or stdin"),
+    ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
+    ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
+    ("-a/--assignee", "login|@me", "optional", "repeatable"),
+    ("-l/--label", "name", "optional", "repeatable; not type:, key:, initiative:, sprint:"),
+    ("-m/--milestone", "name", "optional", "the milestone"),
+]
+
 EPIC_FIELDS = [
     ("-t/--title", "text", "required", "the epic's title"),
     ("--repo", "owner/name", "required", "repository the issue is created in"),
-    ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
-    ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
+    *CREATE_FIELDS,
 ]
 
 STORY_FIELDS = [
@@ -8093,15 +8312,26 @@ STORY_FIELDS = [
     ("--epic", "N|KEY-N|URL", "required", "epic to attach to as a sub-issue"),
     ("--points", "number", "optional", "Story Points; the Gold model's story_points"),
     ("--priority", "lowest|low|medium|high|highest", "optional", "Priority field"),
-    ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
-    ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
+    *CREATE_FIELDS,
 ]
 
-SET_FIELDS = [
-    ("issue", "N|KEY-N|URL", "required", "the issue, on the board already; positional"),
-    ("--field", "field name", "required", 'e.g. Status, "Story Points", Priority, FR, Sprint'),
-    ("--value", "text", "optional", "text, single-select option, sprint title, or @current"),
-    ("--number", "number", "optional", "numeric value; use instead of --value for a number field"),
+EDIT_FIELDS = [
+    ("issue...", "N|KEY-N|URL", "required", "one or more issues; positional"),
+    ("-t/--title", "text", "optional", "new words; the key prefix is kept"),
+    ("-b/--body", "text", "optional", "replace the body, as gh issue edit -b"),
+    ("-F/--body-file", "path or -", "optional", "replace the body from a file, or stdin"),
+    ("--add-label", "name", "optional", "repeatable; also --remove-label"),
+    ("--add-assignee", "login|@me", "optional", "repeatable; also --remove-assignee"),
+    ("-m/--milestone", "name", "optional", "also --remove-milestone"),
+    ("--points", "number", "optional", "Story Points, as story create writes it"),
+    ("--priority", "lowest|low|medium|high|highest", "optional", "Priority field"),
+    ("--field", "field name", "optional", 'any other field: "Story Points", FR, Sprint'),
+    ("--value", "text", "optional", "the field's type says how it is written; "
+                                    "@current for Sprint"),
+    ("--start", "YYYY-MM-DD|none", "optional", "an epic's or initiative's planned start"),
+    ("--target", "YYYY-MM-DD|none", "optional", "its planned finish"),
+    ("--for", "6w | 10d | 3sprints", "optional", "the target, sized from the start; "
+                                                 "calendar days, inclusive"),
 ]
 
 CLOSE_FIELDS = [
@@ -8111,16 +8341,6 @@ CLOSE_FIELDS = [
     ("--evidence", "text or -", "conditional", "required for completed, unless the "
                                                "body has it"),
     ("--evidence-file", "path or -", "conditional", "file of ## Heading sections"),
-]
-
-PLAN_FIELDS = [
-    ("issue", "N|KEY-N|URL", "required", "the epic or initiative; positional"),
-    ("--start", "YYYY-MM-DD", "conditional", "when the work is planned to begin, "
-                                             "or none to remove it"),
-    ("--target", "YYYY-MM-DD", "conditional", "when it is planned to finish, "
-                                              "or none to remove it"),
-    ("--for", "6w | 10d | 3sprints", "conditional", "the target, sized from the "
-                                                    "start; calendar days, inclusive"),
 ]
 
 MOVE_FIELDS = [
@@ -8361,8 +8581,7 @@ default chosen for you.""",
                                            "slugified"),
             ("--repo", "owner/name", "optional", "where the issue is filed"),
             ("--key", "KEY", "optional", "which key to label it with"),
-            ("--intent", "text", "optional", "the plan: what changes for whom, and why"),
-            ("--acceptance", "text", "optional", "what finished looks like"),
+            *CREATE_FIELDS,
         ]),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(initiative_new, "initiative")
@@ -8378,8 +8597,9 @@ default chosen for you.""",
     initiative_new.add_argument("--for", dest="span", metavar="SPAN",
                                 help="size the span instead of naming its end: "
                                      "6w, 10d, 3sprints. Calendar days, inclusive")
-    initiative_new.add_argument("--intent")
-    initiative_new.add_argument("--acceptance")
+    initiative_new.add_argument("--intent", help="the plan: what changes for whom, and why")
+    initiative_new.add_argument("--acceptance", help="what finished looks like")
+    add_create_flags(initiative_new)
     add_list(initiative_sub, "initiative", "initiatives")
     add_view(initiative_sub, "initiative", "one initiative")
     initiative_fix = initiative_sub.add_parser(
@@ -8414,6 +8634,7 @@ default chosen for you.""",
                            "3sprints. Calendar days, inclusive")
     epic.add_argument("--intent")
     epic.add_argument("--acceptance")
+    add_create_flags(epic)
     epic.set_defaults(func=cmd_epic, needs_repo=True)
     add_list(epic_sub, "epic", "epics")
     add_view(epic_sub, "epic", "one epic")
@@ -8436,6 +8657,7 @@ default chosen for you.""",
     story.add_argument("--priority")
     story.add_argument("--intent")
     story.add_argument("--acceptance")
+    add_create_flags(story)
     story.set_defaults(func=cmd_story, needs_repo=True)
     add_list(story_sub, "story", "stories")
     add_view(story_sub, "story", "one story")
@@ -8462,8 +8684,7 @@ default chosen for you.""",
             ("--story", "N|KEY-N|URL", "required", "the story it belongs to"),
             ("--repo", "owner/name", "optional", "where the issue is filed"),
             ("--key", "KEY", "optional", "which key to label it with"),
-            ("--intent", "text", "optional", "## Intent body section"),
-            ("--acceptance", "text", "optional", "## Acceptance body section"),
+            *CREATE_FIELDS,
         ]),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(task, "task")
@@ -8473,6 +8694,7 @@ default chosen for you.""",
     task.add_argument("--key", help="which key to label the issue with")
     task.add_argument("--intent")
     task.add_argument("--acceptance")
+    add_create_flags(task)
     task.set_defaults(func=cmd_task, needs_repo=True, projectless=True)
     add_list(task_sub, TASK_TYPE, "tasks")
 
@@ -8752,15 +8974,48 @@ why this exists:
     move.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
     move.set_defaults(func=cmd_move, needs_repo=True)
 
-    setter = issue_sub.add_parser(
-        "edit", help="set one field on an issue already on the board",
-        epilog=field_help(SET_FIELDS),
+    editor = issue_sub.add_parser(
+        "edit", help="edit issues: gh issue edit's flags, the board's fields, the plan",
+        epilog=field_help(EDIT_FIELDS) + """
+
+Several issues at once, as `gh issue edit` takes them: every refusal is
+checked on all of them before anything is written to any.
+
+-t keeps the prefix. With issue_title_prefix set, plain `gh issue edit -t`
+drops `AGILE-12 `; this rebuilds it from the issue's key: and type: labels.
+
+No --status, and --field Status is refused: Status changes through
+`issue move`, which asks for the evidence Done needs.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    setter.add_argument("issue", help=ISSUE_REF_HELP)
-    setter.add_argument("--field", required=True, help='field name, e.g. "Story Points"')
-    setter.add_argument("--value", help="text or single-select option")
-    setter.add_argument("--number", type=float, help="numeric value")
-    setter.set_defaults(func=cmd_set, needs_repo=True)
+    editor.add_argument("issue", nargs="+", help=ISSUE_REF_HELP)
+    editor.add_argument("-t", "--title", help="new words for the title; the prefix is kept")
+    editor.add_argument("-b", "--body", help="replace the body")
+    editor.add_argument("-F", "--body-file", metavar="FILE",
+                        help="replace the body from FILE; - for stdin")
+    for flag in ("--add-label", "--remove-label", "--add-assignee", "--remove-assignee"):
+        editor.add_argument(flag, action="append", metavar="NAME",
+                            help="repeatable" + ('; "@me" for you' if "assignee" in flag
+                                                 else ""))
+    editor.add_argument("-m", "--milestone", metavar="NAME",
+                        help="the milestone, by name")
+    editor.add_argument("--remove-milestone", action="store_true")
+    editor.add_argument("--points", type=float, help="Story Points")
+    editor.add_argument("--priority", help="the Priority option")
+    editor.add_argument("--field", help='any other field, e.g. FR or Sprint')
+    editor.add_argument("--value", help="its value; the field's type says how it is "
+                                        "written, and @current names the sprint")
+    # No `type=`: the parsing belongs with the refusal that names the flag, and
+    # both dates are parsed together so a bad one writes neither.
+    editor.add_argument("--start", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
+    editor.add_argument("--target", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
+    # `dest="span"`: `args.for` is not addressable in Python, and argparse would
+    # have named it that.
+    editor.add_argument("--for", dest="span", metavar="SPAN",
+                        help="size the span from the start instead of naming its "
+                             "end: 6w, 10d, 3sprints. Calendar days, inclusive")
+    editor.add_argument("-R", "--repo", help="only needed for a bare number outside "
+                                             "its repository")
+    editor.set_defaults(func=cmd_edit, needs_repo=True)
     closer = issue_sub.add_parser(
         "close", help="close it, as gh issue close does, and set Status to Done",
         epilog=field_help(CLOSE_FIELDS),
@@ -8798,24 +9053,6 @@ why this exists:
                      help="say what would change and change nothing")
     fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
     fix.set_defaults(func=cmd_fix, needs_repo=True)
-
-    planner = sub.add_parser("plan",
-        help="set or clear the dates on an epic or initiative that already exists",
-        epilog=field_help(PLAN_FIELDS) + """""",
-        formatter_class=argparse.RawDescriptionHelpFormatter)
-    planner.add_argument("issue", help=ISSUE_REF_HELP)
-    # No `type=`: the parsing belongs with the refusal that names the flag, and
-    # both dates are parsed together so a bad one writes neither.
-    planner.add_argument("--start", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
-    planner.add_argument("--target", help=f"YYYY-MM-DD in UTC, or {CLEAR_DATE} to remove it")
-    # `dest="span"`: `args.for` is not addressable in Python, and argparse would
-    # have named it that.
-    planner.add_argument("--for", dest="span", metavar="SPAN",
-                         help="size the span from the start instead of naming its "
-                              "end: 6w, 10d, 3sprints. Calendar days, inclusive")
-    planner.add_argument("-R", "--repo", help="only needed if the item's repository "
-                                        "cannot be read back")
-    planner.set_defaults(func=cmd_plan, needs_repo=True)
 
     unfinished = sub.add_parser(
         "unfinished",
@@ -9001,9 +9238,25 @@ def retired_spelling(argv: list[str]) -> str | None:
         new = shlex.join(["gh", "agile", *head, "issue", "view",
                           *([value] if value else []), *after])
         return f"`validate --id` is now `issue view`, which shows the issue's checks:\n  {new}"
+    if command == "plan":
+        # The dates are fields on an existing issue, which is `issue edit`'s job,
+        # and the flags are the ones `epic create` already takes (#207).
+        new = shlex.join(["gh", "agile", *head, "issue", "edit", *tail])
+        return (f"`plan` is now `issue edit`, which takes the same --start, --target "
+                f"and --for:\n  {new}")
+    if command == "issue" and tail[:1] == ["edit"]:
+        number, after = _pull_flag(tail[1:], "--number")
+        if number is None:
+            return None
+        new = shlex.join(["gh", "agile", *head, "issue", "edit", *after, "--value", number])
+        return (f"`issue edit --number` is now `--value`: the field's type says how the "
+                f"value is written.\n  {new}")
     if command in MOVED_UNDER_ISSUE:
         verb, flag = MOVED_UNDER_ISSUE[command]
         value, after = _pull_flag(tail, flag)
+        number, after = _pull_flag(after, "--number")
+        if number is not None:
+            after += ["--value", number]
         if command == "move":
             # The issue was already positional; the status joins it.
             first = _first_positional(after)

@@ -15,8 +15,6 @@ the refusals.
 
 from __future__ import annotations
 
-import argparse
-
 import pytest
 
 FORTNIGHT = {"sprint": {"cadence_days": 14}}
@@ -146,8 +144,8 @@ class TestNothingIsDerivedFromTheWork:
 
 
 @pytest.fixture
-def plan(monkeypatch, tool, capsys):
-    """Drive `cmd_plan` with `--for`, capturing the writes."""
+def plan(monkeypatch, tool, capsys, edit_args):
+    """Drive `issue edit` with `--for`, capturing the writes."""
     def go(start=None, target=None, span=None, *, labels=EPIC, stored=None):
         written, cleared = [], []
         monkeypatch.setattr(tool, "parse_issue_ref", lambda *a, **k: ("o/r", 7))
@@ -159,10 +157,10 @@ def plan(monkeypatch, tool, capsys):
         monkeypatch.setattr(tool, "clear_field",
                             lambda login, project, item, name: cleared.append(name))
         go.written, go.cleared = written, cleared
-        args = argparse.Namespace(issue="7", repo="o/r", owner="o", project=1,
-                                  start=start, target=target, span=span,
-                                  _config=FORTNIGHT)
-        tool.cmd_plan(args)
+        argv = [*(["--start", start] if start else []),
+                *(["--target", target] if target else []),
+                *(["--for", span] if span else [])]
+        tool.cmd_edit(edit_args("7", *argv, config=FORTNIGHT))
         return written, cleared, capsys.readouterr().out
     return go
 

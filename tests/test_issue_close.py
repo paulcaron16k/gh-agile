@@ -149,7 +149,7 @@ class TestEveryOtherDoorIsShut:
     def test_edit_refuses_status_and_names_move(self, tool, board, field):
         args = parsed(tool, "issue", "edit", "7", "--field", field, "--value", "Done")
         with pytest.raises(SystemExit) as exit_info:
-            tool.cmd_set(args)
+            tool.cmd_edit(args)
         assert "issue move ISSUE STATUS" in str(exit_info.value)
         assert board["status"] == []
 

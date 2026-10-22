@@ -97,8 +97,8 @@ class TestMoveGivesATaskNoSprint:
 
 class TestATaskCarriesNoEstimate:
     @pytest.fixture
-    def set_field_on(self, monkeypatch, tool):
-        def go(labels, field="Story Points", number=5):
+    def set_field_on(self, monkeypatch, tool, edit_args):
+        def go(labels, field="Story Points", value="5"):
             written = []
             monkeypatch.setattr(tool, "parse_issue_ref", lambda *a, **k: ("o/r", 7))
             monkeypatch.setattr(tool, "board_item_for", lambda *a, **k: {"id": "PVTI_7"})
@@ -106,9 +106,7 @@ class TestATaskCarriesNoEstimate:
             monkeypatch.setattr(tool, "set_field",
                                 lambda login, project, item, name, v: written.append((name, v)))
             go.written = written      # survives a SystemExit, so refusals can assert
-            args = argparse.Namespace(issue="7", repo="o/r", owner="o", project=1,
-                                      field=field, value=None, number=number, _config={})
-            tool.cmd_set(args)
+            tool.cmd_edit(edit_args("7", "--field", field, "--value", value))
             return written
         return go
 
@@ -130,11 +128,11 @@ class TestATaskCarriesNoEstimate:
         assert set_field_on.written == []
 
     def test_a_story_may_still_be_estimated(self, tool, set_field_on):
-        assert set_field_on(STORY) == [("Story Points", 5)]
+        assert set_field_on(STORY) == [("Story Points", "5")]
 
     def test_another_field_on_a_task_is_untouched(self, tool, set_field_on):
         """Only the number-carrying field is refused, not the whole issue."""
-        assert set_field_on(TASK, field="FR", number=None) == [("FR", None)]
+        assert set_field_on(TASK, field="FR", value="F-1") == [("FR", "F-1")]
 
 
 class TestSyncLeavesTasksOffTheBoard:

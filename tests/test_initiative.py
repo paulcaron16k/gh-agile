@@ -132,7 +132,7 @@ class TestCreating:
         slug means."""
         labelled = {}
         monkeypatch.setattr(tool, "create_issue",
-                            lambda repo, title, body, labels: labelled.setdefault(
+                            lambda repo, title, body, labels, *options: labelled.setdefault(
                                 "labels", labels) and (7, "I_7") or (7, "I_7"))
         create("Large new feature")
         assert "type:initiative" in labelled["labels"]
