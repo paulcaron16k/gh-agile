@@ -2918,6 +2918,14 @@ destroy the very information the board is there to show.
 
 ## 11. Command reference
 
+A group's help is laid out as `gh issue --help` lays out its own: **GENERAL
+COMMANDS** take no identifier (`create`, `list`, `status`), **TARGETED
+COMMANDS** take the same one every time as their first argument (`view`, `edit`,
+`close` take an issue). A group with only one kind -- `task`, `key`, `project`
+-- prints one **AVAILABLE COMMANDS** list, as `gh label` does. The only optional
+identifier is `sprint view`'s, and leaving it out means the current sprint,
+never every sprint.
+
 Every command lists its own fields with type, obligation and description:
 
 ```bash
