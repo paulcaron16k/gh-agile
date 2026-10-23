@@ -172,7 +172,8 @@ class TestCmdList:
     def listed(self, monkeypatch, tool):
         shown = {}
 
-        def show_board(args, v, kind, typed, *, limit=None, announce_unfiltered=True):
+        def show_board(args, v, kind, typed, *, limit=None, announce_unfiltered=True,
+                       keep=None):
             shown.update(view=v, kind=kind, typed=typed, limit=limit,
                          announce=announce_unfiltered)
             return 0
