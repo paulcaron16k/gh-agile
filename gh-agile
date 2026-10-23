@@ -8953,6 +8953,46 @@ class AgileParser(argparse.ArgumentParser):
                               nargs="+" if many else ("?" if default else None),
                               default=default, help=IDENTIFIERS[identifier])
 
+    def parse_args(self, args=None, namespace=None):
+        """Parse, and report an unknown argument against the command it was given to.
+
+        argparse collects what a subcommand did not recognise and hands it back
+        to the top level, which then prints *its own* usage -- `gh agile [-h]
+        [--owner OWNER] ... <command>` -- for `issue close 1 --bogus`, so the
+        flags `issue close` does take were never shown (#221). `gh issue close
+        1 --bogus` names the flag and prints the close command's usage. So the
+        leftovers are reported by the deepest parser the line reached.
+        """
+        parsed, extras = self.parse_known_args(args, namespace)
+        if extras:
+            flags = [e for e in extras if e.startswith("-")]
+            what = (f"unknown flag: {flags[0]}" if flags
+                    else f"unexpected argument: {extras[0]}")
+            self.leaf_for(parsed).error(what)
+        return parsed
+
+    def leaf_for(self, parsed) -> AgileParser:
+        """The subcommand parser a parsed line ended in: `issue close` for
+        `issue close 1`, this parser itself when the line named none."""
+        for action in self._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                chosen = getattr(parsed, action.dest, None)
+                child = action.choices.get(chosen) if chosen else None
+                if isinstance(child, AgileParser):
+                    return child.leaf_for(parsed)
+        return self
+
+    def error(self, message: str):
+        """`gh`'s order: what is wrong, then where to look -- and exit 2.
+
+        Usage first, as argparse prints it, so the flags this command takes are
+        on screen; then the error, naming the command; then the pointer to its
+        help, because a usage line shows flags without what they mean.
+        """
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: {message}\n"
+                     f"  Run `{self.prog} --help` for what it takes.\n")
+
     def subcommands(self):
         """`(name, help, parser)` for each subcommand `--help` shows, or None."""
         action = next((a for a in self._actions
