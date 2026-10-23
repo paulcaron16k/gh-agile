@@ -62,6 +62,7 @@ class TestMoveGivesATaskNoSprint:
             monkeypatch.setattr(tool, "set_field",
                                 lambda login, project, item, name, v: fields.append((name, v)))
             monkeypatch.setattr(tool, "sprint_assignments", lambda *a, **k: {})
+            monkeypatch.setattr(tool, "item_sprint", lambda *a, **k: None)
             monkeypatch.setattr(tool, "iterations",
                                 lambda *a, **k: ([{"title": "S3", "id": "I"}], []))
             monkeypatch.setattr(tool, "record_sprint_label",

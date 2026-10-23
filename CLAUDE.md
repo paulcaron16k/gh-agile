@@ -248,9 +248,11 @@ Tidying it would clear every assignment on the board.
 - **Read the board with hand-written GraphQL, never `gh project item-list` or `field-list`.** Measured: those
   two cost ~102–106 GraphQL points against 1 for the same request written out, and `field-list`'s cost does not
   even move with `-L`. `paged_project_items` takes a selection so there is one pager and two selections rather
-  than two mechanisms. `fetch_items` **must stay uncached** — `issue move` writes a Sprint value and
-  `record_sprint_label` reads it back, so a cache there silently stops the `sprint:` label being written.
-  See `docs/lessons.md`.
+  than two mechanisms. `fetch_items` **must stay uncached** — the iteration repairs save every
+  assignment, write, restore, and then heal through `reconcile_sprints`, which reads the board again; a cache
+  would hand the heal the board from before the write. One issue's item and Sprint are asked of the issue and
+  the item node instead (`board_item_for`, `item_sprint`, #231), because `projectV2.items` can leave a new
+  item out for an hour or more. See `docs/lessons.md`.
 - **Statuses accept a hyphen.** `In-Review` and `In Progress` are the same transition, so nobody has to quote
   a status in a shell. `status_key` normalises for comparison; `canonical_status` returns the `STATUSES`
   spelling, and that is the only thing ever written to the field, because GitHub holds the option name.
