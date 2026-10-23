@@ -8198,8 +8198,17 @@ def install_hook() -> str:
     if path.exists():
         current = path.read_text()
         if HOOK_MARKER not in current:
-            return (f"{path} exists and was not written by this tool, so it is not "
-                    f"mine to replace.\n    Add this line to it instead, and it will do "
+            # **Already calling it is the answer the advice below asks for** (#234).
+            # This repository's own hook, from `make hooks`, carries no marker and
+            # runs the check, and so does anybody's who took the advice once --
+            # telling either to add a line it has repeated on every `init`.
+            # "Not written by `gh agile init`" rather than "this tool": `make
+            # hooks` is this tool's repository too, and the claim read as false.
+            if "gh agile unfinished" in current:
+                return (f"{path} was not written by `gh agile init` and already "
+                        f"calls `gh agile unfinished`, so it is left as it is")
+            return (f"{path} exists and was not written by `gh agile init`, so it is "
+                    f"not mine to replace.\n    Add this line to it instead, and it will do "
                     f"the same thing:\n      gh agile unfinished --quiet || true")
         if current == POST_MERGE_HOOK:
             return f"present, {path}{every}"
