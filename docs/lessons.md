@@ -134,7 +134,22 @@ The trap to avoid on the way: the obvious-looking cure was to *cache*
 `record_sprint_label` reads it back through `sprint_assignments`, so a cache
 there silently stops the `sprint:` label being stamped, and the label is the
 durable record. Saving 8 points by risking the record would have been a bad
-trade even if it had worked.
+trade even if it had worked. (Since #231 `move` reads that Sprint from the item
+node rather than the board, so this particular reader is gone; `fetch_items`
+stays uncached for the iteration repairs, whose heal reads the board straight
+after the restore writes it.)
+
+**`projectV2.items` can leave out an item that exists, for hours.** Measured on
+Zamboni #228, 2026-10-22: the item was created three seconds after the issue,
+and `node(id:)` and `issue.projectItems` both returned it on project 23 with
+`isArchived: false` -- while paging every one of the project's items did not
+find it and `items.totalCount` read 139 where it should have read 140. It
+appeared between 71 minutes and about 10.5 hours later. A field written through
+the item id in the meantime stuck. So the board list is right for "what is on
+this board" eventually, and wrong for "where is this issue's item" now: `issue
+edit`, `move` and `close` refused #228 as "not on project 23" the whole time,
+while `issue reconcile`, which asked the issue, was right throughout. Since
+#231 every one-issue command asks the issue.
 
 This inverts the assumption the per-invocation caches were built on. `_ITEMS` and
 `_FIELDS` were added because "setting one field re-fetched the whole field list",

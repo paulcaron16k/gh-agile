@@ -28,6 +28,7 @@ def create(monkeypatch, tool, capsys):
                             lambda *a: {"id": "F", "configuration": {"duration": 14}})
         monkeypatch.setattr(tool, "iterations", lambda *a: (SEVEN[-2:], SEVEN[:-2]))
         monkeypatch.setattr(tool, "sprint_assignments", lambda *a: {})
+        monkeypatch.setattr(tool, "item_sprint", lambda *a, **k: None)
         monkeypatch.setattr(tool, "require_graphql_budget", lambda *a: None)
         args = argparse.Namespace(sprint_command="create", owner="o", project=4,
                                   start=start, weeks=None, title=title, dry_run=True,
@@ -61,6 +62,7 @@ class TestCreateAndEnsureAgree:
         monkeypatch.setattr(tool, "sprint_field", lambda *a: {"id": "F", "configuration": {
             "completedIterations": SEVEN[:-2], "iterations": SEVEN[-2:], "duration": 14}})
         monkeypatch.setattr(tool, "sprint_assignments", lambda *a: {})
+        monkeypatch.setattr(tool, "item_sprint", lambda *a, **k: None)
         monkeypatch.setattr(tool, "require_graphql_budget", lambda *a: None)
         monkeypatch.setattr(tool, "graphql",
                             lambda query, **v: made.setdefault("query", query))

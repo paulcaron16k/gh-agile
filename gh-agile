@@ -429,9 +429,11 @@ def paged_project_items(login: str, number: int, selection: str) -> tuple[str, l
 def fetch_items(login: str, number: int) -> tuple[str, list[dict]]:
     """Every item on the board with every field value. Uncached, deliberately.
 
-    `sprint_assignments` reads this immediately after `move` has written a Sprint
-    value and must observe that write, so a cache here would silently stop the
-    `sprint:` label being stamped -- and the label is the durable record.
+    The iteration repairs save every assignment through it, write, restore, and
+    then heal through `reconcile_sprints`, which reads it again and must observe
+    the restore. A cache would hand the heal the board from before the write.
+    (`move` used to read its Sprint back through here; since #231 it asks the
+    item node, because this list can leave a new item out for hours.)
     """
     return paged_project_items(login, number, FULL_ITEM_SELECTION)
 
@@ -1479,33 +1481,103 @@ def same_repo(content_repo: str | None, repo: str) -> bool:
     return left.rsplit("/", 1)[-1] == right.rsplit("/", 1)[-1]
 
 
-def board_item_for(login: str, project: int, repo: str, issue: int) -> dict | None:
-    """The project item for one issue, matched on repository **and** number.
+#: The project items one issue or pull request is on, asked of the issue rather
+#: than of the board (#231). `issueOrPullRequest` so that a number belonging to a
+#: pull request is told apart without GraphQL's NOT_FOUND error, which `gh`
+#: turns into an exit. The owner comes back as well as the number, because a
+#: project number is only an identity with its account.
+ITEM_FROM_ISSUE_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issueOrPullRequest(number: $number) {
+      __typename
+      ... on Issue {
+        projectItems(first: 20) {
+          nodes {
+            id isArchived
+            project { number owner { ... on User { login } ... on Organization { login } } }
+          }
+        }
+      }
+    }
+  }
+}"""
 
-    Matching on the number alone is wrong the moment a project spans
-    repositories, which is a documented feature -- and each repository numbers
-    its issues independently from 1, so two of them sharing a number is
-    ordinary rather than unlucky.
 
-    Both callers got this wrong in different ways. `set` resolved the repository
-    and then discarded it; `move` kept it for the `gh issue` calls and still
-    matched the item on the number, so a single `move B-12 --status Done
-    --close` could set Status and stamp a `sprint:` label on an unrelated issue
-    #12 in repository A while correctly closing #12 in repository B -- two
-    repositories left inconsistent, exit code 0, output reporting success.
+def matching_item(nodes: list[dict], login: str, project: int) -> dict | None:
+    """The one of an issue's project items that is on `login`'s project `project`.
 
-    A pull request sharing the number is skipped: `content.type` distinguishes
-    them, and only issues are backlog items.
+    **Number and owner.** An issue can sit on several projects, and two accounts
+    can each have a project 4; matching the number alone takes whichever came
+    back first, the defect `board_item_for` exists to prevent. Archived items
+    are not on the board and are skipped, as the board's own list skips them.
     """
-    for item in board_items(login, project):
-        content = item.get("content") or {}
-        if content.get("number") != issue:
-            continue
-        if content.get("type", "Issue") != "Issue":
-            continue
-        if same_repo(content.get("repository"), repo):
-            return item
+    for node in nodes:
+        found = node.get("project") or {}
+        owner = (found.get("owner") or {}).get("login") or ""
+        if (found.get("number") == project and owner.casefold() == login.casefold()
+                and not node.get("isArchived")):
+            return node
     return None
+
+
+def board_item_for(login: str, project: int, repo: str, issue: int) -> dict | None:
+    """The project item for one issue, asked of the **issue**, not of the board.
+
+    **Not from `projectV2.items`** (#231). GitHub can leave a new item out of
+    that connection for an hour or more while the item exists: Zamboni #228's
+    item was created three seconds after the issue, `node(id:)` and
+    `issue.projectItems` both returned it on project 23, and paging every one of
+    the project's items did not find it -- `items.totalCount` read 139 where it
+    should have read 140 -- for between 71 minutes and about 10.5 hours. `issue
+    edit` and `issue move` refused it as "not on project 23" throughout, while
+    `issue reconcile`, which already asked the issue, was right.
+
+    **Cost: 1 GraphQL point per issue**, against a full `board_items` read, so
+    `issue edit` over several issues makes one small query each. It is not
+    cached: there is nothing here a second call in the same run would reuse.
+
+    Matched on repository **and** number for free, because the issue names its
+    own repository -- the collision this function was first written to defend
+    against (a `move B-12` stamping an unrelated #12 in repository A) cannot
+    arise. A pull request with the number is refused, as it always was: only
+    issues are backlog items.
+
+    Returns `{"id": ...}`, the shape the board read gave, or None.
+    """
+    owner, _, name = repo.partition("/")
+    try:
+        data = graphql(ITEM_FROM_ISSUE_QUERY, owner=owner, name=name, number=issue)
+    except SystemExit as exc:
+        # The reason is kept rather than replaced: "could not resolve" also
+        # covers a repository the caller cannot read, which is a different
+        # problem from an issue that is not on the board.
+        sys.exit(f"could not read issue {repo}#{issue}: {exc}")
+    found = ((data.get("data") or {}).get("repository") or {}).get("issueOrPullRequest")
+    if not found or found.get("__typename") != "Issue":
+        return None
+    node = matching_item((found.get("projectItems") or {}).get("nodes") or [], login, project)
+    return {"id": node["id"]} if node else None
+
+
+def item_sprint(item_id: str) -> str | None:
+    """The title of the iteration one item's `Sprint` field holds, or None.
+
+    **Read from the item, not from the board** (#231): `sprint_assignments` pages
+    `projectV2.items`, which can leave out an item that exists, and an item
+    missing from it reads exactly like one with no sprint. Addressed by node id,
+    so it costs 1 point rather than a whole-board read, and it is never cached --
+    `issue move` writes the Sprint and `record_sprint_label` reads it straight
+    back, which is why `fetch_items` is uncached too.
+    """
+    data = graphql(
+        "query($i: ID!) { node(id: $i) { ... on ProjectV2Item { "
+        'fieldValueByName(name: "Sprint") { ... on ProjectV2ItemFieldIterationValue { title } } '
+        "} } }",
+        i=item_id,
+    )
+    value = ((data.get("data") or {}).get("node") or {}).get("fieldValueByName") or {}
+    return value.get("title")
 
 
 def project_node(login: str, number: int, selection: str) -> dict | None:
@@ -4629,7 +4701,7 @@ def record_sprint_label(args, repo: str, issue_number: int, item_id: str,
     if not sprint_settings(args._config).get("record_label", True):
         return None
     active, completed = iterations(args.owner, args.project)
-    assigned = sprint_assignments(args.owner, args.project).get(item_id)
+    assigned = item_sprint(item_id)
     match = next((i for i in active + completed if i["title"] == assigned), None)
 
     derived = match is None
@@ -7464,10 +7536,9 @@ def cmd_move(args) -> int:
     # refusal when no sprint is active: declining to start work because nobody
     # created a sprint would be the tool making a process decision.
     if same_status(args.status, CYCLE_START) and not container:
-        # Same reason: item-list carries no custom field values, so the sprint
-        # has to come from the GraphQL side.
-        assigned = sprint_assignments(args.owner, args.project)
-        if not assigned.get(item["id"]):
+        # From the item itself (#231): the board-wide read can leave a new item
+        # out, and a missing item reads as one with no sprint.
+        if not item_sprint(item["id"]):
             active, _completed = iterations(args.owner, args.project)
             if not active and sprint_settings(args._config).get("autocreate"):
                 # On demand, because a sprint series must be driven by work and
@@ -7883,8 +7954,8 @@ query($owner: String!, $name: String!, $number: Int!) {
       labels(first: 50) { nodes { name } }
       projectItems(first: 20) {
         nodes {
-          id
-          project { number }
+          id isArchived
+          project { number owner { ... on User { login } ... on Organization { login } } }
           fieldValueByName(name: "Sprint") {
             ... on ProjectV2ItemFieldIterationValue { title }
           }
@@ -7895,11 +7966,12 @@ query($owner: String!, $name: String!, $number: Int!) {
 }"""
 
 
-def issue_project_item(repo: str, issue: int, project: int) -> tuple[str, list[str], str | None]:
+def issue_project_item(repo: str, issue: int, project: int,
+                       login: str) -> tuple[str, list[str], str | None]:
     """`(item id, the issue's labels, its current Sprint title)` for one project.
 
-    The project is matched on its number: an issue can be on several, and taking
-    the first would be the same defect `board_item_for` exists to prevent.
+    The project is matched on its number **and owner**, through `matching_item`:
+    an issue can be on several, and two accounts can each have a project 4.
     """
     owner, _, name = repo.partition("/")
     try:
@@ -7915,9 +7987,9 @@ def issue_project_item(repo: str, issue: int, project: int) -> tuple[str, list[s
     if not found:
         sys.exit(f"no issue {repo}#{issue}")
     labels = [n["name"] for n in (found.get("labels") or {}).get("nodes", [])]
-    for node in (found.get("projectItems") or {}).get("nodes", []):
-        if (node.get("project") or {}).get("number") == project:
-            return node["id"], labels, ((node.get("fieldValueByName") or {}) or {}).get("title")
+    node = matching_item((found.get("projectItems") or {}).get("nodes") or [], login, project)
+    if node:
+        return node["id"], labels, (node.get("fieldValueByName") or {}).get("title")
     sys.exit(f"issue {repo}#{issue} is not on project {project}")
 
 
@@ -7936,7 +8008,7 @@ def cmd_fix(args) -> int:
     the table on `ISSUE_ITEM_QUERY`.
     """
     repo, issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
-    item_id, labels, current = issue_project_item(repo, issue, args.project)
+    item_id, labels, current = issue_project_item(repo, issue, args.project, args.owner)
 
     active, completed = iterations(args.owner, args.project)
     by_start = {i["startDate"]: i["title"] for i in active + completed}

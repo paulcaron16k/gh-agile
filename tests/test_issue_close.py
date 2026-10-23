@@ -39,6 +39,7 @@ def board(monkeypatch, tool):
     monkeypatch.setattr(tool, "issue_body", lambda *a, **k: record["body"])
     monkeypatch.setattr(tool, "issue_labels", lambda *a, **k: ["type:story"])
     monkeypatch.setattr(tool, "sprint_assignments", lambda *a, **k: {"PVTI_7": "s"})
+    monkeypatch.setattr(tool, "item_sprint", lambda *a, **k: "s")
     monkeypatch.setattr(tool, "promote_parents", lambda *a, **k: None)
     monkeypatch.setattr(tool, "claim_issue", lambda *a, **k: "  claimed")
 

@@ -113,6 +113,7 @@ class TestTheOrderIsTheFix:
         monkeypatch.setattr(tool, "parse_issue_ref", lambda *a, **k: ("o/r", 7))
         monkeypatch.setattr(tool, "board_item_for", lambda *a, **k: {"id": "PVTI_7"})
         monkeypatch.setattr(tool, "sprint_assignments", lambda *a, **k: {"PVTI_7": "s"})
+        monkeypatch.setattr(tool, "item_sprint", lambda *a, **k: "s")
         monkeypatch.setattr(tool, "record_sprint_label", lambda *a, **k: None)
         monkeypatch.setattr(tool, "set_field",
                             lambda login, project, item, field, value:

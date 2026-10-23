@@ -97,8 +97,8 @@ def label_run(monkeypatch, tool):
 
     monkeypatch.setattr(tool, "gh", fake_gh)
     monkeypatch.setattr(tool, "iterations", lambda *a, **k: (ITERATIONS, []))
-    monkeypatch.setattr(tool, "sprint_assignments",
-                        lambda *a, **k: {"PVTI_1": state["assigned"]})
+    monkeypatch.setattr(tool, "item_sprint",
+                        lambda item_id: state["assigned"] if item_id == "PVTI_1" else None)
     monkeypatch.setattr(tool, "ensure_labels", lambda *a, **k: None)
     monkeypatch.setattr(tool, "today_utc", lambda: date(state["today"]))
 
