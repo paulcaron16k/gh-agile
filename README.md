@@ -642,7 +642,8 @@ Everything below was checked against the live API, not inferred.
 |---|---|
 | **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
 | **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `init` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
-| **A user-owned project has no auto-add-issues workflow** | The six built-ins are: auto-add sub-issues to project, auto-close issue, item added to project, item closed, pull request linked to issue, pull request merged. Nothing puts a newly opened repository issue on the board — hence `sync` |
+| **Auto-add by filter covers one repository, forward only** | A user-owned project had six built-ins and no auto-add by filter until October 2026; `Auto-add to project` is the seventh. GitHub Free allows one, Pro and Team 5, Enterprise 20. It watches one repository and only issues created or updated after it is on, and its filter cannot be read — so `sync` still backfills, and covers any repository without one |
+| **Closing on merge is a repository setting the API cannot read** | *Auto-close issues with merged linked pull requests*, under Settings → General → Issues. Off, `Closes #n` closes nothing; a before-and-after snapshot of every readable setting showed no difference |
 | **The series anchor is write-only** | `ProjectV2IterationFieldConfigurationInput` takes `startDate`, `duration`, `iterations`; the readable `ProjectV2IterationFieldConfiguration` exposes `startDay`, `duration`, `iterations`, `completedIterations` — and no `startDate`. You cannot read back the anchor you sent |
 | **A sprint created in the web UI can be any length, on any day** | It may overlap what this tool would place. `ensure` then reports that it cannot place a sprint without overlapping, and creates nothing |
 | **Column and WIP limits are not settable** | `ProjectV2View` exposes no limit field; they stay a web-UI setting |
@@ -869,14 +870,25 @@ gh auth refresh -s project      # read:project is enough for the Read tier
 gh auth status                  # verify: 'project' appears in Token scopes
 ```
 
-**4. The two web-UI workflows.**
+**4. The web-UI workflows, and one repository setting.**
 Project → ⋯ → *Workflows*. Enable **Item added to project** → set Status, so
 anything reaching the board by any route gets a Status instead of a blank.
 
-Also enable **Item closed** → set Status = `Done`. Every issue here is closed by a
-merged pull request saying `Closes #n`, and that automation sets the issue's state
-and *nothing else* — so without this workflow, finished work keeps its old Status
-and sits in the In Progress column looking live.
+Enable **Auto-add to project** with the filter `is:issue is:open`, once per
+repository on the board, as far as the plan allows: GitHub Free allows one auto-add
+workflow in all, Pro and Team 5, Enterprise 20. `gh agile sync` covers the rest. Its default filter, `is:issue,pr is:open label:bug`,
+ANDs its terms and adds only items labelled exactly `bug`. The USER_GUIDE says
+why each part of the replacement is what it is.
+
+**Leave `Item closed` off.** It writes Status = `Done` and nothing else — no
+Evidence, no closing `sprint:` label — so the issue reads finished when it is
+not. The post-merge hook that `gh agile init` installs asks a person to finish it
+instead, with `gh agile issue move N Done --evidence`.
+
+In each **repository**, Settings → General → Issues: turn on **Auto-close issues
+with merged linked pull requests**, so `Closes #n` closes the issue when the pull
+request merges. It is a different thing from the project's `Auto-close issue`
+below, and the API cannot read it.
 
 **Do not enable `Auto-close issue`.** It closes the issue the moment Status
 becomes `Done`, which beats `gh agile issue close ISSUE -r "not planned"` to the close and
@@ -886,10 +898,10 @@ These **can be read and cannot be written**. `projectV2.workflows` returns each
 one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and nothing
 that creates, enables or updates one, and a workflow's filter is not readable
 either. So this step is manual, once, per project, and no file in this repository
-can carry it. And **auto-add repository issues is not among a user-owned project's
-built-in workflows at all**, which is exactly why `sync` exists: a project is a
-collection, not a filter, and an issue is not on the board until something puts it
-there.
+can carry it. **`Auto-add to project` covers one repository and looks forward
+only**, which is why `sync` still exists: a project is a collection, not a filter,
+an issue is not on the board until something puts it there, and an issue missing
+before the workflow was on stays missing until `sync` adds it.
 
 **5. Collaborators, if any.**
 Project → Settings → *Manage access* → invite, with Read / Write / Admin.

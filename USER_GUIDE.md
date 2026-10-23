@@ -67,6 +67,9 @@ gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an exis
              an item arriving by any other route has no Status, so it is in
              no column of any board
     [on]  enable    Auto-add sub-issues to project
+    [off] enable    Auto-add to project
+             an issue filed in the web UI or by plain `gh issue create`
+             reaches no board until `sync`. Filter `is:issue is:open`, ...
     [off] by hand   Item closed
              it writes Status and nothing else -- no Evidence, no closing
              sprint: label, no completed-or-not-planned -- so an issue it
@@ -74,6 +77,11 @@ gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an exis
     [off] never     Auto-close issue
              it races this tool's own close and wins
     ...
+
+  And one setting per repository, which the API cannot read:
+    [?]   enable    Auto-close issues with merged linked pull requests
+             Settings -> General -> Issues. On: `Closes #n` then closes ...
+             https://github.com/you/repo/settings
 
   Then: gh agile validate
 ```
@@ -899,19 +907,21 @@ Two consequences that catch people out:
 - **A board's filter narrows what is already on the project.** It never reaches
   out and pulls issues in. An engineering board filtered `repo:owner/other-repo`
   shows nothing at all until those issues are added to the project.
-- **GitHub's built-in workflows help, and do not cover this.** They are worth
-  understanding rather than dismissing — see the table below. One of them adds
-  items automatically and is enabled by default; none of them adds an issue
-  merely because it matches a board's filter.
+- **GitHub's built-in workflows help, and do not cover all of this.** They are
+  worth understanding rather than dismissing — see the table below. Two add
+  items automatically: one by parentage, enabled by default, and one by a filter
+  over a single repository, which looks forward only.
 
 ### What the built-in workflows do
 
 Checked on a live user-owned project rather than read from documentation — the
-API lists six, and their names are the whole story:
+API lists seven, and their names are the whole story. It listed six until
+October 2026; the seventh, `Auto-add to project`, is new:
 
 | Workflow | Adds items? | Default |
 |---|---|---|
 | **Auto-add sub-issues to project** | **Yes** — a sub-issue of an item already on the board joins it automatically | **enabled** |
+| **Auto-add to project** | **Yes** — an issue in *one* repository that matches its filter, when it is created or updated | enabled, with a filter that is wrong here |
 | Item added to project | No — reacts to an item that has just been added, e.g. to set its status | disabled |
 | Item closed · Auto-close issue | No — react to items already on the board | disabled |
 | Pull request merged · Pull request linked to issue | No | disabled |
@@ -920,11 +930,37 @@ API lists six, and their names are the whole story:
 as a sub-issue of a boarded epic arrives on the board without anything else
 happening. That is why `gh agile story` never needs `sync`.
 
-**What is missing is an auto-add by *filter*** — "put every issue in this repo
-with this label on this board". GitHub does offer such a workflow, and it was
-**not present on this user-owned project**: the six above are all there are.
-That is the same pattern as Issue Types and Issue Fields, both of which turned
-out to be organization-only.
+**`Auto-add to project` is the auto-add by *filter*,** and until October 2026 a
+user-owned project did not have it — which is the reason `sync` exists. It has
+it now, with three limits that keep `sync` in the toolkit:
+
+- **One repository per workflow, and the plan caps the count.** GitHub Free
+  allows 1 auto-add workflow, Pro and Team 5, Enterprise 20. A board spanning
+  repositories needs one each, so on Free only one repository is covered and
+  `sync` is the route for the rest — this project's `agile-reports` (key
+  `REPORTS`) among them.
+- **Forward only.** It reacts to an issue being created or updated, so an issue
+  already missing from the board stays missing until `sync` adds it.
+- **Its filter cannot be read.** The API returns the name and `enabled`, so
+  neither `init` nor `validate` can tell a right filter from the default.
+
+**The filter to use is `is:issue is:open`.** The default is
+`is:issue,pr is:open label:bug`, and its terms are ANDed — GitHub: "using
+multiple filters will act as a logical AND"; only a comma inside one qualifier
+means *or* — so it adds open items labelled exactly `bug`, which this convention
+(`type:bug`) never writes. Each part of the replacement is a decision:
+
+- **No `pr`.** The board holds issues. A pull request reaches its issue through
+  `closingIssuesReferences`, which the post-merge hook reads, and the export's
+  `github_prs` comes from search, not from the board. Pull-request cards would
+  show every piece of work twice and fail `validate` for want of `type:` and `key:`.
+- **No `label:key:...`.** The key is written by this tool's own `create`
+  commands, which add their issues to the board already. A key filter re-adds
+  what is there and misses the actual gap: an issue filed in the web UI or by
+  plain `gh issue create`, which carries no key.
+- **`is:open`.** The trigger is *created or updated*. Without it, relabelling an
+  old closed issue pulls it onto the board — and `Item added to project` then
+  sets it to Todo.
 
 **They can be read, and they cannot be written.** The two are worth keeping
 apart, because this guide used to say neither was possible:
@@ -947,6 +983,7 @@ Measured on two live projects, which is where the recommendation comes from:
 | Workflow | Enable? | What its absence costs |
 |---|---|---|
 | **Auto-add sub-issues to project** | **yes** (on by default) | Every story created under a boarded epic would need a `sync` |
+| **Auto-add to project**, filter `is:issue is:open` | **yes**, one per repository, as many as the plan allows (Free: 1) | An issue filed in the web UI or by plain `gh issue create` is on no board until `sync` runs |
 | **Item closed** → Status = Done | **no** — see below | Nothing it can fix. Status does not follow a close, so finished work sits in the In Progress column looking live — but this workflow writes Status and *nothing else*, so it replaces a visibly unfinished issue with one that reads Done and is not. The post-merge hook asks a person instead |
 | **Item added to project** → Status = Todo | **yes** | An item arriving by any other route has no Status, which puts it in no column of any board |
 | **Auto-close issue** | **no** | Nothing — this tool closes issues itself, and having it on makes GitHub close the issue the moment Status becomes `Done`, *before* `issue move` can set the reason. That is how `not planned` lost its reason on the sandbox |
@@ -954,6 +991,38 @@ Measured on two live projects, which is where the recommendation comes from:
 
 **Project → ⋯ (top right) → Workflows.** It is a setting on the **project**, not
 on a repository — see below.
+
+### And one repository setting: closing on merge
+
+**Settings → General → Issues → *Auto-close issues with merged linked pull
+requests*: on, in every repository on the board.** It is not a project workflow,
+and it is easily confused with one: `Auto-close issue` above closes an issue
+when its *Status* becomes Done, and stays off; this one closes it when a pull
+request saying `Closes #n` *merges*, and should be on.
+
+Off, `Closes #n` closes nothing. Found on this repository: three merges in a row
+left their issue open, each with `closingIssuesReferences` naming it, and the
+issue's cross-reference from the pull request read `willCloseTarget: false`.
+On, a merged issue is *closed, not Done* rather than *open*, and that is better
+in every way that matters here:
+
+- **`validate` sees it too.** *Closed, not Done* is a convention violation;
+  an issue left *open* after its merge is not, so only the post-merge hook
+  catches that one. On, a merge made in the web UI, or pulled into a clone
+  without the hook, is still reported.
+- **`closed_at` is the merge,** not whenever somebody closed it by hand —
+  and exported cycle times are measured from it.
+- **The reason is right.** `Closes #n` means completed, and not planned never
+  arrives through a pull request, so `issue close -r "not planned"` keeps that
+  case.
+- **Nothing races it**, while `Item closed` and `Auto-close issue` stay off:
+  the Status is still this tool's to set, with `issue move N Done --evidence`.
+
+**The API cannot read it.** A snapshot of the whole REST repository object and
+of every scalar GraphQL `Repository` field, taken before and after turning it
+on, differed only in `temp_clone_token`, which changes on every read. So `init`
+names it with a `[?]` and the settings link for each repository, and `validate`
+says nothing about it.
 
 **`Item closed` was recommended here until `#186`, and the reversal is worth
 reading.** Every issue in this repository is closed by a merged pull request
@@ -1269,10 +1338,10 @@ else is current the moment it changes.
 someone remembering it is a rota, not a process, and it fails on the week it
 matters. Instead, in order of preference:
 
-1. **Check the project's workflow settings for an auto-add.** If your project
-   offers one — an organization-owned project may — enable it, and `sync`
-   becomes a backfill tool rather than the mechanism. On the user-owned project
-   tested here it was not available.
+1. **Enable `Auto-add to project`**, filter `is:issue is:open`, once per
+   repository the plan allows — see *What the built-in workflows do*. `sync` then becomes the
+   backfill for what is already missing, and the route for any repository
+   whose workflow you have not set up.
 2. **Run `sync` on a schedule** otherwise: hourly or daily, from cron or a
    GitHub Action. Frequency only bounds how long a newly filed issue is missing
    from the board; nothing degrades in between, because nothing on the board is
@@ -1816,7 +1885,8 @@ Everything here was checked against the live API, not inferred. The README's
 |---|---|
 | **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit — see the note above. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
 | **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `init` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
-| **A user-owned project has no auto-add-issues workflow** | The six built-ins are: auto-add sub-issues to project, auto-close issue, item added to project, item closed, pull request linked to issue, pull request merged. Nothing puts a newly opened repository issue on the board — hence `sync` |
+| **Auto-add by filter covers one repository, forward only** | A user-owned project had six built-ins and no auto-add by filter until October 2026; `Auto-add to project` is the seventh. GitHub Free allows one, Pro and Team 5, Enterprise 20. It watches one repository and only issues created or updated after it is on, and its filter cannot be read — so `sync` still backfills, and covers any repository without one |
+| **Closing on merge is a repository setting the API cannot read** | *Auto-close issues with merged linked pull requests*, under Settings → General → Issues. Off, `Closes #n` closes nothing; a before-and-after snapshot of every readable setting showed no difference |
 | **The series anchor is write-only** | `ProjectV2IterationFieldConfigurationInput` takes `startDate`, `duration`, `iterations`; the readable `ProjectV2IterationFieldConfiguration` exposes `startDay`, `duration`, `iterations`, `completedIterations` — and no `startDate`. You cannot read back the anchor you sent |
 | **A sprint created in the web UI can be any length, on any day** | It may overlap what this tool would place. `ensure` then reports that it cannot place one without overlapping, and creates nothing |
 | **Column and WIP limits are not settable** | `ProjectV2View` exposes no limit field; they stay a web-UI setting |

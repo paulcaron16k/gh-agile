@@ -247,8 +247,9 @@ class TestTheWorkflowRead:
         assert tool.project_workflows("o", 4) == {}
 
     def test_every_workflow_has_a_verdict_and_a_reason(self, tool):
-        """#141 widened three entries into a verdict for all six."""
-        assert len(tool.WORKFLOW_ADVICE) == 6
+        """#141 widened three entries into a verdict for all six; #237 added
+        the seventh a user-owned project now has."""
+        assert len(tool.WORKFLOW_ADVICE) == 7
         assert all(why and len(why) > 20
                    for _verdict, why in tool.WORKFLOW_ADVICE.values())
 

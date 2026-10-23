@@ -31,6 +31,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 ALL_OFF = dict.fromkeys((
     "Item closed", "Item added to project", "Auto-add sub-issues to project",
+    "Auto-add to project",
     "Auto-close issue", "Pull request merged", "Pull request linked to issue"),
     False)
 #: A board configured as the table recommends: the two `enable` ones on, the
@@ -39,21 +40,22 @@ ALL_OFF = dict.fromkeys((
 #: so an issue it touches reads Done with no Evidence and no closing sprint
 #: label; the post-merge hook asks a person to finish it instead.
 CORRECT = {**ALL_OFF, "Auto-add sub-issues to project": True,
-           "Item added to project": True}
+           "Item added to project": True, "Auto-add to project": True}
 
 
 class TestTheTableCoversEverything:
     def test_every_workflow_has_a_verdict(self, tool):
-        """Three of six is not advice: the reader turns on what is off."""
-        assert len(tool.WORKFLOW_ADVICE) == 6
+        """Three of six is not advice: the reader turns on what is off. Seven
+        since a user-owned project gained `Auto-add to project` (#237)."""
+        assert len(tool.WORKFLOW_ADVICE) == 7
 
     @pytest.mark.parametrize("name", sorted(ALL_OFF))
     def test_each_one_by_name(self, tool, name):
         assert name in tool.WORKFLOW_ADVICE
 
-    def test_every_verdict_is_one_of_the_four(self, tool):
+    def test_every_verdict_is_one_of_the_five(self, tool):
         verdicts = {v for v, _why in tool.WORKFLOW_ADVICE.values()}
-        assert verdicts <= {"enable", "never", "issues-only", "by-hand"}
+        assert verdicts <= {"enable", "filtered", "never", "issues-only", "by-hand"}
 
     def test_every_entry_carries_a_reason(self, tool):
         assert all(len(why) > 30 for _v, why in tool.WORKFLOW_ADVICE.values())
@@ -104,8 +106,84 @@ class TestValidateReportsOnlyWhatDiverges:
         assert tool.workflow_findings(CORRECT, 0) == []
 
 
+class TestAutoAddToProject:
+    """The seventh workflow, new to user-owned projects in 2026-10 (#237). Its
+    default filter adds only items labelled exactly `bug`, and the API reads
+    `enabled` but never the filter -- so on is not the same as right."""
+
+    def test_it_is_recommended_with_a_filter(self, tool):
+        verdict, why = tool.WORKFLOW_ADVICE["Auto-add to project"]
+        assert verdict == "filtered"
+        assert "`is:issue is:open`" in why
+
+    def test_the_filter_names_no_pull_requests_and_no_key(self, tool):
+        _verdict, why = tool.WORKFLOW_ADVICE["Auto-add to project"]
+        recommended = why.split("Filter ")[1].split(",")[0]
+        assert "pr" not in recommended and "label:" not in recommended
+
+    def test_it_says_why_the_default_is_wrong(self, tool):
+        _verdict, why = tool.WORKFLOW_ADVICE["Auto-add to project"]
+        assert "label:bug" in why and "ANDs" in why
+
+    def test_off_is_reported_by_validate(self, tool):
+        found = tool.workflow_findings({**CORRECT, "Auto-add to project": False}, 0)
+        assert any(line.startswith("Auto-add to project is off") for line in found)
+
+    def test_on_is_not(self, tool):
+        assert tool.workflow_findings(CORRECT, 0) == []
+
+    def test_on_still_prints_the_filter_in_init(self, tool):
+        """Being on says nothing about the filter, which nothing can read."""
+        lines = tool.render_workflow_table(CORRECT, 0)
+        i = next(n for n, line in enumerate(lines) if line.endswith("  Auto-add to project"))
+        assert "[on]" in lines[i] and "is:issue is:open" in lines[i + 1]
+
+    def test_the_pull_request_workflows_are_still_the_last_two(self, tool):
+        """The table's closing line says the last two carry no recommendation."""
+        assert list(tool.WORKFLOW_ADVICE)[-2:] == [
+            "Pull request merged", "Pull request linked to issue"]
+
+
+class TestTheRepositorySetting:
+    """`Auto-close issues with merged linked pull requests` is the repository's,
+    not the project's, and the API cannot read it (#237): a before-and-after
+    snapshot of every readable setting differed only in a clone token."""
+
+    @pytest.fixture
+    def printed(self, tool, monkeypatch, capsys):
+        monkeypatch.setattr(tool, "project_workflows", lambda login, number: CORRECT)
+        monkeypatch.setattr(tool, "pull_request_items", lambda login, number: 0)
+
+        def run(repos):
+            tool.report_manual_steps("o", 4, repos)
+            return capsys.readouterr().out
+        return run
+
+    def test_init_names_it(self, printed):
+        out = printed(["o/a"])
+        assert "Auto-close issues with merged linked pull requests" in out
+        assert "Settings -> General -> Issues" in out
+
+    def test_once_per_repository_with_where_to_find_it(self, printed):
+        out = printed(["o/a", "o/b"])
+        assert "https://github.com/o/a/settings" in out
+        assert "https://github.com/o/b/settings" in out
+
+    def test_it_is_never_shown_as_on_or_off(self, printed):
+        """Unreadable is said, not guessed at."""
+        line = next(x for x in printed(["o/a"]).splitlines()
+                    if "Auto-close issues with merged" in x)
+        assert "[?]" in line
+
+    def test_it_is_not_the_project_workflow_of_a_similar_name(self, tool):
+        """`Auto-close issue` closes on Status Done and stays `never`; this one
+        closes on merge and is recommended. Confusing the two is the mistake."""
+        assert tool.WORKFLOW_ADVICE["Auto-close issue"][0] == "never"
+        assert "Auto-close issues with merged" not in tool.WORKFLOW_ADVICE
+
+
 class TestTheFullTableIsForConfiguring:
-    def test_it_names_all_six(self, tool):
+    def test_it_names_all_seven(self, tool):
         text = "\n".join(tool.render_workflow_table(CORRECT, 0))
         for name in ALL_OFF:
             assert name in text

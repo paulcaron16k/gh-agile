@@ -1654,6 +1654,8 @@ def starter_boards(config: dict) -> list[dict]:
 #: named with a verdict and the reason for it:
 #:
 #:   enable       worth having on; the reason is what its absence costs
+#:   filtered     worth having on with the filter the reason gives, which the
+#:                API cannot read -- so the reason is printed even when it is on
 #:   never        worth having off, and the reason is measured
 #:   issues-only  acts on pull-request items, which this board may hold none of
 #:
@@ -1684,6 +1686,28 @@ WORKFLOW_ADVICE = {
     "Auto-add sub-issues to project": (
         "enable",
         "every story created under a boarded epic would need a `sync`",
+    ),
+    # **The seventh, and new** (#237). Until 2026-10 a user-owned project had
+    # six and no auto-add by filter, which is the reason `sync` exists. It now
+    # has one, scoped to a single repository, forward-only, and with a default
+    # filter that is wrong here. The API returns its name and `enabled`, never
+    # its filter, so the filter is what is printed.
+    #
+    # `is:issue` and no `pr`: the board holds issues, and a pull request reaches
+    # the issue through `closingIssuesReferences`. No `label:key:...`: the key is
+    # written by this tool's own creates, which already add their issues, so a
+    # key filter re-adds what is there and misses the gap -- an issue filed in
+    # the web UI, which carries no key. `is:open` because the trigger is "new or
+    # updated": without it, relabelling a closed issue pulls it on, and `Item
+    # added to project` resets it to Todo.
+    "Auto-add to project": (
+        "filtered",
+        "an issue filed in the web UI or by plain `gh issue create` reaches no "
+        "board until `sync`. Filter `is:issue is:open`, one workflow per "
+        "repository as the plan allows (Free: one in all; `sync` covers the "
+        "rest), and check it: the API cannot read a filter. The default "
+        "`is:issue,pr is:open label:bug` ANDs its terms and adds only items "
+        "labelled exactly `bug`. Forward-only, so `sync` still backfills",
     ),
     "Auto-close issue": (
         "never",
@@ -1732,7 +1756,7 @@ def workflow_findings(state: dict[str, bool], pull_requests: int) -> list[str]:
         enabled = state.get(name)
         if enabled is None:
             continue
-        if verdict == "enable" and not enabled:
+        if verdict in ("enable", "filtered") and not enabled:
             out.append(f"{name} is off -- {why}")
         elif verdict == "never" and enabled:
             out.append(f"{name} is ON and should not be -- {why}")
@@ -1760,8 +1784,8 @@ def automation_notes(login: str, project: int) -> list[str]:
 
 def render_workflow_table(state: dict[str, bool], pull_requests: int) -> list[str]:
     """Every workflow with its verdict. For the moment of configuring a project."""
-    verdict_mark = {"enable": "enable", "never": "never", "issues-only": "n/a here",
-                    "by-hand": "by hand"}
+    verdict_mark = {"enable": "enable", "filtered": "enable", "never": "never",
+                    "issues-only": "n/a here", "by-hand": "by hand"}
     out = []
     for name, (verdict, why) in WORKFLOW_ADVICE.items():
         enabled = state.get(name)
@@ -1776,7 +1800,8 @@ def render_workflow_table(state: dict[str, bool], pull_requests: int) -> list[st
         # until #186 and looks exactly like an oversight.
         # That is the whole failure this table exists to prevent: `Auto-close
         # issue` looks exactly like a missing setting and is the one that cost
-        # `--not-planned` its reason.
+        # `--not-planned` its reason. A `filtered` one carries its reason when on
+        # too: being on says nothing about the filter, which the API cannot read.
         if not (verdict == "enable" and enabled):
             out.append(f"             {why}")
     out.append(f"\n    Checked: this board holds {pull_requests} pull-request "
@@ -1814,13 +1839,34 @@ def project_workflows(login: str, number: int) -> dict[str, bool]:
     return {}
 
 
-def report_manual_steps(login: str, number: int) -> None:
+#: The one setting that is the repository's rather than the project's, and that
+#: the API cannot read at all (#237). Off, `Closes #n` closes nothing on merge:
+#: #232, #235 and #236 each left their issue open, and #233's cross-reference
+#: read `willCloseTarget: false` while `closingIssuesReferences` named it. A full
+#: snapshot of the REST repository object and every scalar GraphQL `Repository`
+#: field differed, across the change, only in `temp_clone_token`.
+#:
+#: On, because a merged issue is then *closed, not Done*: `validate` catches
+#: that as well as the hook, where an issue left *open* is the hook's alone
+#: (#190); `closed_at` is the merge, which cycle times are measured from; and
+#: `Closes #n` means completed, while not-planned never arrives by a pull
+#: request. Nothing races it while `Item closed` and `Auto-close issue` are off.
+REPO_AUTO_CLOSE = (
+    "Auto-close issues with merged linked pull requests",
+    "Settings -> General -> Issues. On: `Closes #n` then closes the issue at the "
+    "merge, `validate` sees it as well as the hook, and `closed_at` is when the "
+    "work landed. The API cannot read it, so it is not shown as on or off",
+)
+
+
+def report_manual_steps(login: str, number: int, repos: list[str] = ()) -> None:
     """Every workflow, its verdict and its state -- a rendering of one table.
 
-    **The whole six belong here**, at the moment somebody is configuring the
+    **The whole table belongs here**, at the moment somebody is configuring the
     project and looking at that page. `validate` reports only what diverges,
-    because it runs often and six lines every time is six lines a reader learns
-    to skip.
+    because it runs often and seven lines every time is seven lines a reader
+    learns to skip. Then the one repository setting, per repository in the
+    profile, which nothing can read and so nothing else can report.
     """
     state = project_workflows(login, number)
     print("\n  Project automation. The API can read these and cannot write them, "
@@ -1828,6 +1874,12 @@ def report_manual_steps(login: str, number: int) -> None:
     print(f"    https://github.com/users/{login}/projects/{number}/workflows\n")
     for line in render_workflow_table(state, pull_request_items(login, number)):
         print(line)
+    name, why = REPO_AUTO_CLOSE
+    if repos:
+        print(f"\n  And one setting per repository, which the API cannot read:\n"
+              f"    [?]   enable    {name}\n             {why}")
+        for repo in repos:
+            print(f"             https://github.com/{repo}/settings")
     if not state:
         print("    (could not read which are enabled; the verdicts above still "
               "hold)")
@@ -1961,7 +2013,9 @@ def cmd_init(args) -> int:
         print(f"\n  post-merge hook: {install_hook()}")
 
     # 5. What is left, and what it costs.
-    report_manual_steps(args.owner, args.project)
+    report_manual_steps(args.owner, args.project,
+                        list(dict.fromkeys(e["repo"] for e in profile_keys(config)
+                                           if e.get("repo"))))
     return 0
 
 
@@ -9848,9 +9902,9 @@ default chosen for you.""",
 why this is needed:
   A project is a collection, not a filter. It stores Status, Story Points and
   Sprint *per item*, so an issue it does not hold has nowhere to put them.
-  GitHub's built-in auto-add workflow is UI-only -- the API can delete a
-  workflow but cannot create or configure one -- and it is forward-only, so it
-  never backfills. Hence sync.""",
+  GitHub's built-in `Auto-add to project` workflow is UI-only -- the API can
+  delete a workflow but cannot create or configure one -- covers one repository
+  per workflow, and is forward-only, so it never backfills. Hence sync.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sync.add_argument("-R", "--repo", help="one repository; every repository in the "
