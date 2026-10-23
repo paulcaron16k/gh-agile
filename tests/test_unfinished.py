@@ -391,6 +391,32 @@ class TestInstallingTheHook:
         repo.write_text("#!/bin/sh\necho mine\n")
         assert "gh agile unfinished --quiet" in hook.install_hook()
 
+    def test_and_does_not_claim_the_whole_tool_never_wrote_it(self, hook, repo):
+        """`make hooks` is this tool's repository too; what did not write it is
+        `init`. AGILE-234."""
+        repo.write_text("#!/bin/sh\necho mine\n")
+        said = hook.install_hook()
+        assert "not written by `gh agile init`" in said and "this tool" not in said
+
+    def test_a_hook_that_already_calls_it_is_not_told_to_add_it(self, hook, repo):
+        """This repository's own hook, from `make hooks`, carries no marker and
+        already runs the check; so does anybody's who took the advice once.
+        AGILE-234."""
+        mine = "#!/bin/sh\necho mine\ngh agile unfinished --quiet || true\n"
+        repo.write_text(mine)
+        said = hook.install_hook()
+        assert "already calls `gh agile unfinished`" in said
+        assert "Add this line" not in said
+        assert repo.read_text() == mine
+
+    def test_this_repositorys_template_is_left_alone(self, hook, repo):
+        """Replacing it would drop the red-`main` check only it has; it belongs
+        to `make hooks`, and two installers for one file would drift."""
+        template = (ROOT / "templates" / "post-merge").read_text()
+        repo.write_text(template)
+        assert "already calls" in hook.install_hook()
+        assert repo.read_text() == template
+
     def test_outside_a_repository_it_says_so(self, hook, monkeypatch):
         """Said, not fatal: `init` has done its real work by the time it gets
         here, and a clone-less run is not a failed one."""

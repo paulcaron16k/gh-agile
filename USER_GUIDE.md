@@ -995,8 +995,9 @@ installs `.git/hooks/post-merge` into the clone you are standing in, so `git
 pull` — the moment somebody is already at the terminal — names any issue the
 merge closed and nobody finished. A second run reports the hook present, or
 replaces a stale one this tool wrote, and says which; `--no-hooks` leaves the
-clone alone. A hook somebody else wrote is named and kept rather than
-overwritten, with the one line to add to it.
+clone alone. A hook `init` did not write is named and kept rather than
+overwritten: if it already calls `gh agile unfinished` that is said and nothing
+more, and otherwise it is given the one line to add.
 
 **It is per clone, and that is git's decision rather than an oversight.** Hooks
 are executable code, so cloning never brings them — and even the versioned route,
