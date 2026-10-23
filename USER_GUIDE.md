@@ -1008,10 +1008,21 @@ during that fix, and the race was only ever the project workflow's. Off, `Closes
 pull request read `willCloseTarget: false`; re-enabled, the next merge closed
 its issue itself. See `docs/lessons.md`.
 
-**A fork may not show it.** A fork you track issues in needs Issues enabled;
-the one fork checked here, with Issues enabled, had the setting present and on.
-That a fork without Issues shows no Issues settings at all is the likely
-explanation for reports of the checkbox being absent, and is not yet verified.
+**A fork has no such setting until Issues is enabled on it.** A fork starts with
+Issues off, and then neither the Issues tab nor Settings → General → Issues
+exists, so there is no checkbox to find. Observed 2026-10-23: with Settings →
+General → Features → Issues off, both were absent; turning Issues on brought
+both back. To track a fork's issues with this tool:
+
+1. Settings → General → Features: enable **Issues**.
+2. Leave General and open it again. The Issues section, with the auto-close
+   checkbox, did not appear until the page was reloaded.
+3. Confirm **Auto-close issues with merged linked pull requests** is on. It was
+   on when it appeared, on the fork whose Issues had just been enabled, and on
+   in the fork this tool already tracks (`target-ducklake-definite`) — the same
+   default as an ordinary repository. It is the one setting here the API cannot
+   read, so look rather than assume: in `gh-agile` it had been turned off by
+   hand.
 
 On, a merged issue is *closed, not Done* rather than *open*, and that is better
 in every way that matters here:
