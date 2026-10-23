@@ -1047,9 +1047,14 @@ this repository — so a merge commit, a squash, a rebase merge and a merge whos
 title was edited are all found, and a commit subject ending `(#228)` that names
 an *issue* is not mistaken for a pull request. Each commit costs one REST call;
 each pull request found is asked once what it closes. A range of more than 50
-first-parent commits is refused whole rather than checked in part — run it by
-hand over narrower ranges. A commit GitHub has never seen, from a local merge of
-an unpushed branch, belongs to no pull request and is passed over.
+commits to look up is refused whole rather than checked in part — run it by
+hand over narrower ranges.
+
+**A pull that could not fast-forward is followed through its merge.** `git pull`
+then makes a merge commit GitHub has never seen, and the upstream commits sit on
+its second parent; `unfinished` walks into them, stopping where the range does,
+and looks each one up. A local merge of an unpushed branch walks into commits
+GitHub does not know either, belongs to no pull request, and reports nothing.
 
 **A merge leaves an issue in one of two states, and they need different
 commands.** GitHub may close it and leave the board behind:
