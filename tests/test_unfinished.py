@@ -38,10 +38,6 @@ def hook(tool):
     return tool
 
 
-MERGE = "Merge pull request #188 from paulcaron16k/story/agile-187_planner-types-a-duration"
-SQUASH = "A planner types a duration, not an end date (#188)"
-
-
 REPO = "o/r"
 
 
@@ -56,42 +52,116 @@ def args_for(tool, quiet=True, span="ORIG_HEAD..HEAD"):
                               quiet=quiet, **{"range": span})
 
 
+class Stub:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+#: What `commits/{sha}/pulls` answers, after the `--jq` the tool sends: one
+#: merged pull request per line, number and base repository. Keyed by commit,
+#: and named for the merge style that produced it -- the API answers all four
+#: the same way, which is the point of asking it.
+MERGE_COMMIT, SQUASH, REBASED_1, REBASED_2, EDITED, STORY = (
+    "aaaa1111", "bbbb2222", "cccc3333", "cccc4444", "dddd5555", "eeee6666")
+PULLS = {
+    MERGE_COMMIT: f"188\t{REPO}\n",
+    SQUASH: f"189\t{REPO}\n",
+    REBASED_1: f"190\t{REPO}\n",
+    REBASED_2: f"190\t{REPO}\n",
+    EDITED: f"191\t{REPO}\n",
+    # Zamboni's 92a5bc7, "... retired spellings (#228)": the subject names an
+    # issue, and GitHub says the commit belongs to pull request 229.
+    STORY: f"229\t{REPO}\n",
+}
+
+
+def github(pulls=PULLS, fail=(), unknown=()):
+    """A stand-in for `gh api repos/{owner}/{repo}/commits/{sha}/pulls`."""
+    asked = []
+
+    def run(cmd, **_kwargs):
+        asked.append(cmd)
+        sha = cmd[2].split("/")[-2]
+        if sha in fail:
+            return Stub(1, "", "gh: Server Error (HTTP 502)")
+        if sha in unknown:
+            return Stub(1, "", f"gh: No commit found for SHA: {sha} (HTTP 422)")
+        return Stub(0, pulls.get(sha, ""))
+    run.asked = asked
+    return run
+
+
 class TestFindingThePullRequests:
-    def test_a_merge_commit(self, hook):
-        assert hook.merged_pull_requests([MERGE]) == [188]
+    """GitHub says which pull request a commit belongs to; the subject is never
+    read. AGILE-225: Zamboni's story commit `... (#228)` names an issue, the old
+    parser took it for a pull request, and the merge's real one, #229, was never
+    checked.
+    """
 
-    def test_a_squash_commit(self, hook):
-        """The merge style is a repository setting somebody can change, and a
-        parser that knows only today's silently stops reporting."""
-        assert hook.merged_pull_requests([SQUASH]) == [188]
+    def test_a_merge_commit(self, hook, monkeypatch):
+        monkeypatch.setattr(hook.subprocess, "run", github())
+        assert hook.merged_pull_requests([MERGE_COMMIT], REPO) == ([188], [])
 
-    def test_both_spellings_in_one_range(self, hook):
-        assert hook.merged_pull_requests([MERGE, "Other (#185)"]) == [188, 185]
+    def test_a_squash_merge(self, hook, monkeypatch):
+        monkeypatch.setattr(hook.subprocess, "run", github())
+        assert hook.merged_pull_requests([SQUASH], REPO) == ([189], [])
 
-    def test_the_same_pull_request_twice_is_one(self, hook):
-        assert hook.merged_pull_requests([MERGE, SQUASH]) == [188]
+    def test_a_rebase_merge_is_one_pull_request(self, hook, monkeypatch):
+        """A rebase keeps the original subjects and names no pull request at all;
+        each commit still belongs to one, and it is asked about once."""
+        monkeypatch.setattr(hook.subprocess, "run", github())
+        assert hook.merged_pull_requests([REBASED_1, REBASED_2], REPO) == ([190], [])
 
-    def test_order_is_the_order_merged(self, hook):
-        assert hook.merged_pull_requests(["A (#3)", "B (#1)", "C (#2)"]) == [3, 1, 2]
+    def test_a_merge_whose_title_was_edited(self, hook, monkeypatch):
+        monkeypatch.setattr(hook.subprocess, "run", github())
+        assert hook.merged_pull_requests([EDITED], REPO) == ([191], [])
 
-    def test_an_ordinary_commit_names_no_pull_request(self, hook):
-        assert hook.merged_pull_requests(["Every date was written as text (AGILE-182)"]) == []
+    def test_an_issue_number_in_a_subject_has_no_effect(self, hook, monkeypatch):
+        """The Zamboni merge: the merge commit and its story commit both belong
+        to #229, and #228 -- the issue in the story's subject -- is nowhere."""
+        monkeypatch.setattr(hook.subprocess, "run",
+                            github({**PULLS, MERGE_COMMIT: f"229\t{REPO}\n"}))
+        assert hook.merged_pull_requests([MERGE_COMMIT, STORY], REPO) == ([229], [])
 
-    def test_an_issue_reference_mid_subject_is_not_a_pull_request(self, hook):
-        """`(#188)` at the end is the squash marker; `#188` in prose is not."""
-        assert hook.merged_pull_requests(["Fix the thing #188 complained about"]) == []
+    def test_the_subject_is_never_asked_for(self, hook, monkeypatch):
+        run = github()
+        monkeypatch.setattr(hook.subprocess, "run", run)
+        hook.merged_pull_requests([MERGE_COMMIT], REPO)
+        assert run.asked[0][:2] == ["gh", "api"]
+        assert "commits/aaaa1111/pulls" in run.asked[0][2]
+        assert "merged_at" in " ".join(run.asked[0])
 
-    def test_a_merge_of_something_that_is_not_a_number(self, hook):
-        assert hook.merged_pull_requests(["Merge pull request #x from y"]) == []
+    def test_order_is_the_order_merged(self, hook, monkeypatch):
+        monkeypatch.setattr(hook.subprocess, "run", github())
+        assert hook.merged_pull_requests([EDITED, MERGE_COMMIT, SQUASH], REPO)[0] == [
+            191, 188, 189]
+
+    def test_a_pull_request_based_elsewhere_is_not_this_merge(self, hook, monkeypatch):
+        """A commit can belong to a fork's pull request too."""
+        monkeypatch.setattr(hook.subprocess, "run",
+                            github({MERGE_COMMIT: f"7\tfork/r\n188\t{REPO}\n"}))
+        assert hook.merged_pull_requests([MERGE_COMMIT], REPO) == ([188], [])
+
+    def test_a_commit_in_no_pull_request(self, hook, monkeypatch):
+        monkeypatch.setattr(hook.subprocess, "run", github({}))
+        assert hook.merged_pull_requests(["ffff0000"], REPO) == ([], [])
+
+    def test_a_commit_github_has_never_seen_is_not_a_failure(self, hook, monkeypatch):
+        """A local `git merge` of an unpushed branch runs the hook too, and no
+        pull request merged a commit GitHub does not have."""
+        monkeypatch.setattr(hook.subprocess, "run", github(unknown={"ffff0000"}))
+        assert hook.merged_pull_requests(["ffff0000"], REPO) == ([], [])
+
+    def test_a_failing_lookup_among_good_ones(self, hook, monkeypatch):
+        """The failure is named, and every other commit is still asked."""
+        monkeypatch.setattr(hook.subprocess, "run", github(fail={SQUASH}))
+        found, failed = hook.merged_pull_requests([MERGE_COMMIT, SQUASH, EDITED], REPO)
+        assert found == [188, 191]
+        assert len(failed) == 1 and SQUASH[:8] in failed[0]
 
 
 CLOSING_JSON = ('{"closingIssuesReferences": [{"number": 187, "repository": '
                 '{"name": "thing", "owner": {"login": "acme"}}}]}')
-
-
-class Stub:
-    def __init__(self, returncode=0, stdout=""):
-        self.returncode, self.stdout, self.stderr = returncode, stdout, ""
 
 
 class TestWhatItAsksGitHub:
@@ -198,10 +268,21 @@ class TestTheBoardIsReadOnce:
         assert seen == [shared]
 
 
+def pulled(hook, monkeypatch, shas=(MERGE_COMMIT,), found=(188,), failed=()):
+    """A pull that brought in `shas`, which GitHub says merged `found`."""
+    monkeypatch.setattr(hook.subprocess, "run",
+                        lambda cmd, **k: Stub(0, "".join(f"{sha}\n" for sha in shas)))
+    monkeypatch.setattr(hook, "current_repo", lambda: REPO)
+    monkeypatch.setattr(hook, "merged_pull_requests",
+                        lambda commits, repo: (list(found), list(failed)))
+
+
 class TestItNeverFailsAPull:
     def drive(self, hook, monkeypatch, capsys, *, log, issues=(), text=None, quiet=True):
-        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(
-            0 if log is not None else 128, log or ""))
+        if log is None:
+            monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(128, ""))
+        else:
+            pulled(hook, monkeypatch)
         monkeypatch.setattr(hook, "closing_issues",
                             lambda pr: [(REPO, n) for n in issues])
         monkeypatch.setattr(hook, "rows", lambda *a, **k: [])
@@ -215,34 +296,34 @@ class TestItNeverFailsAPull:
 
     def test_a_merge_that_closed_nothing_is_silent_when_quiet(
             self, hook, monkeypatch, capsys):
-        code, out = self.drive(hook, monkeypatch, capsys, log=MERGE, issues=[])
+        code, out = self.drive(hook, monkeypatch, capsys, log=True, issues=[])
         assert code == 0 and out.err == "" and out.out == ""
 
     def test_and_says_so_when_not_quiet(self, hook, monkeypatch, capsys):
-        code, out = self.drive(hook, monkeypatch, capsys, log=MERGE, issues=[],
+        code, out = self.drive(hook, monkeypatch, capsys, log=True, issues=[],
                                quiet=False)
         assert code == 0 and "waiting to be finished" in out.out
 
     def test_a_finished_issue_is_not_reported(self, hook, monkeypatch, capsys):
-        code, out = self.drive(hook, monkeypatch, capsys, log=MERGE,
+        code, out = self.drive(hook, monkeypatch, capsys, log=True,
                                issues=[187], text=None)
         assert code == 0 and out.err == ""
 
     def test_an_unfinished_one_is_reported_on_stderr(self, hook, monkeypatch, capsys):
-        code, out = self.drive(hook, monkeypatch, capsys, log=MERGE, issues=[187],
+        code, out = self.drive(hook, monkeypatch, capsys, log=True, issues=[187],
                                text="  #187 needs finishing")
         assert "#187" in out.err
 
     def test_and_still_exits_zero(self, hook, monkeypatch, capsys):
         """A hook that can stop you pulling is a hook people delete."""
-        code, _out = self.drive(hook, monkeypatch, capsys, log=MERGE, issues=[187],
+        code, _out = self.drive(hook, monkeypatch, capsys, log=True, issues=[187],
                                 text="  #187 needs finishing")
         assert code == 0
 
     def test_the_board_is_not_read_when_nothing_was_closed(
             self, hook, monkeypatch, capsys):
         """A pull that closed no issue should cost no GraphQL at all."""
-        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        pulled(hook, monkeypatch)
         monkeypatch.setattr(hook, "closing_issues", lambda pr: [])
         monkeypatch.setattr(hook, "rows", lambda *a, **k: pytest.fail(
             "the board was read although the merge closed nothing"))
@@ -351,9 +432,9 @@ class TestSayingWhatDidNotHappen:
     """
 
     def test_a_finding_is_not_a_failure(self, hook, monkeypatch, capsys):
-        """The contract the hook reads: non-zero means the check did not run,
-        never that it found something."""
-        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        """The contract the hook reads: non-zero means not everything was
+        checked, never that something was found."""
+        pulled(hook, monkeypatch)
         monkeypatch.setattr(hook, "closing_issues", lambda pr: [(REPO, 174)])
         monkeypatch.setattr(hook, "rows", lambda *a, **k: [])
         monkeypatch.setattr(hook, "outstanding",
@@ -364,14 +445,14 @@ class TestSayingWhatDidNotHappen:
                                                           capsys):
         """`closing_issues` returning None rather than []: a token that expired
         would otherwise report *nothing waiting*, which looks exactly right."""
-        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        pulled(hook, monkeypatch)
         monkeypatch.setattr(hook, "closing_issues", lambda pr: None)
         assert hook.cmd_unfinished(args_for(hook)) == 1
         assert "could not ask GitHub" in capsys.readouterr().err
 
     def test_a_board_it_cannot_read_is_not_a_clean_merge(self, hook, monkeypatch,
                                                          capsys):
-        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        pulled(hook, monkeypatch)
         monkeypatch.setattr(hook, "closing_issues", lambda pr: [(REPO, 174)])
         def unreadable(*a, **k):
             raise SystemExit("no project 4 found")
@@ -383,7 +464,7 @@ class TestSayingWhatDidNotHappen:
                                                             capsys):
         """`MissingScope` travels uncaught to `main` by design; a hook is where
         that would become a traceback on somebody's pull."""
-        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(0, MERGE))
+        pulled(hook, monkeypatch)
         monkeypatch.setattr(hook, "closing_issues", lambda pr: [(REPO, 174)])
         def unscoped(*a, **k):
             raise hook.MissingScope("read:project is missing")
@@ -395,6 +476,83 @@ class TestSayingWhatDidNotHappen:
         nothing to say. Neither is a broken check."""
         monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(128, ""))
         assert hook.cmd_unfinished(args_for(hook)) == 0
+
+
+class TestOneFailureDoesNotStopTheRest:
+    """AGILE-225: the first failed lookup ended the check, so the pull request
+    that mattered was never asked about and the hook printed only the failure.
+    """
+
+    def test_findings_are_reported_beside_the_failure(self, hook, monkeypatch, capsys):
+        pulled(hook, monkeypatch, shas=(MERGE_COMMIT, SQUASH), found=(229,),
+               failed=("could not ask GitHub which pull request merged bbbb2222",))
+        monkeypatch.setattr(hook, "closing_issues", lambda pr: [(REPO, 227), (REPO, 228)])
+        monkeypatch.setattr(hook, "rows", lambda *a, **k: [])
+        monkeypatch.setattr(hook, "outstanding",
+                            lambda a, b, repo, issue: f"  #{issue} needs finishing")
+        code = hook.cmd_unfinished(args_for(hook))
+        err = capsys.readouterr().err
+        assert "#227 needs finishing" in err and "#228 needs finishing" in err
+        assert "bbbb2222" in err
+        assert code == 1
+
+    def test_a_failed_closing_lookup_does_not_stop_the_next(self, hook, monkeypatch,
+                                                            capsys):
+        pulled(hook, monkeypatch, found=(228, 229))
+        monkeypatch.setattr(hook, "closing_issues",
+                            lambda pr: None if pr == 228 else [(REPO, 227)])
+        monkeypatch.setattr(hook, "rows", lambda *a, **k: [])
+        monkeypatch.setattr(hook, "outstanding",
+                            lambda a, b, repo, issue: f"  #{issue} needs finishing")
+        code = hook.cmd_unfinished(args_for(hook))
+        err = capsys.readouterr().err
+        assert "#227 needs finishing" in err
+        assert "pull request #228" in err
+        assert code == 1
+
+    def test_only_failures_still_say_so(self, hook, monkeypatch, capsys):
+        pulled(hook, monkeypatch, found=(),
+               failed=("could not ask GitHub which pull request merged aaaa1111",))
+        monkeypatch.setattr(hook, "rows", lambda *a, **k: pytest.fail(
+            "the board was read although no issue was found"))
+        assert hook.cmd_unfinished(args_for(hook, quiet=False)) == 1
+        out = capsys.readouterr()
+        assert "aaaa1111" in out.err and "waiting to be finished" not in out.out
+
+
+class TestTheCostIsBounded:
+    """One REST call per first-parent commit. A pull bringing in more than the
+    cap is refused whole: checking the first fifty would report the rest clean.
+    """
+
+    def test_the_log_is_first_parent_and_capped(self, hook, monkeypatch):
+        asked = []
+        monkeypatch.setattr(hook.subprocess, "run",
+                            lambda cmd, **k: asked.append(cmd) or Stub(0, ""))
+        hook.cmd_unfinished(args_for(hook))
+        assert "--first-parent" in asked[0]
+        assert f"--max-count={hook.UNFINISHED_COMMIT_CAP + 1}" in asked[0]
+
+    def test_too_many_commits_checks_none_and_says_how(self, hook, monkeypatch, capsys):
+        shas = [f"{n:08x}" for n in range(hook.UNFINISHED_COMMIT_CAP + 1)]
+        pulled(hook, monkeypatch, shas=shas)
+        monkeypatch.setattr(hook, "merged_pull_requests", lambda *a: pytest.fail(
+            "GitHub was asked about part of a range too large to check"))
+        assert hook.cmd_unfinished(args_for(hook)) == 1
+        err = capsys.readouterr().err
+        assert "none was checked" in err and "gh agile unfinished --range" in err
+
+    def test_at_the_cap_it_checks(self, hook, monkeypatch):
+        shas = [f"{n:08x}" for n in range(hook.UNFINISHED_COMMIT_CAP)]
+        pulled(hook, monkeypatch, shas=shas, found=())
+        assert hook.cmd_unfinished(args_for(hook)) == 0
+
+    def test_a_repository_it_cannot_name_is_not_a_clean_merge(self, hook, monkeypatch,
+                                                              capsys):
+        pulled(hook, monkeypatch)
+        monkeypatch.setattr(hook, "current_repo", lambda: None)
+        assert hook.cmd_unfinished(args_for(hook)) == 1
+        assert "which repository" in capsys.readouterr().err
 
 
 class TestTheHookScriptItself:
@@ -410,7 +568,7 @@ class TestTheHookScriptItself:
         assert subprocess.run(["sh", "-n", str(path)]).returncode == 0
 
     def test_it_says_the_check_did_not_happen(self, hook):
-        assert "the post-merge check did not run" in self.script(hook)
+        assert "the post-merge check did not finish" in self.script(hook)
 
     def test_it_names_the_fix(self, hook):
         assert "gh extension upgrade agile" in self.script(hook)
@@ -441,5 +599,5 @@ class TestTheHookScriptItself:
         """Two hook bodies exist and can drift; the sentence they share is the
         one a reader acts on."""
         template = (ROOT / "templates" / "post-merge").read_text()
-        assert "the post-merge check did not run" in template
+        assert "the post-merge check did not finish" in template
         assert "gh extension upgrade agile" in template

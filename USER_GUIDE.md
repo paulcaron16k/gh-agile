@@ -1013,18 +1013,20 @@ if said=$(gh agile unfinished --quiet 2>&1); then
     [ -n "$said" ] && printf '%s\n' "$said" >&2
     exit 0
 fi
-printf '%s\n' "  gh-agile: the post-merge check did not run, so nothing was checked." \
+printf '%s\n' "  gh-agile: the post-merge check did not finish, so not everything was checked." \
               "$said" "  gh extension upgrade agile" >&2
 exit 0
 ```
 
-**`gh agile unfinished` exits non-zero only when it could not run.** A finding is
-not a failure — an outstanding issue still exits 0 — so that code means *the
-check did not happen* and nothing else. It is what lets the hook say so in its
+**`gh agile unfinished` exits non-zero only when it could not check everything.**
+A finding is not a failure — an outstanding issue still exits 0 — so that code
+means *not all of it was checked* and nothing else. One lookup that fails does
+not stop the rest: whatever the others found is still reported, with the failure
+named beneath it. It is what lets the hook say so in its
 own words rather than leaving a stray `gh` error to stand in for it, and the
 commonest cause is the ordinary one:
 
-> `gh-agile: the post-merge check did not run, so nothing was checked.`
+> `gh-agile: the post-merge check did not finish, so not everything was checked.`
 > `gh agile: error: argument command: invalid choice: 'unfinished'`
 > `If that says the command is unknown, this clone's gh-agile is older than`
 > `its hook:  gh extension upgrade agile`
@@ -1036,6 +1038,17 @@ what a pull just merged:
 ```bash
 gh agile unfinished --range main@{1}..main
 ```
+
+**It asks GitHub which pull requests the range merged; the wording of a commit
+plays no part.** For each first-parent commit in the range it calls
+`commits/{sha}/pulls` and keeps the pull requests that are merged and based in
+this repository — so a merge commit, a squash, a rebase merge and a merge whose
+title was edited are all found, and a commit subject ending `(#228)` that names
+an *issue* is not mistaken for a pull request. Each commit costs one REST call;
+each pull request found is asked once what it closes. A range of more than 50
+first-parent commits is refused whole rather than checked in part — run it by
+hand over narrower ranges. A commit GitHub has never seen, from a local merge of
+an unpushed branch, belongs to no pull request and is passed over.
 
 **A merge leaves an issue in one of two states, and they need different
 commands.** GitHub may close it and leave the board behind:

@@ -22,15 +22,15 @@ python3 "$(git rev-parse --show-toplevel)/scripts/ci_status.py" --branch main --
 # repository that is not this one (#193). The `ci_status.py` line above does,
 # and is this repository's own business.
 #
-# The `else` is #192: `unfinished` returns non-zero only when it could not run,
-# so this says *the check did not happen* in the hook's own words instead of
+# The `else` is #192: `unfinished` returns non-zero only when it could not check everything,
+# so this says *not everything was checked* in the hook's own words instead of
 # letting a stray `gh` error stand in for it.
 if said=$(gh agile unfinished --quiet 2>&1); then
     [ -n "$said" ] && printf '%s\n' "$said" >&2
 else
     printf '%s\n' \
       "" \
-      "  gh-agile: the post-merge check did not run, so nothing was checked." \
+      "  gh-agile: the post-merge check did not finish, so not everything was checked." \
       "$said" \
       "  If that says the command is unknown, this clone's gh-agile is older than" \
       "  its hook:  gh extension upgrade agile" \
