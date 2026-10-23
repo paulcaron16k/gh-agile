@@ -10,7 +10,7 @@ Where a claim here has a number in it, that number came from a run.
 
 **Measure GitHub, do not reason about it.** Every significant finding came from an experiment on a scratch
 project, and several contradicted what the documentation and the type names implied. The iteration
-behaviour, the six built-in workflows, the write-only series anchor, the `503`s — all measured. The type
+behaviour, the built-in workflows, the write-only series anchor, the `503`s — all measured. The type
 name `ProjectV2Iteration` implies an identified object; it carries `startDate`, `duration` and `title` and
 no id, which is the whole defect this tool is built around.
 
@@ -55,6 +55,28 @@ The fix is ordering, and it is not obvious from reading the code: close *before*
 lesson generalises past this field — **when a project automation and this tool write the same thing, the
 tool has to go first, because GitHub will not tell you it lost.** And an exit code from `gh` is not
 evidence that a write happened.
+
+**Two settings are called auto-close, and turning off the harmless one cost three merges their close.**
+While the race above was being fixed, every auto-close setting was disabled. One was the culprit: the
+*project* workflow `Auto-close issue`, which closes an issue when its Status becomes Done. The other was
+the *repository* setting *Auto-close issues with merged linked pull requests* (Settings → General →
+Issues), which closes an issue when a pull request saying `Closes #n` merges. That one never raced
+anything — a merge happens before anybody runs `issue move ... Done` — and it is **on by default**:
+measured on `agile-reports`, on repositories created since, and on the fork
+`paulcaron16k/target-ducklake-definite`.
+
+With it off, `#232`, `#235` and `#236` each merged and left their issue open. `closingIssuesReferences`
+named the issue every time, so the pull request side looked right; the issue side did not, and the
+cross-reference from `#236` to `#233` read `willCloseTarget: false`. Re-enabled 2026-10-23, the next one
+read `true` (`#238` → `#237`), and `#237` closed at the merge with the pull request as its closer. The
+post-merge hook caught all three misses; `validate` could not have, because an issue left open after its
+merge is not a convention violation.
+
+The API cannot see this setting at all — a before-and-after snapshot of the REST repository object and
+every scalar GraphQL `Repository` field differed only in `temp_clone_token` — so nothing in the tool
+could have reported it off. **When a fix is "turn off X", name the X by where it lives, not by what it
+is called**: a project workflow and a repository checkbox with the same word in them are not the same
+setting, and disabling by name took the helpful one with the harmful one.
 
 **A `503` comes in bursts, so a retry loop without backoff is one attempt.** Six immediate retries of
 `gh api user` all failed inside the same second, while the same call typed into a shell succeeded; one

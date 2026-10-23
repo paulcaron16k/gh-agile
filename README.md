@@ -885,10 +885,11 @@ Evidence, no closing `sprint:` label — so the issue reads finished when it is
 not. The post-merge hook that `gh agile init` installs asks a person to finish it
 instead, with `gh agile issue move N Done --evidence`.
 
-In each **repository**, Settings → General → Issues: turn on **Auto-close issues
-with merged linked pull requests**, so `Closes #n` closes the issue when the pull
-request merges. It is a different thing from the project's `Auto-close issue`
-below, and the API cannot read it.
+In each **repository**, Settings → General → Issues: leave **Auto-close issues
+with merged linked pull requests** on. It is GitHub's default, and it is how
+`Closes #n` closes the issue when the pull request merges. It is a different thing
+from the project's `Auto-close issue` below — the race below is that workflow's,
+never this setting's — and the API cannot read it.
 
 **Do not enable `Auto-close issue`.** It closes the issue the moment Status
 becomes `Done`, which beats `gh agile issue close ISSUE -r "not planned"` to the close and

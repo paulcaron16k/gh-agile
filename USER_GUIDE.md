@@ -80,7 +80,7 @@ gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an exis
 
   And one setting per repository, which the API cannot read:
     [?]   enable    Auto-close issues with merged linked pull requests
-             Settings -> General -> Issues. On: `Closes #n` then closes ...
+             Settings -> General -> Issues. On by default: leave it on. ...
              https://github.com/you/repo/settings
 
   Then: gh agile validate
@@ -995,14 +995,24 @@ on a repository — see below.
 ### And one repository setting: closing on merge
 
 **Settings → General → Issues → *Auto-close issues with merged linked pull
-requests*: on, in every repository on the board.** It is not a project workflow,
-and it is easily confused with one: `Auto-close issue` above closes an issue
-when its *Status* becomes Done, and stays off; this one closes it when a pull
-request saying `Closes #n` *merges*, and should be on.
+requests*: on by default — leave it on, in every repository on the board.** It
+is not a project workflow, and it is easily confused with one: `Auto-close
+issue` above closes an issue when its *Status* becomes Done, and stays off; this
+one closes it when a pull request saying `Closes #n` *merges*, and stays on.
 
-Off, `Closes #n` closes nothing. Found on this repository: three merges in a row
-left their issue open, each with `closingIssuesReferences` naming it, and the
-issue's cross-reference from the pull request read `willCloseTarget: false`.
+**Turning it off while fixing the `Auto-close issue` race is the mistake to
+avoid,** and this repository made it: every auto-close setting was disabled
+during that fix, and the race was only ever the project workflow's. Off, `Closes
+#n` closes nothing. Three merges in a row left their issue open, each with
+`closingIssuesReferences` naming it, and the issue's cross-reference from the
+pull request read `willCloseTarget: false`; re-enabled, the next merge closed
+its issue itself. See `docs/lessons.md`.
+
+**A fork may not show it.** A fork you track issues in needs Issues enabled;
+the one fork checked here, with Issues enabled, had the setting present and on.
+That a fork without Issues shows no Issues settings at all is the likely
+explanation for reports of the checkbox being absent, and is not yet verified.
+
 On, a merged issue is *closed, not Done* rather than *open*, and that is better
 in every way that matters here:
 

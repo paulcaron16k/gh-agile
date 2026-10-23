@@ -1846,6 +1846,10 @@ def project_workflows(login: str, number: int) -> dict[str, bool]:
 #: snapshot of the REST repository object and every scalar GraphQL `Repository`
 #: field differed, across the change, only in `temp_clone_token`.
 #:
+#: **On by default, and off here only by mistake** (#239): it was disabled with
+#: every other "auto-close" while the #96 race was fixed, and the race was the
+#: project's `Auto-close issue`, never this.
+#:
 #: On, because a merged issue is then *closed, not Done*: `validate` catches
 #: that as well as the hook, where an issue left *open* is the hook's alone
 #: (#190); `closed_at` is the merge, which cycle times are measured from; and
@@ -1853,9 +1857,11 @@ def project_workflows(login: str, number: int) -> dict[str, bool]:
 #: request. Nothing races it while `Item closed` and `Auto-close issue` are off.
 REPO_AUTO_CLOSE = (
     "Auto-close issues with merged linked pull requests",
-    "Settings -> General -> Issues. On: `Closes #n` then closes the issue at the "
-    "merge, `validate` sees it as well as the hook, and `closed_at` is when the "
-    "work landed. The API cannot read it, so it is not shown as on or off",
+    "Settings -> General -> Issues. On by default: leave it on. `Closes #n` then "
+    "closes the issue at the merge, `validate` sees it as well as the hook, and "
+    "`closed_at` is when the work landed. It is not the project's `Auto-close "
+    "issue`, and never raced this tool. The API cannot read it, so it is not "
+    "shown as on or off",
 )
 
 
