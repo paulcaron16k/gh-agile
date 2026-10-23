@@ -159,8 +159,10 @@ class TestHiddenCommands:
             is tool.cmd_self_test
 
 
-class TestALeafKeepsItsFlags:
-    def test_a_leaf_is_argparses_own_help(self, tool):
+class TestALeafListsItsFlags:
+    def test_a_leaf_lists_its_own_flags(self, tool):
+        """A command's own help is `gh`'s layout too since #222 -- see
+        tests/test_command_help.py -- and still lists every flag it takes."""
         text = help_of(tool, "issue", "move")
-        assert text.startswith("usage: gh agile issue move")
+        assert "USAGE\n  gh agile issue move <issue> <status> [flags]" in text
         assert "--evidence" in text
