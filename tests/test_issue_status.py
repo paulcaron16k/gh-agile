@@ -116,14 +116,14 @@ class TestEmptySectionsAreNamed:
 class TestJson:
     def test_the_same_sections_as_json(self, status):
         shown = json.loads(status([item(1, "Todo", ["me"]), item(2, "In Review", ["a"]),
-                                   item(3, "Todo")], "--format", "json"))
+                                   item(3, "Todo")], "--json", "sprint,me,yours,review,unheld"))
         assert [r["number"] for r in shown["yours"]] == [1]
         assert [r["number"] for r in shown["review"]] == [2]
         assert [r["number"] for r in shown["unheld"]] == [3]
         assert shown["sprint"]["title"] == "0006 W42-2026" and shown["me"] == "me"
 
     def test_empty_is_an_empty_list_not_absent(self, status):
-        shown = json.loads(status([], "--format", "json"))
+        shown = json.loads(status([], "--json", "yours,review,unheld"))
         assert shown["yours"] == shown["review"] == shown["unheld"] == []
 
 
