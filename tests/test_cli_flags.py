@@ -68,13 +68,15 @@ class TestGlobalFlagsEitherSide:
             assert {"--owner", "--project", "--config"} <= options, path
 
 
-#: Every short flag, and the long flag it must stand for. Each one is `gh`'s
-#: own, meaning the same thing there.
-GH_SHORT_FLAGS = {"-h": "--help", "-R": "--repo", "-L": "--limit", "-s": "--state",
-                  "-t": "--title", "-r": "--reason", "-c": "--comment", "-S": "--search",
-                  "-w": "--web", "-b": "--body", "-F": "--body-file", "-a": "--assignee",
-                  "-l": "--label", "-m": "--milestone", "-e": "--editor",
-                  "-A": "--author"}
+#: Every short flag, and the long flags it may stand for. Each one is `gh`'s
+#: own, meaning the same thing there. `-t` is two, as in `gh`: `--title` where an
+#: issue is written, `--template` where output is formatted.
+GH_SHORT_FLAGS = {"-h": {"--help"}, "-R": {"--repo"}, "-L": {"--limit"},
+                  "-s": {"--state"}, "-t": {"--title", "--template"}, "-r": {"--reason"},
+                  "-c": {"--comment"}, "-S": {"--search"}, "-w": {"--web"},
+                  "-b": {"--body"}, "-F": {"--body-file"}, "-a": {"--assignee"},
+                  "-l": {"--label"}, "-m": {"--milestone"}, "-e": {"--editor"},
+                  "-A": {"--author"}, "-q": {"--jq"}}
 
 
 class TestShortFlagsAreGhs:
@@ -84,7 +86,7 @@ class TestShortFlagsAreGhs:
                 shorts = [o for o in action.option_strings if len(o) == 2]
                 longs = [o for o in action.option_strings if o.startswith("--")]
                 for short in shorts:
-                    assert GH_SHORT_FLAGS.get(short) in longs, (path, short, longs)
+                    assert GH_SHORT_FLAGS.get(short, set()) & set(longs), (path, short, longs)
 
     def test_repo_has_its_short_form_everywhere(self, tool):
         """`-R` is inherited by every `gh issue` and `gh pr` subcommand."""

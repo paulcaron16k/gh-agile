@@ -3831,16 +3831,14 @@ def cmd_sprint(args) -> int:
 
     if args.sprint_command == "list":
         active, completed = iterations(args.owner, args.project)
-        if args.format == "json" or not stdout_is_terminal():
+        if json_requested(args) or not stdout_is_terminal():
             listed = ([{**it, "end": _iteration_end(it),
                         "state": "current" if index == 0 else "future"}
                        for index, it in enumerate(active)]
                       + [{**it, "end": _iteration_end(it), "state": "completed"}
                          for it in completed])
-            if args.format == "json":
-                print(json.dumps([{k: it[k] for k in ("title", "startDate", "end",
-                                                       "duration", "state")}
-                                  for it in listed], indent=2))
+            if json_requested(args):
+                return emit_json(args, listed, SPRINT_LIST_FIELDS)
             else:
                 print_rows([[it["title"], it["startDate"], it["end"], it["state"]]
                             for it in listed])
@@ -5711,6 +5709,17 @@ def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
     # repeat them.
     containers = board_containers(issues, shown, keys) if kind == "scrum" else []
 
+    if json_requested(args):
+        # A list is its rows, as `gh issue list --json` is; a board or a sprint is
+        # one object carrying them, as the JSONL header and items describe it.
+        if kind == "list":
+            return emit_json(args, rows, ROW_FIELDS)
+        return emit_json(args, {
+            "name": view["name"], "type": kind, "layout": view["layout"],
+            "filter": combined, "view_filter": view.get("filter") or "",
+            "owner": args.owner, "project": args.project, "item_count": len(rows),
+            "board_item_count": len(issues), "items": rows}, BOARD_FIELDS)
+
     if (kind == "list" and getattr(args, "format", None) is None
             and not stdout_is_terminal()):
         # A list into a pipe is data: one row per item, tab-separated, no
@@ -5891,16 +5900,15 @@ def cmd_issue_status(args) -> int:
             and field_values(item).get("Sprint") == current["title"]]
     found = status_sections(rows, me)
 
-    if args.format == "json":
-        print(json.dumps({
+    if json_requested(args):
+        return emit_json(args, {
             "sprint": {"title": current["title"], "start": current["startDate"],
                        "end": _iteration_end(current)},
             "me": me,
             **{name: [{k: r[k] for k in ("key", "repository", "number", "title", "url",
                                           "status", "assignees", "story_points")}
                       for r in found[name]] for name, _t, _e in STATUS_SECTIONS},
-        }, indent=2))
-        return 0
+        }, STATUS_FIELDS)
 
     print(f"\n{current['title']}  {current['startDate']} .. {_iteration_end(current)}"
           f"  -- the current sprint, for {me}\n")
@@ -5992,6 +6000,8 @@ def cmd_task_list(args) -> int:
                                    parent["number"], keys) if parent else None,
             })
     rows = rows[:args.limit]
+    if json_requested(args):
+        return emit_json(args, rows, TASK_FIELDS)
     if args.format == "jsonl":
         sys.stdout.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
         return 0
@@ -6237,9 +6247,8 @@ def cmd_view(args) -> int:
         what = _a(actual) if actual else "untyped, with no type: label"
         sys.exit(f"{facts['key']} is {what}, not {_a(wanted)}:\n  {right}")
     checks = issue_checks(args, facts)
-    if args.format == "json":
-        print(json.dumps({**facts, "checks": checks}, indent=2, sort_keys=True))
-        return 0
+    if json_requested(args):
+        return emit_json(args, {**facts, "checks": checks}, VIEW_FIELDS)
     sys.stdout.write(render_view(facts, checks))
     return 0
 
@@ -6341,12 +6350,12 @@ def cmd_board(args) -> int:
         if args.web:
             return open_in_browser(project_url(args.owner, args.project))
         views = views_of(args.owner, args.project)
-        if args.format == "json":
-            print(json.dumps([{"number": v["number"], "name": v["name"],
-                               "type": board_kind(v, args._config),
-                               "layout": v["layout"], "filter": v.get("filter") or ""}
-                              for v in views], indent=2))
-        elif not stdout_is_terminal():
+        if json_requested(args):
+            return emit_json(args, [{"number": v["number"], "name": v["name"],
+                                     "type": board_kind(v, args._config),
+                                     "layout": v["layout"], "filter": v.get("filter") or ""}
+                                    for v in views], BOARD_LIST_FIELDS)
+        if not stdout_is_terminal():
             print_rows([[str(v["number"]), v["name"], board_kind(v, args._config),
                          v["layout"].replace("_LAYOUT", "").lower(), v.get("filter") or ""]
                         for v in views])
@@ -6498,9 +6507,8 @@ def cmd_project_view(args) -> int:
         "issue_title_prefix": title_prefix_mode(config),
         "boards": [b.get("name") for b in config.get("boards") or []],
     }
-    if args.format == "json":
-        print(json.dumps(shown, indent=2))
-        return 0
+    if json_requested(args):
+        return emit_json(args, shown, PROJECT_FIELDS)
     cadence = (f"{shown['sprint_template']} ({shown['cadence_days']} days from "
                f"{shown['start_day']})" if shown["sprint_template"] else "not chosen")
     print(f"  {shown['title'] or '(untitled)'}  #{args.project}, owned by {args.owner}")
@@ -6572,10 +6580,10 @@ def cmd_project_edit(args) -> int:
 def cmd_key_list(args) -> int:
     """`key list`: what the profile records, key by key."""
     entries = profile_keys(args._config)
-    if args.format == "json":
-        print(json.dumps([{"key": e.get("key"), "repo": e.get("repo"), "name": e.get("name")}
-                          for e in entries], indent=2))
-    elif not stdout_is_terminal():
+    if json_requested(args):
+        return emit_json(args, [{"key": e.get("key"), "repo": e.get("repo"),
+                                 "name": e.get("name")} for e in entries], KEY_FIELDS)
+    if not stdout_is_terminal():
         print_rows([[e.get("key"), e.get("repo") or "", e.get("name") or ""]
                     for e in entries])
     elif not entries:
@@ -8707,6 +8715,7 @@ def add_list(group, item_type: str | None, what: str) -> None:
     lister.add_argument("--format", choices=["jsonl"],
                         help="one JSON object per line instead of the text table")
     lister.add_argument("-w", "--web", action="store_true", help="open the board instead")
+    add_json_flags(lister, TASK_FIELDS if item_type == TASK_TYPE else ROW_FIELDS)
     # `gh issue list`'s filters, with its letters and meanings (#220): ANDed with
     # the list's own filter, with each other, and with -S.
     lister.add_argument("-a", "--assignee", metavar="LOGIN",
@@ -8732,7 +8741,7 @@ def add_view(group, item_type: str | None, what: str) -> None:
                               help=f"View {what}, its children and its checks")
     viewer.add_argument("-R", "--repo", help="only needed for a bare number outside "
                                              "its repository")
-    viewer.add_argument("--format", choices=["json"], help="JSON instead of text")
+    add_json_flags(viewer, VIEW_FIELDS)
     viewer.add_argument("-w", "--web", action="store_true", help="open it in the browser")
     viewer.set_defaults(func=cmd_view, item_type=item_type, needs_repo=True)
 
@@ -9018,6 +9027,12 @@ class AgileParser(argparse.ArgumentParser):
                     text += f"; omitted, {action.default}"
                 out.append(f"  {shape(action):<{width}}{text[:1].upper()}{text[1:]}")
             out.append("")
+        fields = getattr(self, "json_fields", None)
+        if fields:
+            # As `gh issue list --help` lists them: the names `--json` takes.
+            out += ["JSON FIELDS",
+                    *textwrap.wrap(", ".join(fields), width=78, initial_indent="  ",
+                                   subsequent_indent="  "), ""]
         if self.epilog and self.epilog.strip():
             out += [self.epilog.strip("\n"), ""]
         out += ["LEARN MORE",
@@ -9075,6 +9090,337 @@ class AgileParser(argparse.ArgumentParser):
                 "  Use `gh agile <command> <subcommand> --help` for more information about "
                 "a command.", ""]
         return "\n".join(out)
+
+
+#: The JSON fields each read command offers to `--json`, as its output names
+#: them (#219). Written out rather than derived, so `--help` can list them
+#: without a board read; `tests/test_json_output.py` fails when a builder grows
+#: a key one of these does not name, or loses one it does.
+ROW_FIELDS = ("key", "number", "repository", "title", "url", "type", "status",
+              "story_points", "sprint", "labels", "assignees", "parent_key", "parent_title",
+              "parent_type", "epic_number", "epic_title", "epic_key", "sub_issues_total",
+              "sub_issues_done", "state")
+TASK_FIELDS = ("key", "number", "repository", "state", "title", "url", "story")
+VIEW_FIELDS = ("key", "number", "repository", "title", "url", "type", "state",
+               "state_reason", "on_board", "status", "sprint", "story_points", "priority",
+               "start", "target", "assignees", "labels", "sprint_labels", "parent",
+               "children", "children_total", "children_closed", "body", "checks")
+STATUS_FIELDS = ("sprint", "me", "yours", "review", "unheld")
+BOARD_LIST_FIELDS = ("number", "name", "type", "layout", "filter")
+BOARD_FIELDS = ("name", "type", "layout", "filter", "view_filter", "owner", "project",
+                "item_count", "board_item_count", "items")
+SPRINT_LIST_FIELDS = ("title", "startDate", "end", "duration", "state")
+KEY_FIELDS = ("key", "repo", "name")
+PROJECT_FIELDS = ("owner", "number", "title", "url", "profile", "keys", "sprint_template",
+                  "cadence_days", "start_day", "issue_title_prefix", "boards")
+
+
+def add_json_flags(parser: argparse.ArgumentParser, fields: tuple[str, ...]) -> None:
+    """`--json`, `-q/--jq` and `-t/--template`, with `gh`'s meanings (#219).
+
+    `--json` alone lists the fields; with them, the JSON is a list for a list
+    and an object for a view. `--jq` and `--template` imply `--json`, every
+    field, when it is not given -- `gh` refuses them without it, and nothing is
+    gained by making somebody type the field list twice.
+    """
+    parser.json_fields = fields
+    parser.add_argument("--json", nargs="?", const="", metavar="fields",
+                        help="output JSON with these comma-separated fields; alone, "
+                             "list them")
+    parser.add_argument("-q", "--jq", metavar="expression",
+                        help="filter the JSON with a jq expression; needs `jq` on PATH")
+    parser.add_argument("-t", "--template", metavar="string",
+                        help="format the JSON with a Go template; see `gh help formatting`"
+                             " for the language, of which a subset is supported")
+
+
+def json_requested(args) -> bool:
+    """Whether this run prints JSON rather than text."""
+    return any(getattr(args, name, None) is not None for name in ("json", "jq", "template"))
+
+
+def emit_json(args, payload, fields: tuple[str, ...]) -> int:
+    """Print `payload` as `--json`, `--jq` or `--template` asked.
+
+    A list is a list of records and keeps its shape; a view is one record. The
+    selection is applied to each record's top-level keys, as `gh` applies it.
+    """
+    if getattr(args, "format", None):
+        sys.exit("--format and --json say the same thing two ways; pass one.")
+    wanted = args.json
+    if wanted == "":
+        sys.stderr.write("Specify one or more comma-separated fields for `--json`:\n"
+                         + "".join(f"  {f}\n" for f in fields))
+        return 1
+    chosen = list(fields) if wanted is None else [f.strip() for f in wanted.split(",")
+                                                   if f.strip()]
+    unknown = [f for f in chosen if f not in fields]
+    if unknown:
+        sys.exit(f"unknown JSON field: {unknown[0]!r}\n  Available fields:\n"
+                 + "\n".join(f"    {f}" for f in fields))
+
+    def pick(record: dict) -> dict:
+        return {f: record.get(f) for f in chosen}
+
+    data = [pick(r) for r in payload] if isinstance(payload, list) else pick(payload)
+    if args.jq is not None and args.template is not None:
+        sys.exit("--jq and --template both format the output; pass one.")
+    if args.jq is not None:
+        return run_jq(args.jq, data)
+    if args.template is not None:
+        sys.stdout.write(render_template(args.template, data))
+        return 0
+    print(json.dumps(data, indent=2, default=str))
+    return 0
+
+
+def run_jq(expression: str, data) -> int:
+    """`--jq`, through the `jq` program: raw strings, as `gh --jq` prints them.
+
+    **`jq` rather than a built-in**, chosen by the owner on #219: `gh` evaluates
+    `--jq` with gojq linked into itself, and this extension can link nothing --
+    `gh extension install` clones a file. So it is the real `jq` when it is
+    installed, and a refusal naming the install when it is not, rather than a
+    subset that accepts an expression and quietly evaluates it differently.
+    """
+    jq = shutil.which("jq")
+    if jq is None:
+        sys.exit("--jq needs the `jq` program, and it is not on PATH.\n"
+                 "  Install it -- https://jqlang.org/download/ -- or use --json and "
+                 "filter the output elsewhere.")
+    result = subprocess.run([jq, "-r", expression], input=json.dumps(data),
+                            capture_output=True, text=True)
+    sys.stdout.write(result.stdout)
+    if result.returncode:
+        sys.stderr.write(result.stderr)
+    return result.returncode
+
+
+class TemplateError(Exception):
+    """A template this subset cannot evaluate, said by name."""
+
+
+#: What `--template` understands: `gh`'s formatting functions that need no
+#: terminal, and the Go template actions they are used with.
+TEMPLATE_SUPPORTED = ("{{.field}}, {{.a.b}}, {{.}}, {{range PIPE}}...{{end}}, "
+                      "{{if PIPE}}...{{else}}...{{end}}, \"string\" and number literals, "
+                      "pipes with |, and the functions join, pluck, len, printf, truncate, "
+                      "tablerow and tablerender")
+
+
+def render_template(template: str, data) -> str:
+    """`--template`: a subset of Go's text/template and `gh`'s functions (#219).
+
+    A subset, and it says so: anything outside it is refused naming what is
+    supported, rather than rendered as something else. Rows from `tablerow`
+    are aligned into columns at `tablerender` or at the end, as `gh` aligns
+    them.
+    """
+    try:
+        nodes, rest = _parse_template(_tokenize(template), stop=())
+        out: list = []
+        _execute(nodes, data, out)
+        return _flush_table(out)
+    except TemplateError as exc:
+        sys.exit(f"--template: {exc}\n  Supported: {TEMPLATE_SUPPORTED}")
+
+
+def _tokenize(template: str) -> list[tuple[str, str]]:
+    tokens, at = [], 0
+    while True:
+        start = template.find("{{", at)
+        if start < 0:
+            tokens.append(("text", template[at:]))
+            return tokens
+        end = template.find("}}", start)
+        if end < 0:
+            raise TemplateError("an action opened with {{ is never closed")
+        text, action = template[at:start], template[start + 2:end]
+        if action.startswith("-"):
+            text, action = text.rstrip(), action[1:]
+        trim_after = action.endswith("-")
+        if trim_after:
+            action = action[:-1]
+        tokens.append(("text", text))
+        tokens.append(("action", action.strip()))
+        at = end + 2
+        if trim_after:
+            while at < len(template) and template[at].isspace():
+                at += 1
+
+
+def _parse_template(tokens, stop):
+    """Nodes up to one of `stop` (`end`, `else`); returns them and the stopper."""
+    nodes = []
+    while tokens:
+        kind, value = tokens.pop(0)
+        if kind == "text":
+            nodes.append(("text", value))
+            continue
+        word = value.split(None, 1)[0] if value else ""
+        if word in stop:
+            return nodes, word
+        if word in ("range", "if"):
+            body, ended = _parse_template(tokens, stop=("end", "else"))
+            other = []
+            if ended == "else":
+                other, ended = _parse_template(tokens, stop=("end",))
+            if ended != "end":
+                raise TemplateError(f"{{{{{word}}}}} has no {{{{end}}}}")
+            nodes.append((word, value[len(word):].strip(), body, other))
+        elif word in ("end", "else"):
+            raise TemplateError(f"{{{{{word}}}}} with nothing open")
+        else:
+            nodes.append(("pipe", value))
+    if stop:
+        raise TemplateError(f"missing {{{{{stop[0]}}}}}")
+    return nodes, None
+
+
+def _execute(nodes, dot, out: list) -> None:
+    for node in nodes:
+        if node[0] == "text":
+            out.append(node[1])
+        elif node[0] == "pipe":
+            value = _pipeline(node[1], dot, out)
+            if value is not None and value is not _ROW:
+                out.append(_stringify(value))
+        elif node[0] == "range":
+            items = _pipeline(node[1], dot, out)
+            seq = list(items.values()) if isinstance(items, dict) else list(items or [])
+            for element in seq:
+                _execute(node[2], element, out)
+            if not seq:
+                _execute(node[3], dot, out)
+        elif node[0] == "if":
+            _execute(node[2] if _truthy(_pipeline(node[1], dot, out)) else node[3], dot, out)
+
+
+_ROW = object()
+
+
+def _pipeline(text: str, dot, out: list):
+    value = None
+    for stage, command in enumerate(c.strip() for c in _split_outside_quotes(text, "|")):
+        words = _words(command)
+        if not words:
+            raise TemplateError(f"empty command in {{{{{text}}}}}")
+        head, args = words[0], [_operand(w, dot) for w in words[1:]]
+        if stage:
+            args.append(value)
+        if head in _FUNCTIONS:
+            value = _FUNCTIONS[head](out, *args)
+        elif len(words) == 1:
+            value = _operand(head, dot) if not stage else value
+        else:
+            raise TemplateError(f"unknown function {head!r}")
+    return value
+
+
+def _split_outside_quotes(text: str, sep: str) -> list[str]:
+    parts, current, quoted = [], "", False
+    for char in text:
+        if char == '"':
+            quoted = not quoted
+        if char == sep and not quoted:
+            parts.append(current)
+            current = ""
+        else:
+            current += char
+    return [*parts, current]
+
+
+def _words(command: str) -> list[str]:
+    import shlex
+
+    try:
+        lexer = shlex.shlex(command, posix=False)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except ValueError as exc:
+        raise TemplateError(f"cannot read {command!r}: {exc}") from exc
+
+
+def _operand(word: str, dot):
+    if word.startswith('"') and word.endswith('"') and len(word) >= 2:
+        return json.loads(word)
+    if word == ".":
+        return dot
+    if word.startswith("."):
+        value = dot
+        for part in word[1:].split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        return value
+    try:
+        return int(word)
+    except ValueError:
+        pass
+    raise TemplateError(f"cannot evaluate {word!r}")
+
+
+def _truthy(value) -> bool:
+    return value not in (None, False, 0, "", [], {})
+
+
+def _stringify(value) -> str:
+    if value is None:
+        return "<no value>"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, (list, dict)):
+        return json.dumps(value)
+    return str(value)
+
+
+def _printf(out, fmt, *args):
+    converted = (fmt.replace("%v", "%s").replace("%q", "%r")
+                 .replace("%t", "%s"))
+    try:
+        return converted % tuple(_stringify(a) if "%s" in converted else a for a in args)
+    except (TypeError, ValueError) as exc:
+        raise TemplateError(f"printf {fmt!r}: {exc}") from exc
+
+
+_FUNCTIONS = {
+    "join": lambda out, sep, items: sep.join(_stringify(i) for i in items or []),
+    "pluck": lambda out, field, items: [i.get(field) if isinstance(i, dict) else None
+                                        for i in items or []],
+    "len": lambda out, value: len(value or []),
+    "printf": _printf,
+    "truncate": lambda out, length, text: (
+        _stringify(text) if len(_stringify(text)) <= length
+        else _stringify(text)[:max(length - 3, 0)] + "..."),
+    "tablerow": lambda out, *cells: out.append(("row", [_stringify(c) for c in cells])) or _ROW,
+    "tablerender": lambda out: out.append(("render",)) or _ROW,
+}
+
+
+def _flush_table(out: list) -> str:
+    """Join the output, aligning each run of `tablerow` rows into columns."""
+    text, rows = [], []
+
+    def render():
+        if not rows:
+            return
+        widths = [max(len(r[i]) for r in rows if i < len(r))
+                  for i in range(max(len(r) for r in rows))]
+        for row in rows:
+            text.append("  ".join(cell.ljust(widths[i]) if i < len(row) - 1 else cell
+                                  for i, cell in enumerate(row)) + "\n")
+        rows.clear()
+
+    for piece in out:
+        if isinstance(piece, tuple) and piece[0] == "row":
+            rows.append(piece[1])
+        elif isinstance(piece, tuple):
+            render()
+        elif piece.strip() or not rows:
+            render()
+            text.append(piece)
+    render()
+    return "".join(text)
 
 
 #: Flags every command takes, shown once under INHERITED FLAGS as `gh` shows its
@@ -9378,7 +9724,7 @@ why this is needed:
     )
     board_sub = board.add_subparsers(dest="board_command", required=True)
     board_lister = board_sub.add_parser("list", kind=GENERAL, help="List every board on the project")
-    board_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
+    add_json_flags(board_lister, BOARD_LIST_FIELDS)
     board_lister.add_argument("-w", "--web", action="store_true",
                               help="open the project in the browser")
     # `view`, as `gh issue/pr/project/repo/run view` all say. It was `show`.
@@ -9400,6 +9746,7 @@ why this is needed:
     # No `display`: `gh` prints for a person with no flag at all (#203).
     board_view.add_argument("--format", choices=["jsonl"],
                             help="JSONL instead of the text view")
+    add_json_flags(board_view, BOARD_FIELDS)
     board_view.add_argument("--filter", metavar="QUERY",
                             help="extra terms, ANDed onto the board's own filter")
     board_view.add_argument("--out-dir", metavar="DIR",
@@ -9430,7 +9777,7 @@ why this is needed:
     project_viewer = project_sub.add_parser(
         "view", kind=GENERAL,
         help="Show the project's owner, number, keys, cadence and title prefix")
-    project_viewer.add_argument("--format", choices=["json"], help="JSON instead of text")
+    add_json_flags(project_viewer, PROJECT_FIELDS)
     project_viewer.add_argument("-w", "--web", action="store_true",
                                 help="open the project in the browser")
     project_viewer.set_defaults(func=cmd_project_view)
@@ -9470,7 +9817,7 @@ one, `RFC-2119 keywords`, is somebody's own words and is left alone.""",
     sprint_sub = sprint.add_subparsers(dest="sprint_command", required=True)
     sprint_lister = sprint_sub.add_parser("list", kind=GENERAL,
                                           help="List every sprint, active and completed")
-    sprint_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
+    add_json_flags(sprint_lister, SPRINT_LIST_FIELDS)
     # Optional, and only ever one default target: the current sprint, the way
     # `gh pr view` takes the current branch. Never widened to every sprint.
     sprint_viewer = sprint_sub.add_parser(
@@ -9484,6 +9831,7 @@ the sprint:YYYY-MM-DD labels: the field is cleared by every iteration write,
 and the labels are the record of where work was done.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sprint_viewer.add_argument("--format", choices=["jsonl"], help="JSONL instead of text")
+    add_json_flags(sprint_viewer, BOARD_FIELDS)
     # Each help line says what the command *changes*: `ensure`, `backfill` and
     # `unstamp` keep their names, and none is plain English the way gh's verbs are.
     sprint_ensure = sprint_sub.add_parser(
@@ -9575,7 +9923,7 @@ why this exists:
     key = sub.add_parser("key", help="The keys that label each repository's issues")
     key_sub = key.add_subparsers(dest="key_command", required=True)
     key_lister = key_sub.add_parser("list", kind=GENERAL, help="List every key in the profile")
-    key_lister.add_argument("--format", choices=["json"], help="JSON instead of text")
+    add_json_flags(key_lister, KEY_FIELDS)
     key_lister.set_defaults(func=cmd_key_list, projectless=True)
     key_adder = key_sub.add_parser("add", kind=GENERAL, help="Record a key for a repository")
     key_adder.add_argument("key", help="uppercase; Jira's rules apply, e.g. ZMBNI")
@@ -9601,7 +9949,7 @@ why this exists:
     issue_status = issue_sub.add_parser(
         "status", kind=GENERAL,
         help="The current sprint: yours by Status, what is in review, what nobody holds")
-    issue_status.add_argument("--format", choices=["json"], help="JSON instead of text")
+    add_json_flags(issue_status, STATUS_FIELDS)
     issue_status.set_defaults(func=cmd_issue_status)
     add_view(issue_sub, None, "any work item")
     move = issue_sub.add_parser(
@@ -9893,6 +10241,14 @@ RETIRED_TABLE = (
      ["sync", "--query", "label:x"], "gh agile sync --search label:x"),
 )
 
+#: Spellings retired **after** v0.4.0, for the next release's note
+#: (`docs/release-next.md`), in `RETIRED_TABLE`'s shape and tested the same way.
+RETIRED_NEXT = (
+    ("`--format json` on a list, view or status", "`--json [fields]`, with `-q/--jq` and "
+     "`-t/--template`", ["issue", "view", "12", "--format", "json"],
+     "gh agile issue view 12 --json"),
+)
+
 #: The work-item types whose title used to be a positional: `epic "Title"`.
 WORK_ITEM_GROUPS = ("initiative", "epic", "story", "task")
 
@@ -9943,6 +10299,20 @@ def retired_spelling(argv: list[str]) -> str | None:
             new = shlex.join(["gh", "agile", *argv[:index + 1], "@me", *argv[index + 1:]])
             return (f"`--add-assignee` takes a login now, `@me` written out, as "
                     f"`gh issue edit --add-assignee` takes it:\n  {new}")
+
+    # `--format json` became `--json` (#219). `export --format json` is still
+    # its spelling -- a file format, which `gh` has no flag for -- and `jsonl`
+    # is a stream, not JSON, so only the `json` value on another command is
+    # retired.
+    command_word = next((t for t in argv if not t.startswith("-")
+                         and t not in GLOBAL_VALUE_FLAGS), None)
+    for index, token in enumerate(argv):
+        pair = (token == "--format" and index + 1 < len(argv) and argv[index + 1] == "json")
+        if command_word != "export" and (pair or token == "--format=json"):
+            replaced = [*argv[:index], "--json", *argv[index + (2 if pair else 1):]]
+            return ("`--format json` is now `--json`, as `gh` spells it; name fields to "
+                    "choose them, and\n  -q/--jq and -t/--template filter it:\n  "
+                    + shlex.join(["gh", "agile", *replaced]))
 
     rest = list(argv)
     head = []

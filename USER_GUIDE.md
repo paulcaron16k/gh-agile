@@ -859,7 +859,7 @@ gh agile board list
 
 That first column is the board's number, and `board view` takes it. Into a
 pipe, `board list` prints the same rows tab-separated with no header, as every
-`list` does, and `--format json` gives them as JSON; `-w` opens the project.
+`list` does, and `--json` gives them as JSON; `-w` opens the project.
 
 **Only a read matches a name loosely.** `board view Eng` finds "Engineering"
 by prefix, and a wrong guess there is visible at once. `board create` converges
@@ -2216,7 +2216,7 @@ gh agile issue list -S "sprint:@current"   # every work item in the current spri
 gh agile epic view AGILE-200           # an epic: its stories, their Status, the rollup
 gh agile story view 202                # a story: its sprint, its tasks, every sprint: label
 gh agile initiative view hierarchy-visibility   # an initiative, by number or slug
-gh agile issue view 201 --format json  # any level, as JSON
+gh agile issue view 201 --json key,status,children   # any level, as JSON
 ```
 
 A **list is a board read**, not a search: Status, Sprint and points live on the
@@ -2424,7 +2424,7 @@ In the sprint, and nobody holds it
 `gh issue status` answers *what needs me*; this asks it of the current sprint.
 It sits under `issue` because that is where `gh` puts status -- top-level `gh
 status` is notifications across every repository. An empty section is named
-rather than left out, so a blank stand-up reads as one. `--format json` gives
+rather than left out, so a blank stand-up reads as one. `--json` gives
 the three lists. It reads the board once, and you are whoever `gh` is logged in
 as; a teammate with read access to the project sees the same board, through
 `project.owner`.
@@ -2970,6 +2970,21 @@ gh agile issue move --help
 
 **A `list` into a pipe is data**: tab-separated, one row per item, no header, as
 `gh issue list` prints it -- so `gh agile epic list | cut -f1` is the keys.
-`--format json` (or `jsonl`, where a list offers it) is the structured form;
-there is no `--jq` or `--template`, which the standard library cannot provide,
-so pipe JSON to `jq`.
+Every `list`, `view` and `status` takes `gh`'s `--json`, `-q/--jq` and
+`-t/--template`, with `gh`'s meanings:
+
+```bash
+gh agile story list --json key,status,assignees         # a JSON array
+gh agile issue view AGILE-200 --json children -q '.children[].key'
+gh agile epic list -t '{{range .}}{{tablerow .key .status .title}}{{end}}'
+```
+
+The fields are listed under JSON FIELDS in each command's `--help`, and
+`--json` with none named lists them and exits 1, as `gh` does. `--jq` and
+`--template` imply `--json` with every field. Two differences from `gh`, both
+because an extension can install nothing: **`--jq` runs the `jq` program**, and
+says how to install it when it is not on PATH; **`--template` is a subset** of
+Go's templates -- fields, `range`, `if`/`else`, pipes, and `join`, `pluck`,
+`len`, `printf`, `truncate`, `tablerow`, `tablerender` -- and refuses anything
+else by name. `--format jsonl` stays where a list or board streams one object
+per line, and `export --format csv` stays, because `gh` has no flag for either.

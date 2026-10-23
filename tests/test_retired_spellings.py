@@ -236,3 +236,22 @@ class TestEveryRowOfTheTable:
         rows = [line for line in note.splitlines()
                 if line.startswith("| ") and not line.startswith("| Was ")]
         assert rows == [f"| {was} | {now} |" for was, now, _a, _e in tool.RETIRED_TABLE]
+
+
+class TestTheNextReleasesRows:
+    """Spellings retired after v0.4.0, recorded for the next note (#219)."""
+
+    @pytest.mark.parametrize("row", __import__("conftest")._load().RETIRED_NEXT,
+                             ids=lambda row: row[0])
+    def test_the_row_fails_and_names_the_new_spelling(self, tool, monkeypatch, capsys, row):
+        _was, _is, argv, suggested = row
+        code, err = run(tool, monkeypatch, capsys, *argv)
+        assert code == 2 and suggested in err
+
+    def test_the_next_note_carries_the_same_table(self, tool):
+        import pathlib
+        note = (pathlib.Path(__file__).resolve().parent.parent
+                / "docs" / "release-next.md").read_text()
+        rows = [line for line in note.splitlines()
+                if line.startswith("| ") and not line.startswith("| Was ")]
+        assert rows == [f"| {was} | {now} |" for was, now, _a, _e in tool.RETIRED_NEXT]

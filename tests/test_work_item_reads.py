@@ -157,7 +157,7 @@ class TestCmdView:
         assert "gh agile issue view 200" in str(exit_info.value)
 
     def test_json(self, tool, view):
-        _, out, _ = view(["issue", "view", "200", "--format", "json"])
+        _, out, _ = view(["issue", "view", "200", "--json", "key,checks"])
         data = json.loads(out)
         assert data["key"] == "AGILE-200" and data["checks"] == "no problems found"
 

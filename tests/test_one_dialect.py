@@ -183,7 +183,7 @@ class TestAPipedListIsData:
     def test_json_whatever_the_destination(self, tool, monkeypatch, capsys,
                                            not_a_terminal):
         monkeypatch.setattr(tool, "views_of", lambda *a: self.VIEWS)
-        args = parse(tool, "board", "list", "--format", "json")
+        args = parse(tool, "board", "list", "--json", "name")
         args.owner, args.project, args._config = "o", 4, {}
         tool.cmd_board(args)
         assert json.loads(capsys.readouterr().out)[0]["name"] == "Backlog"
@@ -335,7 +335,7 @@ class TestProject:
             tool.cmd_project_edit(args)
 
     def test_view_as_json(self, tool, capsys):
-        args = parse(tool, "project", "view", "--format", "json")
+        args = parse(tool, "project", "view", "--json", "owner,number,issue_title_prefix,keys")
         args.owner, args.project = "o", 4
         args._config = {"project": {"name": "B", "issue_title_prefix": "key"},
                         "keys": [{"key": "AGILE", "repo": "o/r"}],
