@@ -8017,6 +8017,41 @@ exit 0
 """
 
 
+def hooks_dir() -> tuple[pathlib.Path, bool] | None:
+    """Where git runs this clone's hooks from, and whether worktrees share it.
+
+    **`--git-path hooks`, never `--git-dir` + `hooks`** (#223). In a linked
+    worktree `--git-dir` is `.git/worktrees/<name>`, and git never looks for
+    hooks there: it reads `$GIT_COMMON_DIR/hooks`, the main clone's. So a hook
+    installed from a worktree landed where nothing runs it, under a message
+    saying `git pull` would now run it -- measured from a `git worktree add` of
+    Zamboni. `--git-path hooks` answers the question git itself asks, and
+    honours `core.hooksPath` as well.
+
+    Asked from the top of the working tree and resolved against it, because
+    the answer is relative: to the working directory for the default, and to
+    the top of the tree for a relative `core.hooksPath`, which is where git
+    runs hooks from. `--path-format=absolute` would say it in one call and
+    needs git 2.31, which this tool's users are not promised.
+
+    `shared` is whether this is a linked worktree, whose hooks are every
+    worktree's -- said, because installing "here" installs for all of them.
+    """
+    def ask(*command: str, cwd: str | None = None) -> str | None:
+        result = subprocess.run(["git", *command], capture_output=True, text=True, cwd=cwd)
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    top = ask("rev-parse", "--show-toplevel")
+    hooks = ask("rev-parse", "--git-path", "hooks", cwd=top)
+    if top is None or hooks is None:
+        return None
+    git_dir = ask("rev-parse", "--absolute-git-dir", cwd=top)
+    common = ask("rev-parse", "--git-common-dir", cwd=top)
+    shared = bool(git_dir and common
+                  and pathlib.Path(top, common).resolve() != pathlib.Path(git_dir).resolve())
+    return pathlib.Path(top, hooks).resolve(), shared
+
+
 def install_hook() -> str:
     """Install the post-merge hook into this clone, and say what happened.
 
@@ -8033,11 +8068,13 @@ def install_hook() -> str:
     rather than failing the run. Three answers on a second run: present,
     replaced because it was stale, or somebody else's.
     """
-    result = subprocess.run(["git", "rev-parse", "--git-dir"],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
+    found = hooks_dir()
+    if found is None:
         return "not inside a git repository, so there is nowhere to install one"
-    path = pathlib.Path(result.stdout.strip()) / "hooks" / "post-merge"
+    directory, shared = found
+    path = directory / "post-merge"
+    every = ("\n    it is the clone's hook, so every worktree of it runs it"
+             if shared else "")
     if path.exists():
         current = path.read_text()
         if HOOK_MARKER not in current:
@@ -8045,13 +8082,14 @@ def install_hook() -> str:
                     f"mine to replace.\n    Add this line to it instead, and it will do "
                     f"the same thing:\n      gh agile unfinished --quiet || true")
         if current == POST_MERGE_HOOK:
-            return f"present, {path}"
+            return f"present, {path}{every}"
     existed = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(POST_MERGE_HOOK)
     path.chmod(0o755)
     return (f"{'replaced a stale' if existed else 'installed'} {path}\n"
-            f"    `git pull` here now names any issue a merge closed and nobody finished")
+            f"    `git pull` here now names any issue a merge closed and nobody finished"
+            f"{every}")
 
 
 def cmd_unfinished(args) -> int:

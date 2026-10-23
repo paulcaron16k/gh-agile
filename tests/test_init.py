@@ -384,14 +384,7 @@ class TestTheHook:
 
     @pytest.fixture
     def git_dir(self, tool, tmp_path, monkeypatch):
-        import subprocess as sp
-        real = sp.run
-
-        def fake_run(argv, **kwargs):
-            if argv[:2] == ["git", "rev-parse"]:
-                return sp.CompletedProcess(argv, 0, stdout=f"{tmp_path}\n", stderr="")
-            return real(argv, **kwargs)
-        monkeypatch.setattr(tool.subprocess, "run", fake_run)
+        monkeypatch.setattr(tool, "hooks_dir", lambda: (tmp_path / "hooks", False))
         return tmp_path / "hooks" / "post-merge"
 
     def test_a_first_run_installs(self, tool, git_dir):
