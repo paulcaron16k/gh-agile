@@ -75,6 +75,11 @@ PULLS = {
 }
 
 
+def line(*shas):
+    """A first-parent line as `first_parent_commits` returns it, no merges."""
+    return [(sha, []) for sha in shas]
+
+
 def github(pulls=PULLS, fail=(), unknown=()):
     """A stand-in for `gh api repos/{owner}/{repo}/commits/{sha}/pulls`."""
     asked = []
@@ -100,62 +105,62 @@ class TestFindingThePullRequests:
 
     def test_a_merge_commit(self, hook, monkeypatch):
         monkeypatch.setattr(hook.subprocess, "run", github())
-        assert hook.merged_pull_requests([MERGE_COMMIT], REPO) == ([188], [])
+        assert hook.merged_pull_requests(line(MERGE_COMMIT), REPO) == ([188], [])
 
     def test_a_squash_merge(self, hook, monkeypatch):
         monkeypatch.setattr(hook.subprocess, "run", github())
-        assert hook.merged_pull_requests([SQUASH], REPO) == ([189], [])
+        assert hook.merged_pull_requests(line(SQUASH), REPO) == ([189], [])
 
     def test_a_rebase_merge_is_one_pull_request(self, hook, monkeypatch):
         """A rebase keeps the original subjects and names no pull request at all;
         each commit still belongs to one, and it is asked about once."""
         monkeypatch.setattr(hook.subprocess, "run", github())
-        assert hook.merged_pull_requests([REBASED_1, REBASED_2], REPO) == ([190], [])
+        assert hook.merged_pull_requests(line(REBASED_1, REBASED_2), REPO) == ([190], [])
 
     def test_a_merge_whose_title_was_edited(self, hook, monkeypatch):
         monkeypatch.setattr(hook.subprocess, "run", github())
-        assert hook.merged_pull_requests([EDITED], REPO) == ([191], [])
+        assert hook.merged_pull_requests(line(EDITED), REPO) == ([191], [])
 
     def test_an_issue_number_in_a_subject_has_no_effect(self, hook, monkeypatch):
         """The Zamboni merge: the merge commit and its story commit both belong
         to #229, and #228 -- the issue in the story's subject -- is nowhere."""
         monkeypatch.setattr(hook.subprocess, "run",
                             github({**PULLS, MERGE_COMMIT: f"229\t{REPO}\n"}))
-        assert hook.merged_pull_requests([MERGE_COMMIT, STORY], REPO) == ([229], [])
+        assert hook.merged_pull_requests(line(MERGE_COMMIT, STORY), REPO) == ([229], [])
 
     def test_the_subject_is_never_asked_for(self, hook, monkeypatch):
         run = github()
         monkeypatch.setattr(hook.subprocess, "run", run)
-        hook.merged_pull_requests([MERGE_COMMIT], REPO)
+        hook.merged_pull_requests(line(MERGE_COMMIT), REPO)
         assert run.asked[0][:2] == ["gh", "api"]
         assert "commits/aaaa1111/pulls" in run.asked[0][2]
         assert "merged_at" in " ".join(run.asked[0])
 
     def test_order_is_the_order_merged(self, hook, monkeypatch):
         monkeypatch.setattr(hook.subprocess, "run", github())
-        assert hook.merged_pull_requests([EDITED, MERGE_COMMIT, SQUASH], REPO)[0] == [
+        assert hook.merged_pull_requests(line(EDITED, MERGE_COMMIT, SQUASH), REPO)[0] == [
             191, 188, 189]
 
     def test_a_pull_request_based_elsewhere_is_not_this_merge(self, hook, monkeypatch):
         """A commit can belong to a fork's pull request too."""
         monkeypatch.setattr(hook.subprocess, "run",
                             github({MERGE_COMMIT: f"7\tfork/r\n188\t{REPO}\n"}))
-        assert hook.merged_pull_requests([MERGE_COMMIT], REPO) == ([188], [])
+        assert hook.merged_pull_requests(line(MERGE_COMMIT), REPO) == ([188], [])
 
     def test_a_commit_in_no_pull_request(self, hook, monkeypatch):
         monkeypatch.setattr(hook.subprocess, "run", github({}))
-        assert hook.merged_pull_requests(["ffff0000"], REPO) == ([], [])
+        assert hook.merged_pull_requests(line("ffff0000"), REPO) == ([], [])
 
     def test_a_commit_github_has_never_seen_is_not_a_failure(self, hook, monkeypatch):
         """A local `git merge` of an unpushed branch runs the hook too, and no
         pull request merged a commit GitHub does not have."""
         monkeypatch.setattr(hook.subprocess, "run", github(unknown={"ffff0000"}))
-        assert hook.merged_pull_requests(["ffff0000"], REPO) == ([], [])
+        assert hook.merged_pull_requests(line("ffff0000"), REPO) == ([], [])
 
     def test_a_failing_lookup_among_good_ones(self, hook, monkeypatch):
         """The failure is named, and every other commit is still asked."""
         monkeypatch.setattr(hook.subprocess, "run", github(fail={SQUASH}))
-        found, failed = hook.merged_pull_requests([MERGE_COMMIT, SQUASH, EDITED], REPO)
+        found, failed = hook.merged_pull_requests(line(MERGE_COMMIT, SQUASH, EDITED), REPO)
         assert found == [188, 191]
         assert len(failed) == 1 and SQUASH[:8] in failed[0]
 
@@ -274,7 +279,7 @@ def pulled(hook, monkeypatch, shas=(MERGE_COMMIT,), found=(188,), failed=()):
                         lambda cmd, **k: Stub(0, "".join(f"{sha}\n" for sha in shas)))
     monkeypatch.setattr(hook, "current_repo", lambda: REPO)
     monkeypatch.setattr(hook, "merged_pull_requests",
-                        lambda commits, repo: (list(found), list(failed)))
+                        lambda *a: (list(found), list(failed)))
 
 
 class TestItNeverFailsAPull:
@@ -547,7 +552,7 @@ class TestOneFailureDoesNotStopTheRest:
 
 
 class TestTheCostIsBounded:
-    """One REST call per first-parent commit. A pull bringing in more than the
+    """One REST call per commit looked up. A pull bringing in more than the
     cap is refused whole: checking the first fifty would report the rest clean.
     """
 
@@ -561,8 +566,10 @@ class TestTheCostIsBounded:
 
     def test_too_many_commits_checks_none_and_says_how(self, hook, monkeypatch, capsys):
         shas = [f"{n:08x}" for n in range(hook.UNFINISHED_COMMIT_CAP + 1)]
-        pulled(hook, monkeypatch, shas=shas)
-        monkeypatch.setattr(hook, "merged_pull_requests", lambda *a: pytest.fail(
+        monkeypatch.setattr(hook.subprocess, "run",
+                            lambda cmd, **k: Stub(0, "".join(f"{sha}\n" for sha in shas)))
+        monkeypatch.setattr(hook, "current_repo", lambda: REPO)
+        monkeypatch.setattr(hook, "commit_pull_requests", lambda sha: pytest.fail(
             "GitHub was asked about part of a range too large to check"))
         assert hook.cmd_unfinished(args_for(hook)) == 1
         err = capsys.readouterr().err
@@ -579,6 +586,140 @@ class TestTheCostIsBounded:
         monkeypatch.setattr(hook, "current_repo", lambda: None)
         assert hook.cmd_unfinished(args_for(hook)) == 1
         assert "which repository" in capsys.readouterr().err
+
+
+LOCAL_MERGE, ORIG, UPSTREAM_MERGE, UPSTREAM_SQUASH, LOCAL_ONLY = (
+    "1111aaaa", "2222bbbb", "3333cccc", "4444dddd", "5555eeee")
+
+
+class TestALocalMergeCommit:
+    """AGILE-233: a `git pull` that cannot fast-forward makes a merge commit
+    GitHub has never seen, and the first-parent line of `ORIG_HEAD..HEAD` is
+    that commit alone. The upstream pull requests are on its second parent.
+    """
+
+    @pytest.fixture
+    def walk(self, hook, monkeypatch):
+        """GitHub's answers by commit, and git's first-parent lines by start."""
+        answers = {LOCAL_MERGE: hook.NOT_ON_GITHUB, LOCAL_ONLY: hook.NOT_ON_GITHUB,
+                   UPSTREAM_MERGE: [(188, REPO)], UPSTREAM_SQUASH: [(189, REPO)]}
+        lines = {UPSTREAM_MERGE: [(UPSTREAM_MERGE, ["9999", "8888"]),
+                                  (UPSTREAM_SQUASH, ["9999"])],
+                 LOCAL_ONLY: [(LOCAL_ONLY, [ORIG])]}
+        followed, asked = [], []
+        monkeypatch.setattr(hook, "commit_pull_requests",
+                            lambda sha: asked.append(sha) or answers.get(sha, []))
+        monkeypatch.setattr(hook, "first_parent_commits",
+                            lambda *revs: followed.append(revs) or lines.get(revs[0]))
+        return answers, lines, followed, asked
+
+    def test_the_upstream_pull_requests_are_found(self, hook, walk):
+        found, failed = hook.merged_pull_requests(
+            [(LOCAL_MERGE, [ORIG, UPSTREAM_MERGE])], REPO, ["^" + ORIG])
+        assert found == [188, 189] and failed == []
+
+    def test_the_walk_stops_at_the_range_s_end(self, hook, walk):
+        _answers, _lines, followed, _asked = walk
+        hook.merged_pull_requests([(LOCAL_MERGE, [ORIG, UPSTREAM_MERGE])], REPO, ["^" + ORIG])
+        assert followed == [(UPSTREAM_MERGE, "^" + ORIG)]
+
+    def test_a_merge_github_knows_is_not_followed(self, hook, walk):
+        """Its second parent is the pull request's own branch: nothing new."""
+        _answers, _lines, followed, _asked = walk
+        found, _failed = hook.merged_pull_requests(
+            [(UPSTREAM_MERGE, ["9999", "8888"])], REPO, ["^" + ORIG])
+        assert found == [188] and followed == []
+
+    def test_a_merge_of_an_unpushed_branch_finds_nothing(self, hook, walk):
+        found, failed = hook.merged_pull_requests(
+            [(LOCAL_MERGE, [ORIG, LOCAL_ONLY])], REPO, ["^" + ORIG])
+        assert (found, failed) == ([], [])
+
+    def test_and_the_check_exits_zero(self, hook, walk, monkeypatch, capsys):
+        monkeypatch.setattr(hook, "first_parent_commits", lambda *revs: (
+            [(LOCAL_MERGE, [ORIG, LOCAL_ONLY])] if revs == ("ORIG_HEAD..HEAD",)
+            else [(LOCAL_ONLY, [ORIG])]))
+        monkeypatch.setattr(hook, "current_repo", lambda: REPO)
+        monkeypatch.setattr(hook, "range_ends", lambda span: ["^" + ORIG])
+        monkeypatch.setattr(hook, "rows", lambda *a, **k: pytest.fail(
+            "the board was read although nothing was merged upstream"))
+        assert hook.cmd_unfinished(args_for(hook)) == 0
+        assert capsys.readouterr().err == ""
+
+    def test_each_commit_is_looked_up_once(self, hook, walk):
+        _answers, _lines, _followed, asked = walk
+        hook.merged_pull_requests([(LOCAL_MERGE, [ORIG, UPSTREAM_MERGE]),
+                                   (UPSTREAM_SQUASH, [])], REPO, ["^" + ORIG])
+        assert sorted(asked) == sorted({LOCAL_MERGE, UPSTREAM_MERGE, UPSTREAM_SQUASH})
+
+    def test_a_parent_it_cannot_follow_is_named_and_the_rest_go_on(self, hook, walk,
+                                                                  monkeypatch):
+        monkeypatch.setattr(hook, "first_parent_commits", lambda *revs: None)
+        found, failed = hook.merged_pull_requests(
+            [(LOCAL_MERGE, [ORIG, UPSTREAM_MERGE]), (UPSTREAM_SQUASH, [])], REPO)
+        assert found == [189]
+        assert len(failed) == 1 and LOCAL_MERGE[:8] in failed[0]
+
+    def test_the_cap_counts_the_commits_it_walks_into(self, hook, walk, monkeypatch):
+        many = [(f"{n:08x}", []) for n in range(hook.UNFINISHED_COMMIT_CAP)]
+        monkeypatch.setattr(hook, "first_parent_commits", lambda *revs: many)
+        with pytest.raises(hook.RangeTooLarge):
+            hook.merged_pull_requests([(LOCAL_MERGE, [ORIG, UPSTREAM_MERGE])], REPO)
+
+
+class TestAgainstRealGit:
+    """The walk's two git questions, asked of a real repository holding the
+    shape #233 is about: a pull that could not fast-forward."""
+
+    @pytest.fixture
+    def pulled_with_a_merge(self, tmp_path, monkeypatch):
+        import subprocess
+
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=tmp_path, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "t@example.com")
+        git("config", "user.name", "t")
+        for name in ("base", "upstream-1", "upstream-2", "local"):
+            if name == "upstream-1":
+                git("checkout", "-q", "-b", "upstream", "main~0")
+            if name == "local":
+                git("checkout", "-q", "main")
+            (tmp_path / name).write_text(name)
+            git("add", name)
+            git("commit", "-q", "-m", name)
+        orig = git("rev-parse", "HEAD")
+        git("merge", "-q", "--no-edit", "upstream")
+        monkeypatch.chdir(tmp_path)
+        return git, orig
+
+    def test_the_first_parent_line_is_the_local_merge_alone(self, hook,
+                                                             pulled_with_a_merge):
+        git, orig = pulled_with_a_merge
+        commits = hook.first_parent_commits(f"{orig}..HEAD")
+        assert [sha for sha, _p in commits] == [git("rev-parse", "HEAD")]
+        assert commits[0][1] == [orig, git("rev-parse", "upstream")]
+
+    def test_its_second_parent_walks_to_the_upstream_commits_only(
+            self, hook, pulled_with_a_merge):
+        git, orig = pulled_with_a_merge
+        ends = hook.range_ends(f"{orig}..HEAD")
+        assert ends == ["^" + orig]
+        line = hook.first_parent_commits(git("rev-parse", "upstream"), *ends)
+        assert [sha for sha, _p in line] == [git("rev-parse", "upstream"),
+                                             git("rev-parse", "upstream~1")]
+
+
+class TestTheRangesEnds:
+    def test_a_two_dot_range_excludes_its_start(self, hook, monkeypatch):
+        monkeypatch.setattr(hook.subprocess, "run",
+                            lambda cmd, **k: Stub(0, "bbbb\n^aaaa\n"))
+        assert hook.range_ends("ORIG_HEAD..HEAD") == ["^aaaa"]
+
+    def test_a_range_git_cannot_parse_has_none(self, hook, monkeypatch):
+        monkeypatch.setattr(hook.subprocess, "run", lambda cmd, **k: Stub(128, ""))
+        assert hook.range_ends("nope..HEAD") == []
 
 
 class TestTheHookScriptItself:

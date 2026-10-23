@@ -7928,17 +7928,28 @@ def cmd_fix(args) -> int:
     return 0
 
 
-#: How many first-parent commits `unfinished` looks up by itself. **Each costs
-#: one REST call** -- `commits/{sha}/pulls`, against the core budget of 5,000 an
-#: hour rather than GraphQL's -- and then one `gh pr view` per pull request
-#: found, deduplicated, so a rebase merge of ten commits asks about its pull
-#: request once. An ordinary pull brings in a handful. One that brings in more
-#: than this is refused whole rather than checked in part: a hook that quietly
-#: looked at the first fifty would report the rest as clean.
+#: How many commits `unfinished` looks up by itself. **Each costs one REST
+#: call** -- `commits/{sha}/pulls`, against the core budget of 5,000 an hour
+#: rather than GraphQL's -- and then one `gh pr view` per pull request found,
+#: deduplicated, so a rebase merge of ten commits asks about its pull request
+#: once. An ordinary pull brings in a handful. One that brings in more than this
+#: is refused whole rather than checked in part: a hook that quietly looked at
+#: the first fifty would report the rest as clean. Commits reached through a
+#: local merge's other parents (#233) count against it too.
 UNFINISHED_COMMIT_CAP = 50
 
 
-def commit_pull_requests(sha: str) -> list[tuple[int, str]] | None:
+class RangeTooLarge(Exception):
+    """More commits to look up than `UNFINISHED_COMMIT_CAP`; none is reported."""
+
+
+#: What `commit_pull_requests` answers for a commit GitHub has never seen. Not
+#: `[]`: belonging to no pull request and being unknown to GitHub lead to
+#: different walks (#233), and not `None`, which is a failed call.
+NOT_ON_GITHUB = "not on GitHub"
+
+
+def commit_pull_requests(sha: str) -> list[tuple[int, str]] | str | None:
     """The merged pull requests GitHub says `sha` belongs to, each with its base.
 
     **Asked, not parsed out of the commit subject** (#225). The subject rule --
@@ -7950,9 +7961,8 @@ def commit_pull_requests(sha: str) -> list[tuple[int, str]] | None:
     the merge commit and that story commit return `[229]`.
 
     `None` on a failed call, as `closing_issues` does, for the same reason. A
-    commit GitHub has never seen is a different answer: a local `git merge` of
-    an unpushed branch runs the hook too, and no pull request can have merged a
-    commit GitHub does not have, so that is `[]` rather than a failure.
+    commit GitHub has never seen is a third answer, `NOT_ON_GITHUB`, which
+    GitHub gives as `No commit found for SHA ... (HTTP 422)`.
     """
     result = subprocess.run(
         ["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{sha}/pulls",
@@ -7960,7 +7970,7 @@ def commit_pull_requests(sha: str) -> list[tuple[int, str]] | None:
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return [] if "No commit found" in (result.stderr or "") else None
+        return NOT_ON_GITHUB if "No commit found" in (result.stderr or "") else None
     found = []
     for line in result.stdout.splitlines():
         number, _tab, base = line.strip().partition("\t")
@@ -7969,27 +7979,91 @@ def commit_pull_requests(sha: str) -> list[tuple[int, str]] | None:
     return found
 
 
-def merged_pull_requests(shas: list[str], repo: str) -> tuple[list[int], list[str]]:
+def first_parent_commits(*revisions: str) -> list[tuple[str, list[str]]] | None:
+    """`git log --first-parent` over `revisions`: each commit and its parents.
+
+    Newest first, and one past the cap at most, so a range too large is known
+    without listing all of it. `None` when git cannot resolve the revisions.
+    """
+    log = subprocess.run(
+        ["git", "log", "--first-parent", "--format=%H %P",
+         f"--max-count={UNFINISHED_COMMIT_CAP + 1}", *revisions],
+        capture_output=True, text=True)
+    if log.returncode != 0:
+        return None
+    commits = []
+    for line in log.stdout.splitlines():
+        sha, *parents = line.split()
+        commits.append((sha, parents))
+    return commits
+
+
+def merged_pull_requests(commits: list[tuple[str, list[str]]], repo: str,
+                         excluded: list[str] | tuple[str, ...] = ()) -> tuple[list[int], list[str]]:
     """This repository's merged pull requests behind these commits, and what failed.
 
-    In the order merged, without repeats. **Merged, and based here**: a commit
+    In the order found, without repeats. **Merged, and based here**: a commit
     can belong to an open pull request too, or to one in a fork, and neither is
     what this pull brought in.
 
     **One failed lookup does not stop the rest** (#225). The first failure used
     to end the whole check, so the pull request that mattered was never asked
     about. Each failure is named and the others are still answered.
+
+    **A merge GitHub has never seen is followed into its other parents** (#233).
+    A `git pull` that cannot fast-forward makes a local merge commit, and the
+    first-parent line of `ORIG_HEAD..HEAD` is then that commit alone: GitHub
+    does not know it, and the upstream commits -- with the pull requests they
+    belong to -- sit on its second parent. Each other parent is walked first
+    parent, stopping at `excluded` (the range's `^` ends), and its commits are
+    looked up in turn. A merge GitHub *does* know is a pull request's own, and
+    its second parent is that pull request's branch: nothing new, so not walked.
+    A local merge of an unpushed branch walks into commits GitHub does not know
+    either, and finds nothing, which is the right answer.
+
+    Raises `RangeTooLarge` as soon as the commits to look up pass the cap.
     """
+    queue = list(commits)
+    seen = {sha for sha, _parents in queue}
+    if len(seen) > UNFINISHED_COMMIT_CAP:
+        raise RangeTooLarge
     found, failed = [], []
-    for sha in shas:
+    while queue:
+        sha, parents = queue.pop(0)
         pulls = commit_pull_requests(sha)
         if pulls is None:
             failed.append(f"could not ask GitHub which pull request merged {sha[:12]}")
+            continue
+        if pulls == NOT_ON_GITHUB:
+            for parent in parents[1:]:
+                line = first_parent_commits(parent, *excluded)
+                if line is None:
+                    failed.append(f"could not follow {sha[:12]} into its parent {parent[:12]}")
+                    continue
+                for commit in line:
+                    if commit[0] not in seen:
+                        seen.add(commit[0])
+                        queue.append(commit)
+            if len(seen) > UNFINISHED_COMMIT_CAP:
+                raise RangeTooLarge
             continue
         for number, base in pulls:
             if same_repo(base, repo) and number not in found:
                 found.append(number)
     return found, failed
+
+
+def range_ends(span: str) -> list[str]:
+    """The `^` revisions `span` excludes, as `git rev-parse` spells them.
+
+    `A..B` gives `^A`, and `A...B` the merge bases, so whatever range somebody
+    hands `--range` bounds the walk into a merge's other parents the way it
+    bounds the first-parent line. Empty when git cannot say.
+    """
+    parsed = subprocess.run(["git", "rev-parse", span], capture_output=True, text=True)
+    if parsed.returncode != 0:
+        return []
+    return [line for line in parsed.stdout.split() if line.startswith("^")]
 
 
 def closing_issues(pull_request: int) -> list[tuple[str, int]] | None:
@@ -8250,28 +8324,26 @@ def cmd_unfinished(args) -> int:
     # **First parent only**: that is the line of merges, squashes and rebased
     # commits `main` itself took. A merge commit's second parent holds the
     # branch's own commits, which belong to the same pull request and would
-    # each cost a call to learn nothing new.
-    log = subprocess.run(
-        ["git", "log", "--first-parent", "--format=%H",
-         f"--max-count={UNFINISHED_COMMIT_CAP + 1}", args.range],
-        capture_output=True, text=True)
-    if log.returncode != 0:
+    # each cost a call to learn nothing new -- unless GitHub has never seen the
+    # merge, which `merged_pull_requests` follows (#233).
+    commits = first_parent_commits(args.range)
+    if commits is None:
         return 0
-    shas = log.stdout.split()
-    if not shas:
+    if not commits:
         if not args.quiet:
             print(f"  nothing closed by {args.range} is waiting to be finished")
         return 0
-    if len(shas) > UNFINISHED_COMMIT_CAP:
-        print(f"  {args.range} brings in more than {UNFINISHED_COMMIT_CAP} commits, each one "
-              f"a call to GitHub,\n  so none was checked. Run it by hand over narrower "
-              f"ranges:\n    gh agile unfinished --range <from>..<to>", file=sys.stderr)
-        return 1
     repo = current_repo()
     if repo is None:
         print("  could not ask GitHub which repository this is", file=sys.stderr)
         return 1
-    pull_requests, failed = merged_pull_requests(shas, repo)
+    try:
+        pull_requests, failed = merged_pull_requests(commits, repo, range_ends(args.range))
+    except RangeTooLarge:
+        print(f"  {args.range} brings in more than {UNFINISHED_COMMIT_CAP} commits, each one "
+              f"a call to GitHub,\n  so none was checked. Run it by hand over narrower "
+              f"ranges:\n    gh agile unfinished --range <from>..<to>", file=sys.stderr)
+        return 1
     issues = []
     for pull_request in pull_requests:
         closed = closing_issues(pull_request)
