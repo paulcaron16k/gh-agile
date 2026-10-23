@@ -131,15 +131,20 @@ issue created moments earlier. **Target by issue number, never by a title search
 writes.** The recovery from that miss — `sync --adopt --state all` — swept every live issue onto a scratch
 project and labelled all of them, which is a large blast radius for a lookup.
 
-**A project's item list can omit an item the issue says it is on, for longer than any lag.** On
-2026-10-22, `story create` boarded agile-test#57: `issue.projectItems` named project 19 and item
-`PVTI_lAHOAAxIms4BgnrQzhCx3Vs`, `isArchived: false`, and the item held its Story Points. `projectV2.items`
-reported `totalCount: 14` without it for over 30 minutes, polled every 30 seconds, and `gh project
-item-add` returned the *same* item id without changing the count. Every board-side command — `issue edit`,
-`issue close`, anything through `board_item_for` — answered *not on project 19*. The other issues created
-the same way that day were listed. **When the board and the issue disagree about membership, read both
-before believing either**, and do not file a bug against the tool's lookup on the strength of one; the
-probe was closed with `gh issue close` directly.
+**A project's item list can omit an item the issue says it is on — during a GitHub incident, for its
+whole length.** On 2026-10-22 `story create` boarded agile-test#57: `issue.projectItems` named project 19
+and an unarchived item holding its Story Points, while `projectV2.items` reported `totalCount: 14` without
+it for hours. Re-adding returned the same item id; deleting and re-adding minted a new id and the count
+still did not move. Later the same day `sync` added gh-agile#219–#222 to project 4, each issue reported
+itself there as Todo with no sprint, and project 4 stayed at 106 items — so `board view Backlog` omitted
+all four, and so did `gh project item-list`. Every board-side command answered *not on project N*.
+
+GitHub's status page had an unresolved incident throughout, *Errors loading Issues, Pull Requests, and
+search results*, affecting API Requests and Issues. Once it was resolved both projects listed everything
+(14 → 15, 106 → 111) with nothing re-run. **When the board and the issue disagree about membership, check
+https://www.githubstatus.com before touching the board** — no repair from this side helps, and the obvious
+one, removing and re-adding the item, clears its Status for nothing. Then read both sides before
+believing either, and do not file a bug against the tool's lookup on the strength of one.
 
 ## About destructive operations
 

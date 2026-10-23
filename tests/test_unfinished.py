@@ -259,8 +259,7 @@ class TestInstallingTheHook:
     @pytest.fixture
     def repo(self, hook, tmp_path, monkeypatch):
         (tmp_path / ".git" / "hooks").mkdir(parents=True)
-        monkeypatch.setattr(hook.subprocess, "run",
-                            lambda cmd, **k: Stub(0, str(tmp_path / ".git")))
+        monkeypatch.setattr(hook, "hooks_dir", lambda: (tmp_path / ".git" / "hooks", False))
         return tmp_path / ".git" / "hooks" / "post-merge"
 
     def test_it_writes_the_hook(self, hook, repo, capsys):
