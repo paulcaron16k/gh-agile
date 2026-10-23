@@ -8624,23 +8624,6 @@ def _latest_issue(repo: str) -> int:
     return listed[0]["number"]
 
 
-def field_help(rows: list[tuple[str, str, str, str]]) -> str:
-    """A table of argument, type, obligation, description -- mandatory first.
-
-    argparse lists arguments in declaration order and says nothing about what a
-    field means, so the obligation and the description have to be written out.
-    """
-    order = {"required": 0, "optional": 1}
-    rows = sorted(rows, key=lambda r: order.get(r[2], 2))
-    width = [max(len(r[i]) for r in rows) for i in range(3)]
-    lines = ["", "fields:"]
-    for name, kind, need, description in rows:
-        lines.append(
-            f"  {name:<{width[0]}}  {kind:<{width[1]}}  {need:<{width[2]}}  {description}"
-        )
-    return "\n".join(lines)
-
-
 #: The title of a new work item: a flag, as `gh issue create -t` takes it, never
 #: a positional. `gh issue create "x"` is `unknown argument "x"`, and the
 #: positional is what made `gh agile epic list` file an epic called "list"
@@ -8680,72 +8663,6 @@ def add_view(group, item_type: str | None, what: str) -> None:
     viewer.add_argument("--format", choices=["json"], help="JSON instead of text")
     viewer.add_argument("-w", "--web", action="store_true", help="open it in the browser")
     viewer.set_defaults(func=cmd_view, item_type=item_type, needs_repo=True)
-
-
-#: The rows every `create` shares: `gh issue create`'s own flags (#207).
-CREATE_FIELDS = [
-    ("-b/--body", "text", "optional", "## Heading sections; unheaded text is the Intent"),
-    ("-F/--body-file", "path or -", "optional", "the body from a file, or stdin"),
-    ("--intent", "text", "optional", "## Intent body section; _TBD_ if omitted"),
-    ("--acceptance", "text", "optional", "## Acceptance body section; _TBD_ if omitted"),
-    ("-a/--assignee", "login|@me", "optional", "repeatable"),
-    ("-l/--label", "name", "optional", "repeatable; not type:, key:, initiative:, sprint:"),
-    ("-m/--milestone", "name", "optional", "the milestone"),
-]
-
-EPIC_FIELDS = [
-    ("-t/--title", "text", "required", "the epic's title"),
-    ("--repo", "owner/name", "required", "repository the issue is created in"),
-    *CREATE_FIELDS,
-]
-
-STORY_FIELDS = [
-    ("-t/--title", "text", "required", "the story's title"),
-    ("--repo", "owner/name", "required", "repository the issue is created in"),
-    ("--epic", "N|KEY-N|URL", "required", "epic to attach to as a sub-issue"),
-    ("--points", "number", "optional", "Story Points; the Gold model's story_points"),
-    ("--priority", "lowest|low|medium|high|highest", "optional", "Priority field"),
-    *CREATE_FIELDS,
-]
-
-EDIT_FIELDS = [
-    ("issue...", "N|KEY-N|URL", "required", "one or more issues; positional"),
-    ("-t/--title", "text", "optional", "new words; the key prefix is kept"),
-    ("-b/--body", "text", "optional", "replace the body, as gh issue edit -b"),
-    ("-F/--body-file", "path or -", "optional", "replace the body from a file, or stdin"),
-    ("--add-label", "name", "optional", "repeatable; also --remove-label"),
-    ("--add-assignee", "login|@me", "optional", "repeatable; also --remove-assignee"),
-    ("-m/--milestone", "name", "optional", "also --remove-milestone"),
-    ("--points", "number", "optional", "Story Points, as story create writes it"),
-    ("--priority", "lowest|low|medium|high|highest", "optional", "Priority field"),
-    ("--field", "field name", "optional", 'any other field: "Story Points", FR, Sprint'),
-    ("--value", "text", "optional", "the field's type says how it is written; "
-                                    "@current for Sprint"),
-    ("--start", "YYYY-MM-DD|none", "optional", "an epic's or initiative's planned start"),
-    ("--target", "YYYY-MM-DD|none", "optional", "its planned finish"),
-    ("--for", "6w | 10d | 3sprints", "optional", "the target, sized from the start; "
-                                                 "calendar days, inclusive"),
-]
-
-CLOSE_FIELDS = [
-    ("issue", "N|KEY-N|URL", "required", "the issue; positional"),
-    ("-r/--reason", "completed|not planned", "optional", "default completed"),
-    ("-c/--comment", "text", "optional", "a closing comment, as gh issue close -c"),
-    ("--evidence", "text or -", "conditional", "required for completed, unless the "
-                                               "body has it"),
-    ("--evidence-file", "path or -", "conditional", "file of ## Heading sections"),
-]
-
-MOVE_FIELDS = [
-    ("issue", "N|KEY-N|URL", "required", "the issue; positional"),
-    ("status", "one of STATUSES", "required", "the status to move to; positional"),
-    ("--evidence", "text or -", "conditional", "required for Done, written on any "
-                                               "status; - reads stdin"),
-    ("--evidence-file", "path or -", "conditional", "file of ## Heading sections; "
-                                                    "- reads stdin"),
-    ("--add-assignee", "login", "optional",
-     'who to assign; "@me" is you, and In Progress claims an unassigned issue'),
-]
 
 
 #: The oldest interpreter this tool runs on, and the number `ruff.toml`'s
@@ -8945,6 +8862,9 @@ class AgileParser(argparse.ArgumentParser):
         # either.
         kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
+        for action in self._actions:
+            if isinstance(action, argparse._HelpAction):
+                action.help = "Show help for command"
         self.command_kind, self.identifier = kind, identifier
         if kind == TARGETED:
             default = DEFAULT_TARGETS.get(identifier)
@@ -8993,6 +8913,46 @@ class AgileParser(argparse.ArgumentParser):
         self.exit(2, f"{self.prog}: {message}\n"
                      f"  Run `{self.prog} --help` for what it takes.\n")
 
+    def command_help(self) -> str:
+        """A command's own help in `gh`'s sections (#222).
+
+        Description, USAGE, FLAGS, INHERITED FLAGS, ARGUMENTS when it takes any,
+        the command's own notes, LEARN MORE -- the layout `gh issue close --help`
+        uses. Each flag is described once, here, from the parser.
+        """
+        positionals = [a for a in self._actions if not a.option_strings]
+        own = [a for a in self._actions
+               if a.option_strings and not set(a.option_strings) & set(INHERITED)]
+        inherited = sorted((a for a in self._actions
+                            if set(a.option_strings) & set(INHERITED)),
+                           key=lambda a: a.option_strings[-1])
+
+        def shape(action) -> str:
+            name = f"<{action.metavar or action.dest}>"
+            return {"?": f"[{name}]", "+": f"{name}..."}.get(action.nargs, name)
+
+        out = [(self.description or "").rstrip(), "", "USAGE",
+               "  " + " ".join([self.prog, *(shape(a) for a in positionals), "[flags]"]),
+               ""]
+        if own:
+            out += ["FLAGS", *flag_rows(own), ""]
+        out += ["INHERITED FLAGS", *flag_rows(inherited), ""]
+        if positionals:
+            out.append("ARGUMENTS")
+            width = max(len(shape(a)) for a in positionals) + 3
+            for action in positionals:
+                text = action.help or ""
+                if action.nargs == "?" and action.default is not None:
+                    text += f"; omitted, {action.default}"
+                out.append(f"  {shape(action):<{width}}{text[:1].upper()}{text[1:]}")
+            out.append("")
+        if self.epilog and self.epilog.strip():
+            out += [self.epilog.strip("\n"), ""]
+        out += ["LEARN MORE",
+                "  Use `gh agile <command> <subcommand> --help` for more information about "
+                "a command.", ""]
+        return "\n".join(out)
+
     def subcommands(self):
         """`(name, help, parser)` for each subcommand `--help` shows, or None."""
         action = next((a for a in self._actions
@@ -9005,7 +8965,7 @@ class AgileParser(argparse.ArgumentParser):
     def format_help(self) -> str:
         commands = self.subcommands()
         if commands is None:
-            return super().format_help()
+            return self.command_help()
         is_top = all(name in {n for _h, names in TOP_LEVEL_SECTIONS for n in names}
                      for name, _help, _p in commands)
         if is_top:
@@ -9027,10 +8987,7 @@ class AgileParser(argparse.ArgumentParser):
             # Alphabetical within a section, as `gh` lists its own.
             out += [f"  {name + ':':<{width}}{text}" for name, text, _p in sorted(entries)]
             out.append("")
-        formatter = self._get_formatter()
-        formatter._indent()
-        formatter.add_arguments([a for a in self._actions if a.option_strings])
-        out += ["FLAGS", formatter.format_help().rstrip("\n"), ""]
+        out += ["FLAGS", *flag_rows([a for a in self._actions if a.option_strings]), ""]
         kinds = sorted({p.identifier for _n, _t, p in commands if p.identifier})
         if kinds:
             out.append("ARGUMENTS")
@@ -9046,6 +9003,45 @@ class AgileParser(argparse.ArgumentParser):
                 "  Use `gh agile <command> <subcommand> --help` for more information about "
                 "a command.", ""]
         return "\n".join(out)
+
+
+#: Flags every command takes, shown once under INHERITED FLAGS as `gh` shows its
+#: shared ones, rather than in every command's own list.
+INHERITED = ("--owner", "--project", "--config", "--help")
+
+
+def flag_label(action: argparse.Action) -> tuple[str, str]:
+    """`(left column, description)` for one flag, in `gh`'s form.
+
+    **Rendered from the parser, never written beside it** (#222). The `fields:`
+    tables that used to follow the flags said `--repo` was required on `story
+    create` while the parser took it as optional and fell back to the clone --
+    a second copy of a fact, disagreeing with the first. Here the obligation,
+    the default and the choices are read off the action itself.
+    """
+    short = next((o for o in action.option_strings if not o.startswith("--")), None)
+    long = next((o for o in action.option_strings if o.startswith("--")), short)
+    value = ""
+    if action.nargs != 0:
+        kind = {int: "int", float: "number"}.get(action.type, "string")
+        value = " " + (action.metavar.lower() if isinstance(action.metavar, str) else kind)
+    left = (f"{short}, " if short and short != long else "    ") + long + value
+    text = argparse.HelpFormatter("x")._expand_help(action) if action.help else ""
+    text = text[:1].upper() + text[1:]
+    if action.choices and not isinstance(action, RefusedFlag):
+        text += f": {{{'|'.join(str(c) for c in action.choices)}}}"
+    if action.nargs != 0 and action.default not in (None, False, [], argparse.SUPPRESS):
+        text += f" (default {json.dumps(action.default)})"
+    if action.required:
+        text += " (required)"
+    return left, text
+
+
+def flag_rows(actions) -> list[str]:
+    """Flag lines, the descriptions in one column."""
+    pairs = [flag_label(a) for a in actions]
+    width = max([0] + [len(left) for left, _ in pairs]) + 3
+    return [f"  {left:<{width}}{text}".rstrip() for left, text in pairs]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -9070,23 +9066,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     init = sub.add_parser(
         "init", kind=GENERAL, help="From a fresh clone to a working board, in one command",
-        epilog=field_help([
-            ("--key", "KEY", "required*", "labels every issue; Jira's rules apply"),
-            ("--title", "text", "required*", "the project's title"),
-            ("--sprint-template", "|".join(SPRINT_TEMPLATES), "required*",
-             "the cadence; blocks epic/story/ensure until chosen"),
-            ("--title-prefix", "|".join(TITLE_PREFIX_MODES), "optional",
-             "what every issue is called; default off"),
-            ("--project", "number", "optional", "adopt an existing project "
-             "instead of creating one"),
-            ("--repo", "owner/name", "optional", "where labels are created"),
-            ("--spec", "path", "optional", "JSON field spec; the built-in default "
-                                           "without one"),
-            ("--no-hooks", "flag", "optional", "do not install the post-merge hook"),
-        ]) + """
-
-*required only the first time: a run against a profile that already names a
-project, a key and a cadence needs none of them.
+        epilog="""--key, --title and --sprint-template are needed only the first time: a run
+against a profile that already names a project, a key and a cadence needs none.
 
 what it does, in order:
   1. creates the project, or adopts --project, and writes the profile --
@@ -9113,15 +9094,19 @@ cadence is a decision, and the title prefix is written into every issue title --
 so they are flags, and a missing one is a refusal naming the flag rather than a
 default chosen for you.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    init.add_argument("--key", help="the key labelling every issue, e.g. AGILE")
-    init.add_argument("-t", "--title", help="the project's title")
+    init.add_argument("--key", help="the key labelling every issue, e.g. AGILE; Jira's "
+                                    "rules apply. Needed the first time")
+    init.add_argument("-t", "--title", help="the project's title. Needed the first time, "
+                                            "unless --project adopts one")
     init.add_argument("--sprint-template", choices=sorted(SPRINT_TEMPLATES),
-                      help="the sprint cadence")
+                      help="the sprint cadence; epic, story and ensure refuse until it is "
+                           "chosen. Needed the first time")
     # No default: absent means "leave the profile's", so a second run never
     # resets a choice made the first time. A new profile gets `off`.
     init.add_argument("--title-prefix", choices=sorted(TITLE_PREFIX_MODES),
                       help="what every issue is called; off for a new profile")
-    init.add_argument("-R", "--repo", help="owner/name; defaults to the working directory")
+    init.add_argument("-R", "--repo", help="the repository, owner/name, labels are created "
+                                           "in; defaults to the current clone")
     # `setup` was a command of its own, and `project create` a third way to the
     # same place. `init` converges, so running it again *is* the converge (#203).
     init.add_argument("--spec", help="JSON field spec; the built-in default is used "
@@ -9148,18 +9133,11 @@ default chosen for you.""",
     initiative_sub = initiative.add_subparsers(dest="initiative_command", required=True)
     initiative_new = initiative_sub.add_parser(
         "create", kind=GENERAL, help="File the initiative issue, board it, and mint its slug",
-        epilog=field_help([
-            ("-t/--title", "text", "required", "the initiative's title"),
-            ("--slug", "text", "optional", "the label's readable half; default is the title, "
-                                           "slugified"),
-            ("--repo", "owner/name", "optional", "where the issue is filed"),
-            ("--key", "KEY", "optional", "which key to label it with"),
-            *CREATE_FIELDS,
-        ]),
+
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(initiative_new, "initiative")
     initiative_new.add_argument("--slug", help="override the slug derived from the title")
-    initiative_new.add_argument("-R", "--repo")
+    initiative_new.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue in; defaults to the current clone")
     initiative_new.add_argument("--key", help="which key to label the issue with")
     initiative_new.add_argument("--start", metavar="YYYY-MM-DD",
                                 help="planned start; the DATE field GitHub's "
@@ -9178,22 +9156,21 @@ default chosen for you.""",
     initiative_fix = initiative_sub.add_parser(
         "reconcile", kind=TARGETED, identifier="initiative",
         help="Bring initiative:<slug> into line with the hierarchy",
-        epilog=field_help([
-            ("initiative", "N|KEY-N|URL|slug", "required", "the initiative; positional"),
-            ("--dry-run", "flag", "optional", "list what would change and change nothing"),
-        ]) + RECONCILE_WHY,
+        epilog=RECONCILE_WHY,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    initiative_fix.add_argument("--dry-run", action="store_true")
-    initiative_fix.add_argument("-R", "--repo")
+    initiative_fix.add_argument("--dry-run", action="store_true",
+                                help="list what would change and change nothing")
+    initiative_fix.add_argument("-R", "--repo", help="only needed for a bare number "
+                                                      "outside its repository")
     initiative.set_defaults(func=cmd_initiative, needs_repo=True)
 
     epic_group = sub.add_parser("epic", help="Epics: a body of work, under an initiative or none")
     epic_sub = epic_group.add_subparsers(dest="epic_command", required=True)
     epic = epic_sub.add_parser("create", kind=GENERAL, help="File an epic and put it on the board",
-        epilog=field_help(EPIC_FIELDS),
+
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(epic, "epic")
-    epic.add_argument("-R", "--repo")
+    epic.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue in; defaults to the current clone")
     epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     epic.add_argument("--initiative",
                       help="attach to an initiative: its number (35), a keyed reference "
@@ -9205,8 +9182,8 @@ default chosen for you.""",
     epic.add_argument("--for", dest="span", metavar="SPAN",
                       help="size the span instead of naming its end: 6w, 10d, "
                            "3sprints. Calendar days, inclusive")
-    epic.add_argument("--intent")
-    epic.add_argument("--acceptance")
+    epic.add_argument("--intent", help="the ## Intent section; _TBD_ if omitted")
+    epic.add_argument("--acceptance", help="the ## Acceptance section; _TBD_ if omitted")
     add_create_flags(epic)
     epic.set_defaults(func=cmd_epic, needs_repo=True)
     add_list(epic_sub, "epic", "epics")
@@ -9216,20 +9193,22 @@ default chosen for you.""",
     story_sub = story_group.add_subparsers(dest="story_command", required=True)
     story = story_sub.add_parser(
         "create", kind=GENERAL, help="File a story, attach it to its epic, and set its fields",
-        epilog=field_help(STORY_FIELDS),
+
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(story, "story")
-    story.add_argument("-R", "--repo")
+    story.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue in; defaults to the current clone")
     story.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
     # Still required, and `none` is how you say it deliberately. A bare omission
     # keeps refusing: an orphan story is usually an accident, and `story has no
     # epic` has caught real ones. Not `type=int`, so `none` reaches the command.
     story.add_argument("--epic", required=True,
                        help=f"the epic: {ISSUE_REF_HELP}; or `none` for a story that stands alone")
-    story.add_argument("--points", type=float)
-    story.add_argument("--priority")
-    story.add_argument("--intent")
-    story.add_argument("--acceptance")
+    story.add_argument("--points", type=float, help="Story Points, as `issue edit --points` "
+                                                    "writes them")
+    story.add_argument("--priority", help="the Priority option: lowest, low, medium, high "
+                                          "or highest")
+    story.add_argument("--intent", help="the ## Intent section; _TBD_ if omitted")
+    story.add_argument("--acceptance", help="the ## Acceptance section; _TBD_ if omitted")
     add_create_flags(story)
     story.set_defaults(func=cmd_story, needs_repo=True)
     add_list(story_sub, "story", "stories")
@@ -9252,21 +9231,16 @@ default chosen for you.""",
     task_sub = task_group.add_subparsers(dest="task_command", required=True)
     task = task_sub.add_parser(
         "create", kind=GENERAL, help="File a task under its story",
-        epilog=field_help([
-            ("-t/--title", "text", "required", "the task's title"),
-            ("--story", "N|KEY-N|URL", "required", "the story it belongs to"),
-            ("--repo", "owner/name", "optional", "where the issue is filed"),
-            ("--key", "KEY", "optional", "which key to label it with"),
-            *CREATE_FIELDS,
-        ]),
+
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(task, "task")
     task.add_argument("--story", required=True,
                       help=f"the story this task belongs to: {ISSUE_REF_HELP}")
-    task.add_argument("-R", "--repo", help="owner/name")
+    task.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue "
+                                           "in; defaults to the current clone")
     task.add_argument("--key", help="which key to label the issue with")
-    task.add_argument("--intent")
-    task.add_argument("--acceptance")
+    task.add_argument("--intent", help="the ## Intent section; _TBD_ if omitted")
+    task.add_argument("--acceptance", help="the ## Acceptance section; _TBD_ if omitted")
     add_create_flags(task)
     task.set_defaults(func=cmd_task, needs_repo=True, projectless=True)
     add_list(task_sub, TASK_TYPE, "tasks")
@@ -9293,15 +9267,7 @@ default chosen for you.""",
 
     sync = sub.add_parser(
         "sync", kind=GENERAL, help="Add issues that belong on the board and are not on it",
-        epilog=field_help([
-            ("--repo", "owner/name", "optional", "one repository; default is every repo in the profile keys"),
-            ("--state", "open|closed|all", "optional", "which issues to consider; default open"),
-            ("-S/--search", "query", "optional", "extra GitHub search terms, e.g. "
-                                                 "'label:type:story'"),
-            ("--limit", "number", "optional", "maximum issues to examine per repository"),
-            ("--dry-run", "flag", "optional", "list what would be added and change nothing"),
-            ("--adopt", "flag", "optional", "also give newly added issues the key: label and Status=Todo"),
-        ]) + """
+        epilog="""
 
 why this is needed:
   A project is a collection, not a filter. It stores Status, Story Points and
@@ -9311,12 +9277,17 @@ why this is needed:
   never backfills. Hence sync.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sync.add_argument("-R", "--repo")
-    sync.add_argument("-s", "--state", default="open", choices=["open", "closed", "all"])
+    sync.add_argument("-R", "--repo", help="one repository; every repository in the "
+                                          "profile's keys without it")
+    sync.add_argument("-s", "--state", default="open", choices=["open", "closed", "all"],
+                      help="which issues to consider")
     # `-S/--search`, `gh issue list`'s name for the same thing. It was `--query`.
-    sync.add_argument("-S", "--search", metavar="QUERY")
-    sync.add_argument("-L", "--limit", type=int, default=200)
-    sync.add_argument("--dry-run", action="store_true")
+    sync.add_argument("-S", "--search", metavar="QUERY",
+                      help="extra GitHub search terms, e.g. 'label:type:story'")
+    sync.add_argument("-L", "--limit", type=int, default=200,
+                      help="at most this many issues examined per repository")
+    sync.add_argument("--dry-run", action="store_true",
+                      help="list what would be added and change nothing")
     sync.add_argument("--adopt", action="store_true",
                       help="set the key: label and Status=Todo on issues this run adds; "
                            "the type: label is left to a person")
@@ -9342,15 +9313,7 @@ why this is needed:
     board_view = board_sub.add_parser(
         "view", kind=TARGETED, identifier="board",
         help="Render one board's contents as text, or as JSONL",
-        epilog=field_help([
-            ("name", "text|number", "required", "the board: its `board list` number, "
-                                                "or a name -- exact, prefix or substring"),
-            ("--format", "jsonl", "optional", "one metadata line then one line per item; "
-                                              "text without it"),
-            ("--filter", "query", "optional", "extra terms, ANDed onto the board's own filter"),
-            ("--out-dir", "path", "optional", "write board_<type>_<name>_<stamp>.<ext> here"),
-            ("-w/--web", "flag", "optional", "open the board in the browser"),
-        ]) + "\n\nfilter terms:\n" + "\n".join(
+        epilog="\n\nfilter terms:\n" + "\n".join(
             # Width from the vocabulary rather than a constant, so adding a term
             # cannot silently push the column out of line.
             f"  {k:<{max(len(t) for t in FILTER_TERMS)}}  {why}"
@@ -9365,28 +9328,25 @@ why this is needed:
     # No `display`: `gh` prints for a person with no flag at all (#203).
     board_view.add_argument("--format", choices=["jsonl"],
                             help="JSONL instead of the text view")
-    board_view.add_argument("--filter")
-    board_view.add_argument("--out-dir")
+    board_view.add_argument("--filter", metavar="QUERY",
+                            help="extra terms, ANDed onto the board's own filter")
+    board_view.add_argument("--out-dir", metavar="DIR",
+                            help="write board_<type>_<name>_<stamp>.<ext> here")
     board_view.add_argument("-w", "--web", action="store_true",
                             help="open the board in the browser")
     board_new = board_sub.add_parser(
         "create", kind=GENERAL, help="Create a board, or converge the one with exactly this name",
-        epilog=field_help([
-            ("name", "text", "required", "the board's name, and its identity for "
-                                         "convergence: exact"),
-            ("--type", "|".join(BOARD_TYPES), "required", "what kind of board; sets layout "
-                                                          "and base filter"),
-            ("--filter", "query", "optional", "extra filter, ANDed with the type's own"),
-            ("--save", "flag", "optional", "record it in the profile so init keeps it "
-                                           "in step"),
-        ]),
+
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # A named thing takes its name as a positional, as `gh label create <name>`
     # does. It was `--name`.
     board_new.add_argument("name", help="the board's exact name")
-    board_new.add_argument("--type", required=True, choices=sorted(BOARD_TYPES))
-    board_new.add_argument("--filter")
-    board_new.add_argument("--save", action="store_true")
+    board_new.add_argument("--type", required=True, choices=sorted(BOARD_TYPES),
+                           help="what kind of board; sets its layout and base filter")
+    board_new.add_argument("--filter", metavar="QUERY",
+                           help="extra filter, ANDed with the type's own")
+    board_new.add_argument("--save", action="store_true",
+                           help="record it in the profile, so init keeps it in step")
     board.set_defaults(func=cmd_board)
 
     # One create per noun, as `gh` has: `init` creates and adopts a project, so
@@ -9444,11 +9404,7 @@ one, `RFC-2119 keywords`, is somebody's own words and is left alone.""",
     sprint_viewer = sprint_sub.add_parser(
         "view", kind=TARGETED, identifier="sprint",
         help="View one sprint: its window and its items, by Status",
-        epilog=field_help([
-            ("sprint", "@current|YYYY-MM-DD|title", "optional",
-             "default the current sprint; a start date is its identity"),
-            ("--format", "jsonl", "optional", "JSONL instead of text"),
-        ]) + """
+        epilog="""
 
 The current and future sprints are read from the Sprint field, which is the
 only thing that can say what is in a sprint now. A completed one is read from
@@ -9467,9 +9423,7 @@ and the labels are the record of where work was done.""",
     sprint_fix = sprint_sub.add_parser(
         "reconcile", kind=GENERAL,
         help="Set each item's Sprint field from its sprint: labels, board-wide",
-        epilog=field_help([
-            ("--dry-run", "flag", "optional", "list what would change and change nothing"),
-        ]) + """
+        epilog="""
 
 why this exists:
   Any write to the iteration configuration clears every item's Sprint value --
@@ -9481,7 +9435,8 @@ why this exists:
   idempotent: items already correct are counted and skipped.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sprint_fix.add_argument("--dry-run", action="store_true")
+    sprint_fix.add_argument("--dry-run", action="store_true",
+                            help="list what would change and change nothing")
     sprint_fix.add_argument("--overwrite", action="store_true",
                             help="also change a field that disagrees with its label; "
                                  "by default only an empty field is repaired, because a "
@@ -9490,10 +9445,7 @@ why this exists:
     sprint_fill = sprint_sub.add_parser(
         "backfill", kind=GENERAL,
         help="Add sprint: labels to issues that predate them, from history",
-        epilog=field_help([
-            ("--source", "field|timeline", "optional", "where to recover the sprint from"),
-            ("--dry-run", "flag", "optional", "list what would be stamped and change nothing"),
-        ]) + """
+        epilog="""
 
 sources:
   timeline  (default) map each Status transition -- In Progress, Done -- into
@@ -9507,14 +9459,14 @@ sources:
 Neither invents a sprint: a moment falling in a gap is reported and skipped.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sprint_fill.add_argument("--source", choices=["timeline", "field"], default="timeline")
-    sprint_fill.add_argument("--dry-run", action="store_true")
+    sprint_fill.add_argument("--source", choices=["timeline", "field"], default="timeline",
+                             help="where to recover the sprint from; see below")
+    sprint_fill.add_argument("--dry-run", action="store_true",
+                             help="list what would be stamped and change nothing")
 
     sprint_clear = sprint_sub.add_parser(
         "unstamp", kind=GENERAL, help="Remove sprint: labels from epics and initiatives",
-        epilog=field_help([
-            ("--dry-run", "flag", "optional", "list what would be cleared and change nothing"),
-        ]) + """
+        epilog="""
 
 why this exists:
   An epic or initiative spans sprints, so it is given no Sprint value and no
@@ -9532,7 +9484,8 @@ why this exists:
   story is never touched.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sprint_clear.add_argument("--dry-run", action="store_true")
+    sprint_clear.add_argument("--dry-run", action="store_true",
+                              help="list what would be cleared and change nothing")
 
     sprint_new = sprint_sub.add_parser(
         "create", kind=GENERAL, help="Append one sprint; rewrites the iterations")
@@ -9562,7 +9515,7 @@ why this exists:
     key_deleter = key_sub.add_parser(
         "delete", kind=GENERAL,
         help="Remove a key from the profile; refused while issues carry it")
-    key_deleter.add_argument("key")
+    key_deleter.add_argument("key", help="the key to remove, e.g. ZMBNI")
     key_deleter.set_defaults(func=cmd_key_delete, projectless=True)
 
     # `issue` holds the verbs that act on any work item, whatever its type, the
@@ -9582,7 +9535,7 @@ why this exists:
     move = issue_sub.add_parser(
         "move", kind=TARGETED, identifier="issue",
         help="Change status, with the evidence that status requires",
-        epilog=field_help(MOVE_FIELDS),
+
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # A second positional, not `--status`: a required second value on a
     # targeted `gh` command is one -- `gh issue transfer <issue> <repo>` -- as
@@ -9609,7 +9562,7 @@ why this exists:
     editor = issue_sub.add_parser(
         "edit", kind=TARGETED, identifier="issue", many=True,
         help="Edit issues: gh issue edit's flags, the board's fields, the plan",
-        epilog=field_help(EDIT_FIELDS) + """
+        epilog="""
 
 Several issues at once, as `gh issue edit` takes them: every refusal is
 checked on all of them before anything is written to any.
@@ -9630,7 +9583,8 @@ No --status, and --field Status is refused: Status changes through
                                                  else ""))
     editor.add_argument("-m", "--milestone", metavar="NAME",
                         help="the milestone, by name")
-    editor.add_argument("--remove-milestone", action="store_true")
+    editor.add_argument("--remove-milestone", action="store_true",
+                        help="take the milestone off")
     editor.add_argument("--points", type=float, help="Story Points")
     editor.add_argument("--priority", help="the Priority option")
     editor.add_argument("--field", help='any other field, e.g. FR or Sprint')
@@ -9651,7 +9605,7 @@ No --status, and --field Status is refused: Status changes through
     closer = issue_sub.add_parser(
         "close", kind=TARGETED, identifier="issue",
         help="Close an issue, as gh issue close does, and set Status to Done",
-        epilog=field_help(CLOSE_FIELDS),
+
         formatter_class=argparse.RawDescriptionHelpFormatter)
     closer.add_argument("-r", "--reason", choices=list(CLOSE_REASONS), default="completed",
                         help="completed (the default) needs Evidence, as Done does; "

@@ -2926,7 +2926,11 @@ COMMANDS** take the same one every time as their first argument (`view`, `edit`,
 identifier is `sprint view`'s, and leaving it out means the current sprint,
 never every sprint.
 
-Every command lists its own fields with type, obligation and description:
+A command's own help is laid out as `gh issue close --help` is: USAGE, its
+FLAGS -- each described once, with its type, its default and `(required)` where
+it is -- then INHERITED FLAGS (`--owner`, `--project`, `--config`, `--help`),
+the ARGUMENTS it takes, and its notes. All of it is read off the parser, so the
+help cannot say a flag is required when the command does not need it:
 
 ```bash
 gh agile init --help
