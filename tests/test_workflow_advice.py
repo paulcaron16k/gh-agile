@@ -175,6 +175,13 @@ class TestTheRepositorySetting:
                     if "Auto-close issues with merged" in x)
         assert "[?]" in line
 
+    def test_it_says_leave_it_on_because_it_is_the_default(self, printed):
+        """Off here only because it was disabled with every other auto-close
+        while the #96 race was fixed. AGILE-239."""
+        out = printed(["o/a"])
+        assert "On by default: leave it on" in out
+        assert "never raced this tool" in out
+
     def test_it_is_not_the_project_workflow_of_a_similar_name(self, tool):
         """`Auto-close issue` closes on Status Done and stays `never`; this one
         closes on merge and is recommended. Confusing the two is the mistake."""
