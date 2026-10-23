@@ -146,9 +146,11 @@ project can span them, and a scrum board slices one team out with `label:key:...
 count: `across 1 repo(s)` on a two-repo profile is the symptom.
 
 **A project is a collection, not a filter.** An issue is not on a board until it is added, which is why `sync`
-exists. A user-owned project has six built-in workflows and *auto-add repository issues is not among them*, and
-built-in workflows cannot be enabled through the API at all — the schema has `deleteProjectV2Workflow` and nothing
-that creates or updates one. Every project automation is a manual web-UI step.
+exists. A user-owned project gained *Auto-add to project* in 2026-10, but it covers one repository, acts only on
+issues created or updated after it is on, and its filter cannot be read, so `sync` stays the backfill. Built-in
+workflows cannot be enabled through the API at all — the schema has `deleteProjectV2Workflow` and nothing that
+creates or updates one — and closing on merge is a *repository* setting the API cannot even read. Every one of
+these is a manual web-UI step.
 
 **Export stays CSV and standard library, and the load side is somebody else's.** The ceiling is mechanical:
 `gh extension install` clones and installs nothing. A request needing dlt, SQLAlchemy, Parquet or Iceberg is
