@@ -2226,6 +2226,17 @@ disagree about what an epic is, and `-S` takes the same terms as `board view
 --filter`. `-s` is `open`, `closed` or `all`, and `-L` keeps the first N, both
 as in `gh issue list`. `-w` opens the board in the browser instead.
 
+`gh issue list`'s filters work too, with its letters: `-a` assignee and `-A`
+author (`@me` is you), `-l` label, repeatable with every label required, and
+`-m` milestone. Each is ANDed with the level's own filter, with the others and
+with `-S`:
+
+```bash
+gh agile issue list -a @me                     # everything you hold
+gh agile story list -l bug -S "status:Blocked" # blocked bugs
+gh agile epic list -A a-teammate -m "Q4"
+```
+
 A **view** comes from the issue's side in one query: its board fields, its
 parent, its children with their Status, the `sprint:` labels recording where it
 was worked, and the `validate` checks for that one issue, then its body. `-w`

@@ -5637,7 +5637,8 @@ def cmd_board_show(args) -> int:
 
 
 def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
-               limit: int | None = None, announce_unfiltered: bool = True) -> int:
+               limit: int | None = None, announce_unfiltered: bool = True,
+               keep=None) -> int:
     """Read the board once, select by `view`'s filter plus `typed_filter`, render.
 
     `board view` passes a real view. The work-item `list` commands pass one made
@@ -5690,7 +5691,8 @@ def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
     issues = [i for i in items
               if (i.get("content") or {}).get("__typename") == "Issue"
               and not i.get("isArchived")]
-    shown = [i for i in issues if item_matches(i, terms, current_sprint=current)]
+    shown = [i for i in issues if item_matches(i, terms, current_sprint=current)
+             and (keep is None or keep(i))]
     rows = [board_row(i, keys) for i in shown]
     if limit is not None:
         rows = rows[:limit]
@@ -5757,6 +5759,47 @@ LIST_NAMES = {"initiative": "Initiatives", "epic": "Epics", "story": "Stories",
               None: "Work items"}
 
 
+def list_filter(args):
+    """`-a`, `-A`, `-l` and `-m` as one test on a board item, or None.
+
+    **Not filter terms.** `FILTER_TERMS` is also what `board create` writes into
+    a view, and a term the web UI cannot evaluate there renders a board that
+    looks right and shows the wrong items. These are `gh issue list`'s flags,
+    read from fields the board query already fetches, so they cost no call.
+
+    `@me` is the caller as `gh` resolves it -- asked once, and only if typed.
+    """
+    me = None
+
+    def who(login: str) -> str:
+        nonlocal me
+        if login.strip().casefold() in ("@me", "me"):
+            me = me or caller_login()
+            return me.casefold()
+        return login.strip().casefold()
+
+    assignee = who(args.assignee) if getattr(args, "assignee", None) else None
+    author = who(args.author) if getattr(args, "author", None) else None
+    labels = {lb.casefold() for lb in getattr(args, "label", None) or []}
+    milestone = (args.milestone.casefold() if getattr(args, "milestone", None) else None)
+    if not (assignee or author or labels or milestone):
+        return None
+
+    def keep(item: dict) -> bool:
+        content = item.get("content") or {}
+        if assignee and assignee not in {
+                n["login"].casefold() for n in (content.get("assignees") or {}).get("nodes", [])}:
+            return False
+        if author and ((content.get("author") or {}).get("login") or "").casefold() != author:
+            return False
+        if labels and not labels <= {
+                n["name"].casefold() for n in (content.get("labels") or {}).get("nodes", [])}:
+            return False
+        return not milestone or (
+            ((content.get("milestone") or {}).get("title") or "").casefold() == milestone)
+    return keep
+
+
 def cmd_list(args) -> int:
     """`initiative|epic|story|issue list`: the board, narrowed to one type.
 
@@ -5775,7 +5818,7 @@ def cmd_list(args) -> int:
             "filter": " ".join(f for f in (TYPE_FILTERS[kind], STATE_FILTERS[args.state])
                                if f)}
     return show_board(args, view, "list", args.search, limit=args.limit,
-                      announce_unfiltered=False)
+                      announce_unfiltered=False, keep=list_filter(args))
 
 
 #: `issue status`'s sections, in the order `gh issue status` lays its own out:
@@ -5899,6 +5942,24 @@ query($q: String!, $n: Int!) {
 }"""
 
 
+def task_search_terms(args) -> list[str]:
+    """`-a`, `-A`, `-l` and `-m` as GitHub search qualifiers, for `task list`.
+
+    A task is never on the board, so its list is a search, and search already
+    has these qualifiers -- `@me` included -- with the meanings `gh issue list`
+    gives the flags. Quoted, so a label or milestone with a space stays one term.
+    """
+    terms = []
+    if getattr(args, "assignee", None):
+        terms.append(f"assignee:{args.assignee}")
+    if getattr(args, "author", None):
+        terms.append(f"author:{args.author}")
+    terms += [f"label:{json.dumps(lb)}" for lb in getattr(args, "label", None) or []]
+    if getattr(args, "milestone", None):
+        terms.append(f"milestone:{json.dumps(args.milestone)}")
+    return terms
+
+
 def cmd_task_list(args) -> int:
     """`task list`: tasks in the profile's repositories, each with its story."""
     repos = [args.repo] if args.repo else list(dict.fromkeys(
@@ -5914,7 +5975,8 @@ def cmd_task_list(args) -> int:
     rows = []
     for repo in repos:
         query = " ".join(t for t in (f"repo:{repo}", "is:issue", f"label:type:{TASK_TYPE}",
-                                     STATE_FILTERS[args.state], args.search or "") if t)
+                                     STATE_FILTERS[args.state], *task_search_terms(args),
+                                     args.search or "") if t)
         data = graphql(TASK_SEARCH_QUERY, q=query, n=args.limit)
         for node in ((data.get("data") or {}).get("search") or {}).get("nodes") or []:
             if not node:
@@ -8637,7 +8699,7 @@ def add_list(group, item_type: str | None, what: str) -> None:
     lister = group.add_parser("list", kind=GENERAL,
                               help=f"List {what} on the board, by Status")
     lister.add_argument("-s", "--state", choices=list(STATE_FILTERS), default="open",
-                        help="open (the default), closed or all")
+                        help="which issues, by state")
     lister.add_argument("-L", "--limit", type=int, default=30,
                         help="at most this many (default %(default)s)")
     lister.add_argument("-S", "--search", metavar="TERMS",
@@ -8645,6 +8707,16 @@ def add_list(group, item_type: str | None, what: str) -> None:
     lister.add_argument("--format", choices=["jsonl"],
                         help="one JSON object per line instead of the text table")
     lister.add_argument("-w", "--web", action="store_true", help="open the board instead")
+    # `gh issue list`'s filters, with its letters and meanings (#220): ANDed with
+    # the list's own filter, with each other, and with -S.
+    lister.add_argument("-a", "--assignee", metavar="LOGIN",
+                        help='only issues assigned to this login; "@me" is you')
+    lister.add_argument("-A", "--author", metavar="LOGIN",
+                        help='only issues opened by this login; "@me" is you')
+    lister.add_argument("-l", "--label", action="append", metavar="NAME",
+                        help="only issues carrying this label; repeatable, all must match")
+    lister.add_argument("-m", "--milestone", metavar="NAME",
+                        help="only issues in this milestone, by title")
     if item_type == TASK_TYPE:
         lister.add_argument("-R", "--repo", help="one repository; default every one "
                                                  "in the profile")
