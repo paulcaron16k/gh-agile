@@ -3396,6 +3396,26 @@ def overlapping(spans: list[tuple], start, end):
     return next((sp for sp in spans if sp[0] <= end and start <= sp[1]), None)
 
 
+def sprint_title(config: dict, number: int, start, end) -> str:
+    """A new sprint's title from the profile's `name_template`. One helper,
+    called by `sprint ensure` and `sprint create` alike (#209).
+
+    `create` named its sprint `Sprint <n>` and ignored the template that
+    `ensure` honoured, so one board got two naming schemes depending on which
+    command added the sprint -- and a sprint is never renamed, because any
+    write to the iteration configuration clears every Sprint value, so a
+    wrongly named one stays wrongly named.
+
+    `number` is the sprint's place in the series: every iteration the field
+    holds, completed or not, plus one -- the count both commands make.
+    """
+    key = (config.get("project") or {}).get("key") or ""
+    return sprint_settings(config)["name_template"].format(
+        n=number, key=key, start=start.isoformat(), end=end.isoformat(),
+        year=start.year, iso_week=f"{start.isocalendar()[1]:02d}",
+    )
+
+
 def ensure_sprints(login: str, project: int, config: dict, ahead: int,
                    *, quiet: bool = False) -> list[str]:
     """Guarantee a sprint covering today, plus `ahead` future ones.
@@ -3421,7 +3441,6 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
     def overlaps(start, end):
         return overlapping(spans, start, end) is not None
 
-    key = (config.get("project") or {}).get("key") or ""
     made, entries = [], [
         f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
         f'title: {json.dumps(i["title"])}}}' for i in existing
@@ -3441,10 +3460,7 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
         if overlaps(start, end):
             return None
         number += 1
-        title = settings["name_template"].format(
-            n=number, key=key, start=start.isoformat(), end=end.isoformat(),
-            year=start.year, iso_week=f"{start.isocalendar()[1]:02d}",
-        )
+        title = sprint_title(config, number, start, end)
         entries.append(
             f'{{startDate: "{start.isoformat()}", duration: {duration}, '
             f'title: {json.dumps(title)}}}'
@@ -3897,7 +3913,6 @@ def cmd_sprint(args) -> int:
     # title -- GitHub does not generate one through the API the way the UI does.
     active, completed = iterations(args.owner, args.project)
     existing = completed + active
-    title = args.title or f"Sprint {len(existing) + 1}"
     entries = [
         f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
         f'title: {json.dumps(i["title"])}}}'
@@ -3908,6 +3923,7 @@ def cmd_sprint(args) -> int:
     # `@current` then picked between them arbitrarily.
     begins = dt.date.fromisoformat(start)
     finishes = begins + dt.timedelta(days=duration - 1)
+    title = args.title or sprint_title(args._config, len(existing) + 1, begins, finishes)
     clash = overlapping(iteration_spans(existing), begins, finishes)
     if clash:
         sys.exit(
@@ -9911,7 +9927,9 @@ why this exists:
         "create", kind=GENERAL, help="Append one sprint; rewrites the iterations")
     sprint_new.add_argument("--start", help="ISO date; defaults to the day after the last ends")
     sprint_new.add_argument("--weeks", type=int, help="length; defaults to the field's own duration")
-    sprint_new.add_argument("-t", "--title", help="defaults to 'Sprint <n>'")
+    sprint_new.add_argument("-t", "--title", help="the sprint's title; default from the "
+                                                  "profile's sprint.name_template, as "
+                                                  "`sprint ensure` names one")
     sprint_new.add_argument("--dry-run", action="store_true",
                             help="say what would be appended and what it would clear, "
                                  "and write nothing")

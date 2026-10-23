@@ -228,7 +228,8 @@ class TestSprintCreateDryRun:
 
         def go(**overrides):
             args = argparse.Namespace(sprint_command="create", owner="o", project=1,
-                                      start=None, weeks=None, title=None, dry_run=True)
+                                      start=None, weeks=None, title=None, dry_run=True,
+                                      _config={"sprint": {"name_template": "Sprint {n}"}})
             for name, value in overrides.items():
                 setattr(args, name, value)
             tool.cmd_sprint(args)
