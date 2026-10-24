@@ -558,7 +558,7 @@ classDiagram
         one Sprint field per project
         +number, title
     }
-    class SprintField["ProjectV2IterationField &quot;Sprint&quot;"] {
+    class SprintField["ProjectV2IterationField (Sprint)"] {
         created by init
         +name  Sprint
         +id  stable across changes
