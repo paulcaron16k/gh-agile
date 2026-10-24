@@ -2748,14 +2748,22 @@ def board_write_reported(number: int, url: str, project: int):
 def add_to_project(login: str, project: int, url: str) -> str:
     """Add an issue to the project, tolerating it already being there.
 
-    The built-in *Auto-add sub-issues to project* workflow is enabled by default
-    and races this: a story created under an epic that is already on the board
-    is added by GitHub within the second, and the explicit add then fails with
-    `Content already exists in this project`. Creating a story would abort after
-    the issue existed but before its fields were set -- the exact half-made
-    state `story` exists to prevent.
+    GitHub's own workflows race this. *Auto-add sub-issues to project* adds a
+    story created under an epic already on the board within the second, and
+    *Auto-add to project* -- enabled on this repository's board on 2026-10-23,
+    and recommended by the guide -- adds every new issue. The explicit add then
+    fails with `Content already exists in this project`, and creating an issue
+    would abort after it existed but before its fields were set -- the exact
+    half-made state `story` exists to prevent.
+
+    **The existing item is found from the issue, not from the board** (#257).
+    This looked in `board_items`, the `projectV2.items` list that #231 measured
+    leaving a new item out for an hour or more, and matched on the number
+    alone. With Auto-add on, every create took that path: #256 was on the
+    board in Todo, the lookup missed it, and its priority was never written.
+    `board_item_for` asks the issue, matched on repository and number, so a
+    just-created item is found at once and another repository's #256 never is.
     """
-    number = int(url.rsplit("/", 1)[-1])
     result = subprocess.run(
         ["gh", "project", "item-add", str(project), "--owner", login,
          "--url", url, "--format", "json"],
@@ -2765,17 +2773,12 @@ def add_to_project(login: str, project: int, url: str) -> str:
         return json.loads(result.stdout)["id"]
     if "already exists" not in result.stderr:
         sys.exit(f"gh project item-add failed: {result.stderr.strip()}")
-    existing = next(
-        # refresh: the board was read before GitHub's workflow added this, so
-        # the cached list is precisely the one that does not contain it.
-        (i["id"] for i in board_items(login, project, refresh=True)
-         if (i.get("content") or {}).get("number") == number),
-        None,
-    )
+    where = issue_url(url)
+    existing = board_item_for(login, project, *where) if where else None
     if not existing:
         sys.exit(f"{url} is reported as already on project {project}, but no item "
                  f"for it can be found")
-    return existing
+    return existing["id"]
 
 
 def require_key_for_prefix(config: dict, key) -> None:
