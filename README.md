@@ -7,16 +7,125 @@
 [![Install](https://img.shields.io/badge/install-tracks%20main-blue.svg)](#versions-and-what-installing-gets-you)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A `gh` extension for running Agile work on GitHub Projects v2 — and, more to the
-point, for **getting the data back out** in a form you can analyse the way you
-would a Jira export.
+Jira-style Agile on GitHub — **initiatives, epics, stories, bugs, sprints and
+boards** — run from the terminal, on GitHub Issues and Projects. Every command is
+non-interactive, so a person and an AI agent type the same thing. And the work
+comes back out as CSV, to analyse the way you would a Jira export.
+
+## Install
 
 ```bash
 gh extension install paulcaron16k/gh-agile
-
-gh agile validate          # do the conventions hold?
-gh agile export --format csv   # backlog with status history
+gh auth refresh -s project        # the project scope, once
 ```
+
+Python 3.10 or later, standard library only: installing installs nothing else.
+
+## Set up a project: `gh agile init`
+
+From your repository's clone:
+
+```bash
+gh agile init --key WIDG -t "Widgets" --sprint-template 2-week
+```
+
+That one command creates:
+
+- **`.github/agile.json`**, the profile — project number and owner, the key,
+  the sprint cadence and the boards. Check it in; every teammate's clone uses it.
+- **a GitHub Project** with `Status`, `Story Points`, `Priority` and `Sprint`
+  fields, and the `type:` and `key:` labels in the repository
+- **starter boards**: *Sprint board*, *Backlog* and *Roadmap*
+- **a post-merge hook** in this clone, which names any issue a merge closed and
+  nobody finished
+- **a list of the web-UI steps** the API cannot take, with their current state
+
+| Option | What it sets | |
+|---|---|---|
+| `--key WIDG` | The key every issue carries: `WIDG-12`. Jira's rules apply | first run |
+| `-t "Widgets"` | The project's title | first run |
+| `--sprint-template 2-week` | The cadence: `1-week`, `2-week`, `3-week`, `4-week` or `none` | first run |
+| `--project 7` | Adopt an existing project instead of creating one | optional |
+| `--title-prefix key` | Titles read `WIDG-12 …`; `key+type` reads `WIDG-12 Story: …`. Off by default | optional |
+| `--no-hooks` | Leave this clone's hooks alone | optional |
+
+Run it again whenever you like: it converges rather than duplicating. A
+teammate's fresh clone needs only `gh agile init`.
+
+## See the work
+
+```bash
+gh agile board view sprint        # the current sprint
+gh agile board view backlog       # everything not in a sprint yet
+gh agile board list               # every board on the project
+gh agile issue status             # stand-up: yours, waiting on review, unassigned
+```
+
+**Any unique part of a board's name is enough** — `sprint` finds *Sprint
+board*, `backlog` finds *Backlog*. A part that matches two boards is refused,
+and both are listed.
+
+## Turn a feature plan into work
+
+A plan becomes an **initiative**, each workstream an **epic** under it, and each
+deliverable a **story** under its epic. A person and an agent do it the same
+way: bodies come from files, nothing prompts, and every command prints what it
+created.
+
+```bash
+# 1. The plan becomes an initiative, and prints the slug its epics attach by
+gh agile initiative create -t "Offline sync" -F plan.md --target 2026-12-18
+
+# 2. Each workstream becomes an epic under it
+gh agile epic create -t "Conflict resolution" --initiative offline-sync -F conflicts.md
+
+# 3. Each deliverable becomes a story under its epic, sized and prioritised
+gh agile story create -t "Detect concurrent edits" --epic WIDG-41 --points 3 --priority high \
+  --intent "Two devices editing one record must not lose either edit." \
+  --acceptance "A concurrent edit is detected and both versions are kept."
+
+# The tree, with each level's status and checks
+gh agile initiative view offline-sync
+```
+
+A body file is read as `## Heading` sections — `## Intent` and `## Acceptance`
+— so the plan's own document can be the initiative's body.
+[USER_GUIDE.md §8](USER_GUIDE.md#8-for-an-agent-working-on-a-developers-behalf)
+covers driving the whole workflow from an agent.
+
+## Day to day
+
+```bash
+gh agile issue move WIDG-42 "In Progress"      # Status, the current sprint, and it is yours
+gh agile issue close WIDG-42 --evidence "Merged in #57; covered by test_conflicts"
+gh agile bug create -t "Export drops closed issues" --priority high
+gh agile validate                              # do the conventions hold?
+```
+
+Starting work is one call: it sets Status, puts the issue in the current sprint,
+stamps the `sprint:` label and assigns it to you if nobody holds it. Finishing
+requires **Evidence** — what was done and how you know — written into the issue.
+A bug takes `--epic` when it belongs to one, and stands alone when it does not.
+
+## Get the data out
+
+```bash
+gh agile export --grain issues,events --format csv --out-dir exports/
+```
+
+One row per work item, and one per timeline event — status changes with who
+made them and when — described column by column in
+[`github_catalog.json`](github_catalog.json).
+
+## Where next
+
+- **[USER_GUIDE.md](USER_GUIDE.md)** — the full walkthrough: every property,
+  sprints, boards, the workflow end to end, and export.
+- **[POLICY.md](POLICY.md)** — the conventions `gh agile validate` enforces.
+- **Below** — how it works: the hierarchy and object model, the fields it
+  creates, keys, sprints, export, and what it does not do.
+
+---
 
 ## Versions, and what installing gets you
 
@@ -366,7 +475,7 @@ Use `--no-history` to skip the per-issue timeline query. It is much faster and
 the result is a snapshot with no cycle time — which is fine for a board dump and
 useless for a flow report, so it is opt-in rather than the default.
 
-## Getting started
+## The project profile
 
 [USER_GUIDE.md](USER_GUIDE.md) is the walkthrough: the project profile and every
 property, creating a project, sprints, epics and stories, and the full workflow
