@@ -1,5 +1,12 @@
 # gh-agile
 
+[![CI](https://github.com/paulcaron16k/gh-agile/actions/workflows/ci.yml/badge.svg)](https://github.com/paulcaron16k/gh-agile/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](.github/workflows/ci.yml)
+[![Dependencies](https://img.shields.io/badge/dependencies-none%20%28stdlib%29-brightgreen.svg)](#requirements)
+[![Status](https://img.shields.io/badge/status-near%20alpha-orange.svg)](#versions-and-what-installing-gets-you)
+[![Install](https://img.shields.io/badge/install-tracks%20main-blue.svg)](#versions-and-what-installing-gets-you)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A `gh` extension for running Agile work on GitHub Projects v2 — and, more to the
 point, for **getting the data back out** in a form you can analyse the way you
 would a Jira export.
@@ -1021,3 +1028,7 @@ the declared set, closed items are *Done*
 and open ones are not, and everything carries a `type:` label. The conventions
 themselves — and which parts a person owns rather than a machine — are in
 [POLICY.md](POLICY.md).
+
+## License
+
+[Apache License 2.0](LICENSE). Copyright 2026 Paul Caron; see [NOTICE](NOTICE).
