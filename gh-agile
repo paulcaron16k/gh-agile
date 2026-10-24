@@ -25,10 +25,10 @@ What it is for
     `agile_issues` and `agile_events`; see GOLD_MODEL.md in agile-reports.
 
 **2. Jira-style issue identification: `KEY-ID`.**
-    `ZMBNI-1817` names a repository and an issue in one string, and is accepted
+    `WIDG-1817` names a repository and an issue in one string, and is accepted
     anywhere an issue number is. GitHub has no key of any kind, so the key is
     recorded per repository in the profile and stored **on the issue** as a
-    `key:ZMBNI` label — explicit rather than inferred. Issue Fields would be the
+    `key:WIDG` label — explicit rather than inferred. Issue Fields would be the
     natural home and are organization-only.
 
 **3. A CLI-forward epic and story tool, for a developer or an agent.**
@@ -49,8 +49,8 @@ What it is for
     A project may span repositories: the profile lives in the main one and
     supporting repositories carry a `config_from` pointer. A mono-repo goes the
     other way — several keys against one repository, so components that would
-    elsewhere be separate Jira projects stay distinguishable as `SPARK-41` and
-    `TRINO-42`.
+    elsewhere be separate Jira projects stay distinguishable as `PARTS-41` and
+    `TOOLS-42`.
 
 Also, because Jira has them and their absence is felt
 ------------------------------------------------------
@@ -95,16 +95,16 @@ is ever read, stored or passed by this tool.
 Commands
 --------
 
-    gh agile init --key ZMBNI -t "..." --sprint-template 2-week
-    gh agile key list | add ZMBNI [-R ...] | delete ZMBNI
+    gh agile init --key WIDG -t "..." --sprint-template 2-week
+    gh agile key list | add WIDG [-R ...] | delete WIDG
     gh agile board create "..." --type scrum|kanban|backlog|roadmap
     gh agile board list | view NAME
     gh agile sprint list | view [SPRINT] | create | ensure
     gh agile epic  create -t "Title" [--key ...]
     gh agile story create -t "Title" --epic 4 [--points 3] [--priority high]
     gh agile epic  list | view N                  likewise story, initiative, issue
-    gh agile issue close ZMBNI-34 --evidence-file notes.md
-    gh agile issue edit ZMBNI-34 --field Sprint --value @current
+    gh agile issue close WIDG-34 --evidence-file notes.md
+    gh agile issue edit WIDG-34 --field Sprint --value @current
     gh agile sync [--dry-run]
     gh agile validate
     gh agile export [--format csv] [--out-dir DIR] [--since ...]
@@ -1054,7 +1054,7 @@ def read_config(path: str | None = None) -> dict:
 #: and are organization-only -- `createIssueField` requires an Organization
 #: ownerId and refuses a user account -- so the key rides a label instead. It
 #: lives on the issue rather than the board, shows in the UI, and is filterable
-#: as `is:issue label:key:ZMBNI`.
+#: as `is:issue label:key:WIDG`.
 KEY_LABEL = "key:"
 
 #: The sprint an issue was actually worked in, written onto the issue as a
@@ -1099,7 +1099,7 @@ def key_problem(key: str) -> str | None:
 
     Jira requires uppercase, starting with a letter, letters and digits only,
     2-10 characters. The hyphen exclusion is additionally *load-bearing here*:
-    `ZMBNI-34` is parsed by splitting on the last hyphen, so a key containing
+    `WIDG-34` is parsed by splitting on the last hyphen, so a key containing
     one makes the reference ambiguous. Underscores were accepted before this --
     legal to parse, illegal in Jira, and a silent incompatibility for anyone
     moving between the two.
@@ -1140,7 +1140,7 @@ def profile_keys(config: dict) -> list[dict]:
             "  The order is the default: the first entry for a repository is used "
             "when --key is omitted,\n  which an object cannot express.\n\n"
             '    "keys": [\n'
-            '      { "key": "ZMBNI", "name": "Zamboni", "repo": "owner/Zamboni" }\n'
+            '      { "key": "WIDG", "name": "Widgets", "repo": "owner/widgets" }\n'
             "    ]\n"
         )
     return keys or []
@@ -1190,7 +1190,7 @@ def issue_url(text: str) -> tuple[str, int] | None:
 
 
 def parse_issue_ref(value: str, config: dict, fallback_repo: str | None) -> tuple[str, int]:
-    """`ZMBNI-34` -> (owner/repo, 34); a URL -> (its repo, 34); `34` -> (fallback_repo, 34).
+    """`WIDG-34` -> (owner/repo, 34); a URL -> (its repo, 34); `34` -> (fallback_repo, 34).
 
     The keyed form is unambiguous on its own, which is the whole point of having
     a key: it names the repository as well as the number. A URL is too, and it
@@ -1217,7 +1217,7 @@ def parse_issue_ref(value: str, config: dict, fallback_repo: str | None) -> tupl
 
 
 def issue_key(repo: str | None, number: int, keys: dict[str, str]) -> str:
-    """`ZMBNI-1817` when a key is known, `owner/repo#1817` when it is not.
+    """`WIDG-1817` when a key is known, `owner/repo#1817` when it is not.
 
     **The key belongs to the repository, not the project.** GitHub's issue
     numbers are a per-repository sequence, and a project may span repositories
@@ -1526,12 +1526,12 @@ def board_item_for(login: str, project: int, repo: str, issue: int) -> dict | No
     """The project item for one issue, asked of the **issue**, not of the board.
 
     **Not from `projectV2.items`** (#231). GitHub can leave a new item out of
-    that connection for an hour or more while the item exists: Zamboni #228's
+    that connection for an hour or more while the item exists: on another team's board, #228's
     item was created three seconds after the issue, `node(id:)` and
-    `issue.projectItems` both returned it on project 23, and paging every one of
+    `issue.projectItems` both returned it on its project, and paging every one of
     the project's items did not find it -- `items.totalCount` read 139 where it
     should have read 140 -- for between 71 minutes and about 10.5 hours. `issue
-    edit` and `issue move` refused it as "not on project 23" throughout, while
+    edit` and `issue move` refused it as "not on project N" throughout, while
     `issue reconcile`, which already asked the issue, was right.
 
     **Cost: 1 GraphQL point per issue**, against a full `board_items` read, so
@@ -2304,11 +2304,11 @@ def ensure_labels(repo: str, labels: list[str]) -> None:
 
 
 #: What `project.issue_title_prefix` may be set to, and what each produces for
-#: epic 34 of key ZMBNI titled "Retention policy".
+#: epic 34 of key WIDG titled "Retention policy".
 TITLE_PREFIX_MODES = {
     "off": "Retention policy",
-    "key": "ZMBNI-34 Retention policy",
-    "key+type": "ZMBNI-34 Epic: Retention policy",
+    "key": "WIDG-34 Retention policy",
+    "key+type": "WIDG-34 Epic: Retention policy",
 }
 
 
@@ -2362,7 +2362,7 @@ def strip_title_prefix(title: str, key: str) -> str:
     Deliberately narrow, and that is the whole point of it. It removes
     `<KEY>-<digits> ` and then an optional `<Type>: ` drawn from `ISSUE_TYPES` --
     exactly the shapes `prefixed_title` produces, and nothing else. A title
-    beginning `RFC-2119 keywords`, `CVE-2021-4034 write-up` or `ZMBNI-adjacent
+    beginning `RFC-2119 keywords`, `CVE-2021-4034 write-up` or `WIDG-adjacent
     work` is somebody's own words and survives untouched, because a backfill that
     guesses at what looks like a prefix quietly destroys titles nobody can
     recover.
@@ -2371,7 +2371,7 @@ def strip_title_prefix(title: str, key: str) -> str:
     issue's id is wrong either way, and stripping it lets the sweep replace it
     with the right one -- where leaving it would produce `KEY-34 KEY-12 ...` on
     the next run. That double-prefixing is the exact trap the hand-written shell
-    loop on the Zamboni board fell into.
+    loop on another team's board fell into.
     """
     head, sep, rest = title.partition(" ")
     if not sep or not head.startswith(f"{key}-") or not head[len(key) + 1:].isdigit():
@@ -2788,7 +2788,7 @@ def require_key_for_prefix(config: dict, key) -> None:
         sys.exit(
             "project.issue_title_prefix is set, but no key applies to this repository, "
             "so there is\n  nothing to prefix the title with. Pass --key, or list one:\n\n"
-            "    gh agile key add ZMBNI --repo owner/name"
+            "    gh agile key add WIDG --repo owner/name"
         )
 
 
@@ -3314,8 +3314,8 @@ def cmd_story(args) -> int:
     # an issue number is never reused, so a mistyped parent must cost nothing.
     # This used to create the story first and look the epic up afterwards, so
     # `--epic 9999` left an orphan behind its own error. And it took digits
-    # only, so on a board spanning repositories `--epic ZMBNI-40` was refused
-    # while `task --story ZMBNI-40` worked (#201).
+    # only, so on a board spanning repositories `--epic WIDG-40` was refused
+    # while `task --story WIDG-40` worked (#201).
     parent = None
     if not orphan:
         if not looks_like_issue_ref(str(args.epic).strip(), args._config):
@@ -4208,7 +4208,7 @@ BOARD_TYPES = {
 #: Sprint defaults, overridden by the profile's "sprint" block.
 #:
 #: `name_template` takes Jira's shape -- Jira names a sprint "<Board> Sprint <n>"
-#: -- so a board keyed ZMBNI produces "ZMBNI Sprint 3". Boards created before
+#: -- so a board keyed WIDG produces "WIDG Sprint 3". Boards created before
 #: this default arrived keep their existing names; renaming them would rewrite
 #: the sprint every historical item points at, for cosmetics.
 SPRINT_DEFAULTS = {
@@ -4342,7 +4342,7 @@ def views_of(login: str, number: int) -> list[dict]:
 #: mirrored from it -- which means the filter has to be evaluated here.
 #:
 #: Everything `BOARD_TYPES` generates is in this list. A term outside it is
-#: **refused, never ignored**: silently dropping `label:key:ZMBNI` would render a
+#: **refused, never ignored**: silently dropping `label:key:WIDG` would render a
 #: board showing another team's work under this team's name, and it would look
 #: entirely plausible. Refusing costs the user one message; guessing costs them
 #: a decision made on the wrong board.
@@ -5802,8 +5802,8 @@ def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
 
     if not terms and announce_unfiltered:
         # **A board that excludes nothing is not a board**, and the reader is
-        # usually being misled by its name rather than by this tool. On the
-        # Zamboni project a view renamed `Backlog` in the web UI had never been
+        # usually being misled by its name rather than by this tool. On another
+        # team's project a view renamed `Backlog` in the web UI had never been
         # given the backlog filter, so closed work showed there and in the scrum
         # board's Done section at once -- reported as a bug here, and it was not
         # one: a board is reconstructed, never mirrored, so the filter comes from
@@ -5961,7 +5961,7 @@ def list_filter(args):
 def cmd_list(args) -> int:
     """`initiative|epic|story|issue list`: the board, narrowed to one type.
 
-    `gh agile epic list` used to file an epic called "list" (ZMBNI-185). This is
+    `gh agile epic list` used to file an epic called "list" (WIDG-185). This is
     the command that was expected. **It is a board read, not a search**: a work
     item's Status, Sprint and points live on the project item, so only the board
     can say them, and a list that disagreed with `board view` about what an epic
@@ -6552,8 +6552,8 @@ def backfill_titles(args, config: dict, mode: str) -> int:
 
     `project title-prefix` changes what *new* issues are called, and says so --
     which leaves a board adopting the setting permanently mixed: everything
-    before it bare, everything after carrying `KEY-<n>`. Measured on the Zamboni
-    board the day the setting was taken up, where 18 of 19 issues predated it.
+    before it bare, everything after carrying `KEY-<n>`. Measured on another
+    team's board the day the setting was taken up, where 18 of 19 issues predated it.
 
     The hand-written version is a shell loop over `gh issue list` calling
     `gh issue edit --title`, and it is short enough to write twice and subtle
@@ -6706,7 +6706,7 @@ def cmd_project_edit(args) -> int:
     # chooses rather than something the setting does on their behalf.
     if args.title_prefix != "off" and not (config.get("keys") or []):
         sys.exit("no keys are listed in the profile, so there is nothing to prefix "
-                 "titles with.\n  Add one first: gh agile key add ZMBNI")
+                 "titles with.\n  Add one first: gh agile key add WIDG")
     config.setdefault("project", {})["issue_title_prefix"] = args.title_prefix
     print(f"  issue title prefix: {args.title_prefix}  e.g. "
           f"{TITLE_PREFIX_MODES[args.title_prefix]}")
@@ -6749,7 +6749,7 @@ def cmd_key_add(args) -> int:
     Also writes the project's `shortDescription`, which is the nearest GitHub
     has to a place for this: a project carries a `title` and a
     `shortDescription` and no key of any kind, so the human-readable pairing --
-    "Zamboni Iceberg table maintainer" / ZMBNI -- lives there while the machine
+    "Widgets service" / WIDG -- lives there while the machine
     reads the config file.
     """
     config = args._config
@@ -6770,9 +6770,9 @@ def cmd_key_add(args) -> int:
               f"--type kanban --save")
 
     # Only when the key being recorded *is* this project's key. A key's name
-    # describes the key -- "Zamboni Iceberg table maintainer" for ZMBNI -- and
+    # describes the key -- "Widgets service" for WIDG -- and
     # writing it into the project's shortDescription relabelled a project called
-    # gh-agile as Zamboni. Two different things, one flag.
+    # gh-agile with another repository's name. Two different things, one flag.
     project_key = (config.get("project") or {}).get("key")
     if args.project and args.name and project_key and args.key == project_key:
         graphql(
@@ -7361,7 +7361,7 @@ def cmd_close(args) -> int:
     """Close an issue, as `gh issue close` does, and bring its Status with it.
 
     `move --close --not-planned` was the only close, and `--not-planned` without
-    `--close` silently did nothing. The cleanup of ZMBNI-185 was
+    `--close` silently did nothing. The cleanup of WIDG-185 was
     `gh issue close 185 -r "not planned" -c ...`, so that is the spelling (#202).
 
     Both reasons end at Status `Done`, because a closed issue on any other Status
@@ -7403,7 +7403,7 @@ def cmd_move(args) -> int:
     the transition after which nobody revisits the issue -- and an issue closed
     with the word "done" has thrown away the reasoning that made it defensible.
     """
-    # `ZMBNI-34` names the repository as well as the number, which is the point
+    # `WIDG-34` names the repository as well as the number, which is the point
     # of having a key at all; a bare number takes the repository from --repo,
     # --key, or the working directory.
     repo, issue = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
@@ -7428,7 +7428,7 @@ def cmd_move(args) -> int:
     # This was `if required else {}`, so on every status but the cycle end the
     # flags were parsed, accepted and thrown away: no warning, exit 0, and the
     # status change succeeded, which is every reason to believe the text landed.
-    # Measured on the Zamboni board: four issues moved to In Review with
+    # Measured on another team's board: four issues moved to In Review with
     # substantial --evidence, all four bodies left with an empty ## Evidence,
     # noticed days later when the text existed nowhere else. Recording why
     # something is Blocked is worth having anyway -- a blocked issue with no note
@@ -7844,7 +7844,7 @@ def cmd_export(args) -> int:
 
     if args.out_dir:
         # One directory per project key, so several projects can export into one
-        # tree without colliding: exports/ZMBNI/agile_issues_....csv
+        # tree without colliding: exports/WIDG/agile_issues_....csv
         directory = pathlib.Path(args.out_dir)
         project_key = (args._config.get("project") or {}).get("key")
         if project_key and directory.name != project_key:
@@ -8086,11 +8086,11 @@ def commit_pull_requests(sha: str) -> list[tuple[int, str]] | str | None:
     """The merged pull requests GitHub says `sha` belongs to, each with its base.
 
     **Asked, not parsed out of the commit subject** (#225). The subject rule --
-    `Merge pull request #m` or a trailing `(#n)` -- took Zamboni's story commit
+    `Merge pull request #m` or a trailing `(#n)` -- took another repository's story commit
     `... retired spellings (#228)`, which names an *issue*, for pull request 228,
     and never saw the merge's real one. It also cannot see a rebase merge, which
     keeps the original subjects, or a merge whose title was edited in the dialog.
-    `commits/{sha}/pulls` answers for all four styles: checked on Zamboni, both
+    `commits/{sha}/pulls` answers for all four styles: checked on that repository, both
     the merge commit and that story commit return `[229]`.
 
     `None` on a failed call, as `closing_issues` does, for the same reason. A
@@ -8352,7 +8352,7 @@ def hooks_dir() -> tuple[pathlib.Path, bool] | None:
     hooks there: it reads `$GIT_COMMON_DIR/hooks`, the main clone's. So a hook
     installed from a worktree landed where nothing runs it, under a message
     saying `git pull` would now run it -- measured from a `git worktree add` of
-    Zamboni. `--git-path hooks` answers the question git itself asks, and
+    another repository. `--git-path hooks` answers the question git itself asks, and
     honours `core.hooksPath` as well.
 
     Asked from the top of the working tree and resolved against it, because
@@ -8643,7 +8643,7 @@ def cmd_validate(args) -> int:
         if "type:initiative" in labels and not row["sub_issues_total"]:
             problems["initiative has no epics"].append(ident)
 
-        # The roll-up, both ways. Ported from the Zamboni markdown suite's
+        # The roll-up, both ways. Ported from another team's markdown suite's
         # `test_an_epic_is_only_done_when_all_its_stories_are`, which was the one
         # check of its five with no equivalent here.
         #
@@ -8675,7 +8675,7 @@ def cmd_validate(args) -> int:
             # children is a claim visibly too strong -- the open children are right
             # there under it. An epic left open with every child closed looks like
             # nothing at all: no field disagrees, no child is in the wrong state,
-            # it simply persists. Reported by the Zamboni team as the single
+            # it simply persists. Reported by another team using the tool as the single
             # largest source of stale board state, three epics at once. See #72.
             if not finished and closed == total:
                 problems[f"every sub-issue is closed but the {parent} is not"].append(tally)
@@ -8721,7 +8721,7 @@ def cmd_validate(args) -> int:
         # **The other half of starting work.** Status, sprint and assignee are set
         # together by `move --status "In Progress"`, and only two of the three were
         # ever checked -- so the sprint half got caught and the assignee half never
-        # did. Reported by the Zamboni team; see #125.
+        # did. Reported by another team using the tool; see #125.
         #
         # **`container` is consulted here, and this reverses an earlier decision
         # rather than overlooking it.** That decision exempted these levels from
@@ -8988,7 +8988,7 @@ def _latest_issue(repo: str) -> int:
 #: The title of a new work item: a flag, as `gh issue create -t` takes it, never
 #: a positional. `gh issue create "x"` is `unknown argument "x"`, and the
 #: positional is what made `gh agile epic list` file an epic called "list"
-#: (ZMBNI-185, #202).
+#: (WIDG-185, #202).
 def add_title(parser: argparse.ArgumentParser, what: str) -> None:
     parser.add_argument("-t", "--title", required=True, help=f"the {what}'s title")
 
@@ -10219,7 +10219,7 @@ why this exists:
     add_json_flags(key_lister, KEY_FIELDS)
     key_lister.set_defaults(func=cmd_key_list, projectless=True)
     key_adder = key_sub.add_parser("add", kind=GENERAL, help="Record a key for a repository")
-    key_adder.add_argument("key", help="uppercase; Jira's rules apply, e.g. ZMBNI")
+    key_adder.add_argument("key", help="uppercase; Jira's rules apply, e.g. WIDG")
     key_adder.add_argument("-R", "--repo", help="owner/name; defaults to the working "
                                                 "directory")
     key_adder.add_argument("--name", help="what it is called; also the project's "
@@ -10228,7 +10228,7 @@ why this exists:
     key_deleter = key_sub.add_parser(
         "delete", kind=GENERAL,
         help="Remove a key from the profile; refused while issues carry it")
-    key_deleter.add_argument("key", help="the key to remove, e.g. ZMBNI")
+    key_deleter.add_argument("key", help="the key to remove, e.g. WIDG")
     key_deleter.set_defaults(func=cmd_key_delete, projectless=True)
 
     # `issue` holds the verbs that act on any work item, whatever its type, the
@@ -10547,7 +10547,7 @@ WORK_ITEM_GROUPS = ("initiative", "epic", "story", "task")
 
 #: Every verb `gh issue` and `gh pr` have. **Never read as a title**, whether or
 #: not this tool has the verb yet: suggesting `epic create -t list` for
-#: `epic list` would be ZMBNI-185 again, offered as advice.
+#: `epic list` would be WIDG-185 again, offered as advice.
 GH_VERBS = frozenset({
     "create", "list", "status", "view", "edit", "close", "reopen", "comment",
     "delete", "develop", "lock", "unlock", "pin", "unpin", "transfer", "checkout",

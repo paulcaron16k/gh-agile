@@ -197,8 +197,8 @@ class TestPrRow:
         """Explicit beats assumed, the same rule `rows()` follows -- so a pull
         request and the issue it closes cannot disagree about its name."""
         row = tool.pr_row(pull(closingIssuesReferences={"nodes": [
-            issue_ref(12, labels=["key:ZMBNI"])]}), KEYS)
-        assert row["closes_issues"] == "ZMBNI-12"
+            issue_ref(12, labels=["key:WIDG"])]}), KEYS)
+        assert row["closes_issues"] == "WIDG-12"
 
     def test_no_content_columns(self, tool):
         row = tool.pr_row(pull(), KEYS)
@@ -298,7 +298,7 @@ class TestEventHashUniqueness:
 
 class TestKeyForIssue:
     def test_the_label_wins(self, tool):
-        assert tool.key_for_issue(12, "o/r", ["key:ZMBNI"], KEYS) == "ZMBNI-12"
+        assert tool.key_for_issue(12, "o/r", ["key:WIDG"], KEYS) == "WIDG-12"
 
     def test_then_the_repository_default(self, tool):
         assert tool.key_for_issue(12, "o/r", [], KEYS) == "AGILE-12"

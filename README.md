@@ -113,7 +113,7 @@ classDiagram
         +state  OPEN | CLOSED
         +stateReason  COMPLETED | NOT_PLANNED
         +labels[]  type:initiative|epic|story|task|bug
-        +labels[]  key:ZMBNI, sprint:YYYY-MM-DD, initiative:slug
+        +labels[]  key:WIDG, sprint:YYYY-MM-DD, initiative:slug
         +assignees[]  many, point-in-time
         +author  no separate reporter
     }
@@ -269,7 +269,7 @@ evaluated locally against the same items `export` reads. Two consequences that
 are not optional:
 
 - **A filter term this tool cannot evaluate is refused, not ignored.** Dropping
-  `label:key:ZMBNI` renders one team's board full of another team's work, and it
+  `label:key:WIDG` renders one team's board full of another team's work, and it
   looks correct.
 - **Empty is not excluded.** A status the filter allows but nothing occupies is
   reported on the `empty:` line; one the filter *removes* is not mentioned at
@@ -287,7 +287,7 @@ Neither source is sufficient alone; a reader needs both.
 | Property | Where | Description | Value / enum |
 |---|---|---|---|
 | `number` | issue | Per repository, shared with pull requests, never reused | integer |
-| `issue_key` | derived | Jira-style identity, from the `key:` label or the profile | `ZMBNI-1817` |
+| `issue_key` | derived | Jira-style identity, from the `key:` label or the profile | `WIDG-1817` |
 | `title`, `body` | issue | Body carries `## Intent`, `## Acceptance`, `## Evidence` | markdown |
 | `state` | issue | GitHub's only two | `OPEN`, `CLOSED` |
 | `stateReason` | issue | Distinguishes finished from abandoned | `COMPLETED`, `NOT_PLANNED` |
@@ -377,9 +377,9 @@ The profile lives in **`.github/agile.json`**, visible and checked in:
 ```json
 {
   "keys": [
-    { "key": "ZMBNI", "name": "Zamboni Iceberg table maintainer", "repo": "owner/Zamboni" }
+    { "key": "WIDG", "name": "Widgets service", "repo": "owner/widgets" }
   ],
-  "project": { "number": 5, "owner": "owner", "name": "Zamboni Iceberg table maintainer", "key": "ZMBNI" }
+  "project": { "number": 5, "owner": "owner", "name": "Widgets service", "key": "WIDG" }
 }
 ```
 
@@ -419,14 +419,14 @@ kind**. Since the issue-number sequence is per *repository* — and a project ca
 span repositories — the key is recorded per repository:
 
 ```bash
-gh agile key add ZMBNI --repo paulcaron16k/Zamboni
+gh agile key add WIDG --repo acme/widgets
 gh agile key add AGILE --repo paulcaron16k/gh-agile \
          --name "gh-agile: Agile management on GitHub"
 gh agile key list                               # what is recorded
-gh agile key delete ZMBNI                       # refused while issues carry it
+gh agile key delete WIDG                       # refused while issues carry it
 ```
 
-The export then carries `issue_key` — `AGILE-14`, `ZMBNI-1817` — which is the
+The export then carries `issue_key` — `AGILE-14`, `WIDG-1817` — which is the
 Gold model's `issue_key`. Without a recorded key it falls back to
 `owner/repo#14`, so the column is never empty. `--name` additionally writes
 `"<name> [<KEY>]"` to the project's `shortDescription`, the nearest thing GitHub
@@ -803,7 +803,7 @@ stays a manual web-UI step — see [Sprint management](#sprint-management).
 **Issue types and issue fields.** Both organization-only —
 `/repos/{owner}/{repo}/issues/types` returns 404 on a user-owned repository and
 `createIssueField` resolves only an Organization node. Type and key therefore
-ride labels: `type:story`, `key:ZMBNI`.
+ride labels: `type:story`, `key:WIDG`.
 
 **Diff content, of any kind.** `github_prs` and the review events carry pull
 request *metadata* — additions, deletions, changed files, review states — and

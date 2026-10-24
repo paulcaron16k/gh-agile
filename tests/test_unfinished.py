@@ -69,7 +69,7 @@ PULLS = {
     REBASED_1: f"190\t{REPO}\n",
     REBASED_2: f"190\t{REPO}\n",
     EDITED: f"191\t{REPO}\n",
-    # Zamboni's 92a5bc7, "... retired spellings (#228)": the subject names an
+    # Another repository's 92a5bc7, "... retired spellings (#228)": the subject names an
     # issue, and GitHub says the commit belongs to pull request 229.
     STORY: f"229\t{REPO}\n",
 }
@@ -98,7 +98,7 @@ def github(pulls=PULLS, fail=(), unknown=()):
 
 class TestFindingThePullRequests:
     """GitHub says which pull request a commit belongs to; the subject is never
-    read. AGILE-225: Zamboni's story commit `... (#228)` names an issue, the old
+    read. AGILE-225: another repository's story commit `... (#228)` names an issue, the old
     parser took it for a pull request, and the merge's real one, #229, was never
     checked.
     """
@@ -122,7 +122,7 @@ class TestFindingThePullRequests:
         assert hook.merged_pull_requests(line(EDITED), REPO) == ([191], [])
 
     def test_an_issue_number_in_a_subject_has_no_effect(self, hook, monkeypatch):
-        """The Zamboni merge: the merge commit and its story commit both belong
+        """The other repository's merge: the merge commit and its story commit both belong
         to #229, and #228 -- the issue in the story's subject -- is nowhere."""
         monkeypatch.setattr(hook.subprocess, "run",
                             github({**PULLS, MERGE_COMMIT: f"229\t{REPO}\n"}))

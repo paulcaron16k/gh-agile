@@ -7,7 +7,7 @@ It used to be read only when the target status *demanded* a section:
 
 so on every status but the cycle end the flags were parsed, accepted and thrown
 away -- no warning, exit 0, and the status change succeeded, which is every
-reason to believe the text landed. Measured on the Zamboni board: four issues
+reason to believe the text landed. Measured on another team's board: four issues
 moved to `In Review` with substantial `--evidence`, all four bodies left with an
 empty `## Evidence`, noticed days later when the text existed nowhere else.
 

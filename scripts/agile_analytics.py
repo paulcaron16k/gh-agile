@@ -18,8 +18,8 @@ install that happens not to have it. The extension therefore stays standard
 library only, and analysis lives here, where PEP 723 inline metadata lets `uv`
 fetch DuckDB into an ephemeral environment:
 
-    uv run scripts/agile_analytics.py compact --dir exports/ZMBNI
-    uv run scripts/agile_analytics.py metrics --dir exports/ZMBNI
+    uv run scripts/agile_analytics.py compact --dir exports/WIDG
+    uv run scripts/agile_analytics.py metrics --dir exports/WIDG
 
 DuckDB rather than pandas: it reads a glob of CSVs directly, deduplicates with a
 window function, and writes CSV in one statement -- no dataframe assembly, and

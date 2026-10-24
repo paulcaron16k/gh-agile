@@ -1,7 +1,7 @@
 # gh-agile v0.4.0 — a CLI shaped like `gh`
 
 **This release breaks spellings, on purpose, and none silently.** `gh agile epic list`
-filed an epic called "list" (ZMBNI-185): `epic` took its first word as a title. The
+filed an epic called "list" (WIDG-185): `epic` took its first word as a title. The
 fault was the tool's shape, so AGILE-200 (#200) reshaped it on `gh`'s own rules —
 measured against `gh` 2.86's help, not remembered.
 
@@ -52,7 +52,7 @@ Missing the short `move`? `gh` has the answer for that:
 
 ```bash
 gh alias set mv 'agile issue move'
-gh mv ZMBNI-34 "In Progress"
+gh mv WIDG-34 "In Progress"
 ```
 
 ## The rules it now follows

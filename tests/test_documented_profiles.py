@@ -1,6 +1,6 @@
 """The profile examples in the documentation are shapes the tool accepts. #161.
 
-`README.md` documented `keys` as `{"owner/repo": "ZMBNI"}` long after it became a
+`README.md` documented `keys` as `{"owner/repo": "WIDG"}` long after it became a
 list. The documented shape does not merely differ -- it **raises**, because
 iterating a dict yields its keys as strings and every consumer does `k["key"]`
 or `k.get("repo")`. A reader copying the first example in *Getting started* got
@@ -83,23 +83,23 @@ class TestEveryDocumentedProfile:
 class TestTheShapeThatUsedToCrash:
     def test_a_mapping_is_refused_not_crashed_on(self, tool):
         with pytest.raises(SystemExit) as exit_info:
-            tool.profile_keys({"keys": {"owner/repo": "ZMBNI"}})
+            tool.profile_keys({"keys": {"owner/repo": "WIDG"}})
         assert "must be a list" in str(exit_info.value)
 
     def test_the_refusal_says_why_the_order_matters(self, tool):
         """A mapping cannot express the ordering the default depends on."""
         with pytest.raises(SystemExit) as exit_info:
-            tool.profile_keys({"keys": {"owner/repo": "ZMBNI"}})
+            tool.profile_keys({"keys": {"owner/repo": "WIDG"}})
         assert "order is the default" in str(exit_info.value)
 
     def test_it_shows_the_shape_to_write_instead(self, tool):
         with pytest.raises(SystemExit) as exit_info:
-            tool.profile_keys({"keys": {"owner/repo": "ZMBNI"}})
+            tool.profile_keys({"keys": {"owner/repo": "WIDG"}})
         assert '"keys": [' in str(exit_info.value)
 
     def test_the_list_form_still_works(self, tool):
-        profile = {"keys": [{"key": "ZMBNI", "repo": "o/r"}]}
-        assert tool.profile_keys(profile) == [{"key": "ZMBNI", "repo": "o/r"}]
+        profile = {"keys": [{"key": "WIDG", "repo": "o/r"}]}
+        assert tool.profile_keys(profile) == [{"key": "WIDG", "repo": "o/r"}]
 
     def test_an_absent_keys_is_empty_not_an_error(self, tool):
         """A profile need not list any: `project create` writes one later."""

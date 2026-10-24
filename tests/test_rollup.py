@@ -1,6 +1,6 @@
 """Epic roll-up: an epic and its children have to agree, in both directions.
 
-Ported from the Zamboni markdown suite's
+Ported from another team's markdown suite's
 `test_an_epic_is_only_done_when_all_its_stories_are`, which was the one check of
 its five with no equivalent here.
 
@@ -8,7 +8,7 @@ The two directions are not equally visible, which is why only one of them was
 ever noticed. **An epic marked finished over open children is a claim visibly too
 strong** -- the open children are right there under it. **An epic left open with
 every child closed looks like nothing at all**: no field disagrees, no child is in
-the wrong state, the epic simply persists. The Zamboni team reported three at
+the wrong state, the epic simply persists. Another team using the tool reported three at
 once as the single largest source of stale board state (#72), and this board had
 one of its own -- `#26`, open with six of six closed -- found by running the
 check the first time.

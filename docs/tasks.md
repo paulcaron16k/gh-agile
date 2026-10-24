@@ -14,8 +14,8 @@ in the destination", and that sentence is the difference between a migration tha
 silently strips every label. So: `WBS-n` ids for the breakdown, cross-referenced to board ids where the
 work is filed.
 
-The distinction matters here more than in most repositories, because `#11` is *"Migrate ZMBNI off
-tasks.md"* — this project's stated direction is away from markdown backlogs. A second backlog in `docs/`
+The distinction matters here more than in most repositories, because `#11` moves another team's
+backlog off a `tasks.md` — this project's stated direction is away from markdown backlogs. A second backlog in `docs/`
 would be the thing the tool exists to replace. A plan is not a backlog.
 
 The `status` column below reads:
@@ -57,9 +57,6 @@ has a command that answers it live:
 | `~/checkout/prj_mgmt/gh-agile` | **this repo** (`paulcaron16k/gh-agile`), branch `main` |
 | `~/checkout/prj_mgmt/agile-test` | **the sandbox** (`paulcaron16k/agile-test`). See its `plan.txt` |
 | `~/checkout/prj_mgmt/agile-reports` | `paulcaron16k/agile-reports`, key `REPORTS`, **on this repository's board** |
-| `~/checkout/iceberg/Zamboni` | Zamboni (`paulcaron16k/Zamboni`) — a different team's, and no longer in this profile |
-| `~/checkout/db/` | the dbt-duckdb work, unrelated |
-| `~/checkout/prj_mgmt/gitstats`, `~/checkout/prj_mgmt/mergestat` | third-party tools, unrelated to this repo |
 
 `~/checkout/prj_mgmt/my-gh-agile` was a duplicate clone and is **gone**. Recorded so nobody goes looking
 for it on the strength of an older note.
@@ -70,11 +67,7 @@ for it on the strength of an older note.
 |---|---|---|
 | `AGILE` | `paulcaron16k/projects/4` | `.github/agile.json` in this repo. Boards: `Sprint board` (scrum, **no key filter — the whole team, both repositories**), `Engineering: all work` (kanban), `Backlog`, `Team: AGILE` and `Team: REPORTS` (scrum, one key each), plus GitHub's default `View 1`. `issue_title_prefix: key`, so titles read `AGILE-82 ...` and `REPORTS-1 ...` — which is what makes a shared board readable at a glance |
 | `REPORTS` | `paulcaron16k/projects/4` — **the same board as AGILE** | `~/checkout/prj_mgmt/agile-reports/.github/agile.json`, which holds one property: `{"config_from": "paulcaron16k/gh-agile"}`. This is the multi-repo board the tool is built for: one team responsible for two repositories, one `Sprint board` showing both, and `Team: AGILE` / `Team: REPORTS` slicing each out with `label:key:...` |
-| `ZMBNI` | `paulcaron16k/projects/23` | `~/checkout/iceberg/Zamboni/.github/agile.json`. Boards: `Sprint board` (scrum), `Kanban`. `issue_title_prefix: key`. **No longer part of this repository's profile** — it was listed there only to demonstrate a board spanning repositories, which `agile-reports` now does properly. Zamboni has its own team and its own board, and is not ours to test against. **The profile records no `project.owner`** — a number without an account is not an identity, and running `gh agile init` there records it |
 | `TEST` | `paulcaron16k/projects/19` | `~/checkout/prj_mgmt/agile-test/.github/agile.json`. Boards: `Engineering: all work`, `Backlog`, `Team: TEST` (scrum), `Roadmap`. `issue_title_prefix: key+type`. Issue numbers `#1` and `#2` are already spent by a `self-test` run |
-
-**Zamboni's markdown backlog is retired.** `~/checkout/iceberg/Zamboni/docs/tasks.md` no longer exists;
-that work is GitHub issues on project `23` now, which is what `#11`, `#20`, `#21` and `#22` were for.
 
 **The AGILE sprint series has two naming seams, and both are correct.** `AGILE Sprint 4` came before
 `Sprint 1`, `Sprint 2`, `Sprint 3`; and from 2026-09-16 the profile names new sprints
@@ -107,15 +100,8 @@ the check `#60` added doing its job. `#24` is closed as **not planned for this r
 **Not filed:** WBS-1, WBS-3, and the WBS-4 / WBS-6 entries. Filing them is a live write to board `#4` and
 is the owner's call; the breakdown below is written so that each leaf is one issue if they want it to be.
 
-Everything below is an issue the Zamboni team will transition from gh-agile to their own issues list. 
-Leave these issues alone for now, until the Zamboni team issue transition is complete.
-
-| id | title | WBS |
-|---|---|---|
-| `#11` | Migrate ZMBNI off tasks.md | [WBS-2](#wbs-2--migrate-the-zamboni-work-off-tasksmd) |
-| `#20` | Migrate the 11 open ZMBNI stories | [WBS-2](#wbs-2--migrate-the-zamboni-work-off-tasksmd) |
-| `#21` | Freeze tasks.md as the archive | [WBS-2](#wbs-2--migrate-the-zamboni-work-off-tasksmd) |
-| `#22` | Port the tasks.md tests to `gh agile validate` | [WBS-2](#wbs-2--migrate-the-zamboni-work-off-tasksmd) |
+Four issues on this board -- `#11`, `#20`, `#21` and `#22` -- are another team's migration off a
+markdown backlog, and will move to that team's own repository. Leave them alone until it does.
 
 ---
 
@@ -205,8 +191,8 @@ Not work. Recorded so nobody spends a morning rediscovering them, and so nobody 
 |---|---|---|---|
 | WBS-6.1 | `sprint:` labels are per repository, not per project | An issue on two boards carries one set of dates, matching only one series; `reconcile` reports the other as unresolvable. One board per repository avoids it entirely | `decided` |
 | WBS-6.2 | No locking on profile writes | Every profile write is a read-modify-write, and two concurrent runs lose one of them. **The owner reviewed this and accepted the risk — do not "fix" it without asking.** A single-user tool with a checked-in profile does not need a lock file | `decided` |
-| WBS-6.4 | Export stays simple CSV and standard library | The dependency ceiling is mechanical, not a preference: `gh extension install` clones the repository and installs nothing, so an `import duckdb` here breaks every install that happened not to have it. A `gh` extension *can* carry dependencies by shipping as a precompiled per-platform binary, and that is a different distribution model -- release builds, binary size, and the loss of "one readable file you can `cat` before trusting it with your board". **Any change request needing dlt, SQLAlchemy, Parquet or Iceberg output is out of scope and closed as such.** The day export must emit Parquet is the day it leaves the extension; until then the seam between extraction and analysis is a directory of CSVs, and `agile-reports` is where dependencies are free | `decided` |
-| WBS-6.5 | We do not re-implement GitHub ELT | Meltano and dlt already do it well. Loading, scheduling and state management are theirs. This repository's job is to produce silver files and to say unambiguously what is in them -- which is what `#92` is for. Re-implementing the load side would also put us back under WBS-6.4's ceiling for no gain | `decided` |
+| WBS-6.4 | Export stays simple CSV and standard library | The dependency ceiling is mechanical, not a preference: `gh extension install` clones the repository and installs nothing, so an `import duckdb` here breaks every install that happened not to have it. A `gh` extension *can* carry dependencies by shipping as a precompiled per-platform binary, and that is a different distribution model -- release builds, binary size, and the loss of "one readable file you can `cat` before trusting it with your board". **Any change request needing an ELT framework, SQLAlchemy, Parquet or Iceberg output is out of scope and closed as such.** The day export must emit Parquet is the day it leaves the extension; until then the seam between extraction and analysis is a directory of CSVs, and `agile-reports` is where dependencies are free | `decided` |
+| WBS-6.5 | We do not re-implement GitHub ELT | Existing ELT tools already do it. Loading, scheduling and state management are theirs. This repository's job is to produce silver files and to say unambiguously what is in them -- which is what `#92` is for. Re-implementing the load side would also put us back under WBS-6.4's ceiling for no gain | `decided` |
 | WBS-6.3 | The tool is one file | And it will stay one file: `gh extension install` clones and installs nothing, so a package layout buys nothing and a second module is a second thing to keep on `sys.path`. The offline suite is what keeps it tractable | `decided` |
 
 ---

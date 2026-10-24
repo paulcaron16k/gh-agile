@@ -1,7 +1,7 @@
 """`validate` checks the assignee half of starting work, not only the sprint half.
 
 Starting work sets three things -- Status, sprint, assignee -- and `validate`
-checked two. Reported by the Zamboni team: *"the sprint half gets caught and the
+checked two. Reported by another team using the tool: *"the sprint half gets caught and the
 assignee half never does. The `Closes #n` automation closes the issue and sets
 nothing."*
 

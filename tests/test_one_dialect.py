@@ -306,8 +306,8 @@ class TestKey:
         assert asked == ['repo:o/a repo:o/b is:issue label:"key:OLD"']
 
     def test_add_takes_the_key_positionally(self, tool):
-        args = parse(tool, "key", "add", "ZMBNI", "-R", "o/z", "--name", "Z")
-        assert (args.key, args.repo, args.name) == ("ZMBNI", "o/z", "Z")
+        args = parse(tool, "key", "add", "WIDG", "-R", "o/z", "--name", "Z")
+        assert (args.key, args.repo, args.name) == ("WIDG", "o/z", "Z")
 
     def test_list_never_writes(self, tool):
         assert parse(tool, "key", "list").func is tool.cmd_key_list

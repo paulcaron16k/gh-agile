@@ -59,10 +59,11 @@ issues enabled, its own board (project `#19`), its own profile with key `TEST` a
 
 This exists because live-repo testing did real damage: a `key:TEST` label applied to all 26 `gh-agile` issues, ~13
 throwaway issues created and deleted leaving permanent holes in the issue-number sequence, 11 scratch projects, and
-two export files deleted. `gh-agile` is near alpha with issue tracking now load-bearing, and `Zamboni` is heading
-for production. Neither is a test fixture.
+two export files deleted. `gh-agile` is near alpha with issue tracking now load-bearing, and other teams' boards
+run on this tool too. Neither is a test fixture.
 
-Order of escalation: **offline tests → agile-test → gh-agile.** Zamboni is a different team's repository on a different board and is no longer in this profile; it is not an escalation step. Most work needs no live repo at all now.
+Order of escalation: **offline tests → agile-test → gh-agile.** Another team's repository is never an escalation
+step: it is on a different board, not in this profile, and not ours to test against. Most work needs no live repo at all now.
 Only `self-test`, sprint destruction/repair and `sync --adopt` must hit real GitHub.
 
 **The Makefile enforces this rather than asking.** `OWNER` and `REPO` default to the sandbox, and `self-test` and
@@ -129,7 +130,7 @@ read-only commands fail for a teammate who has project read, or resolve to an un
 `resolve_owner` takes the flag, then `project.owner`, then the caller; `--owner @me` always forces the caller,
 which is why the flag has no argparse default — `default="@me"` could not distinguish "not given" from "me".
 
-**Labels carry what GitHub cannot.** `type:epic|story|bug`, `key:ZMBNI`, `sprint:YYYY-MM-DD`. Issue Types and
+**Labels carry what GitHub cannot.** `type:epic|story|bug`, `key:WIDG`, `sprint:YYYY-MM-DD`. Issue Types and
 Issue Fields are organization-only (`createIssueField` resolves only an Organization node), so labels are the
 carrier. Labels are also the only **additive** primitive in the API — `--add-label` appends without a
 read-modify-write, unlike a title (whole-value replace) or an iteration configuration (replace-wholesale plus
@@ -138,7 +139,7 @@ collateral damage). That is why the sprint record lives on one.
 **A board is reconstructed, never mirrored.** `ProjectV2View` has **no `items` field** — a view hands out its
 `filter` as an opaque string, its `layout` and its grouping, and there is no API for "what does this view show".
 So `board view` evaluates the filter locally against the same items `export` reads. Consequences that are not
-optional: a filter term outside `FILTER_TERMS` is **refused, not ignored** (dropping `label:key:ZMBNI` renders one
+optional: a filter term outside `FILTER_TERMS` is **refused, not ignored** (dropping `label:key:WIDG` renders one
 team's board full of another team's work and looks correct); and **empty is not excluded** — a status the filter
 allows but nothing occupies is reported on the `empty:` line, while one the filter removes is not mentioned, because
 calling `Done` empty on a kanban board says nothing was finished.
@@ -159,13 +160,13 @@ creates or updates one — and closing on merge is a *repository* setting the AP
 these is a manual web-UI step.
 
 **Export stays CSV and standard library, and the load side is somebody else's.** The ceiling is mechanical:
-`gh extension install` clones and installs nothing. A request needing dlt, SQLAlchemy, Parquet or Iceberg is
+`gh extension install` clones and installs nothing. A request needing an ELT framework, SQLAlchemy, Parquet or Iceberg is
 **out of scope and closed as such** -- the day export must emit Parquet is the day it leaves the extension.
-Meltano and dlt already do GitHub ELT; this repo produces silver files and says what is in them. CSVs carry
-no schema, so that saying is `github_catalog.json` (`#92`) -- Singer/Meltano shape, and named `github_` not
+Loading GitHub data is a solved problem elsewhere; this repo produces silver files and says what is in them.
+CSVs carry no schema, so that saying is `github_catalog.json` (`#92`) -- Singer shape, and named `github_` not
 `agile_` because `agile_*` is the Gold model's namespace, which lives in `agile-reports`.
 
-**`github_catalog.json` is the export contract**, in Singer/Meltano shape: every stream, every column,
+**`github_catalog.json` is the export contract**, in Singer shape: every stream, every column,
 typed, nullable-or-not, keyed, with the replication method. A CSV carries no schema, so without it a
 loader guesses -- and an empty `time_to_first_review` read as `0` rather than null is the same class of
 error as a duration read in the wrong unit. Not `agile_*`: that is the **Gold** model's namespace, in
@@ -272,7 +273,7 @@ Tidying it would clear every assignment on the board.
   resolved by `gh`, because this tool never sees a token and must not guess a username from a git config.
 - **Evidence is written on any status, and required on one.** `--evidence` was read only when the target status
   demanded a section, so on every other status it was parsed, accepted and discarded — exit 0, status changed,
-  four Zamboni issues left with empty `## Evidence` and the text nowhere else. `read_template` also maps an
+  four issues on another team's board left with empty `## Evidence` and the text nowhere else. `read_template` also maps an
   unheaded blob onto the *single required* section, which is nothing when nothing is required, so
   `OPTIONAL_SECTIONS` names Evidence for that case. `Done` still refuses an empty section or a `_TBD_`; nothing
   else validates what it is given, and offering nothing still writes nothing.
@@ -312,7 +313,7 @@ because none of it is loaded automatically and this file will not tell you.
 
 The reason it is not written here twice: a fact kept in two files eventually disagrees with itself, and
 the copy that loses is the one loaded automatically — nobody thinks to correct a file they never opened.
-This one said Zamboni had no issues and its work was 194 ids in a markdown file, months after that
+This one said another team's repository had no issues and its work was 194 ids in a markdown file, months after that
 backlog was retired and the issues were real. So: **do not restate live state in this file, and do not
 "helpfully" copy it back.** Add it to `docs/tasks.md` or leave it out.
 

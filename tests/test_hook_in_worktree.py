@@ -4,7 +4,7 @@
 linked worktree is `.git/worktrees/<name>`. Git reads hooks from
 `$GIT_COMMON_DIR/hooks` -- what `git rev-parse --git-path hooks` names -- so a
 hook installed from a worktree was never run, under a message saying it would
-be. Measured on Zamboni with git 2.34.1. Worktrees are routine where agent
+be. Measured on another team's repository with git 2.34.1. Worktrees are routine where agent
 sessions work, one per story.
 
 These run **real git** in a temporary directory: the defect was a wrong belief

@@ -133,7 +133,7 @@ class TestItemMatches:
     def test_terms_are_anded(self, tool):
         it = item(status="Todo", sprint=None, labels=["key:AGILE"])
         assert matches(tool, it, "no:sprint -status:Done label:key:AGILE")
-        assert not matches(tool, it, "no:sprint -status:Done label:key:ZMBNI")
+        assert not matches(tool, it, "no:sprint -status:Done label:key:WIDG")
 
     def test_the_real_backlog_filter(self, tool):
         """`no:sprint -status:Done` -- an item in a sprint is out even if not Done."""
@@ -253,7 +253,7 @@ class TestSlug:
 class TestFindView:
     VIEWS = [{"number": 2, "name": "Backlog"},
              {"number": 5, "name": "Team: AGILE"},
-             {"number": 6, "name": "Team: ZMBNI"}]
+             {"number": 6, "name": "Team: WIDG"}]
 
     @pytest.fixture(autouse=True)
     def views(self, monkeypatch, tool):
@@ -301,14 +301,14 @@ class TestFindView:
             tool.find_view("o", 1, "Team")
         message = str(exit_info.value)
         assert "more than one board" in message
-        assert "Team: AGILE" in message and "Team: ZMBNI" in message
+        assert "Team: AGILE" in message and "Team: WIDG" in message
 
     def test_an_ambiguous_match_lists_the_numbers_to_pick_from(self, tool):
         """The refusal names the other way to say which one."""
         with pytest.raises(SystemExit) as exit_info:
             tool.find_view("o", 1, "Team")
         message = str(exit_info.value)
-        assert "5  Team: AGILE" in message and "6  Team: ZMBNI" in message
+        assert "5  Team: AGILE" in message and "6  Team: WIDG" in message
 
     def test_no_match_lists_what_there_is(self, tool):
         with pytest.raises(SystemExit) as exit_info:
@@ -513,7 +513,7 @@ class TestABoardThatExcludesNothing:
     """A board with no filter shows every item on the project, and its name is
     usually promising otherwise.
 
-    On the Zamboni project, GitHub's default view had been renamed `Backlog` in
+    On another team's project, GitHub's default view had been renamed `Backlog` in
     the web UI and never given the backlog filter, so closed work appeared there
     and in the scrum board's Done section at the same time. It was reported as a
     bug in `board show`, and `board show` was doing the one thing it promises:
@@ -650,7 +650,7 @@ class TestGithubFilter:
 
     @pytest.mark.parametrize("given", [
         "label:key:AGILE", "-status:Done", "no:sprint -status:Done",
-        "sprint:@current label:key:ZMBNI", "",
+        "sprint:@current label:key:WIDG", "",
     ])
     def test_everything_else_is_left_alone(self, tool, given):
         assert tool.github_filter(given) == given
