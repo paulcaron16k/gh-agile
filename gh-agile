@@ -3301,7 +3301,31 @@ def cmd_story(args) -> int:
     an issue created now and attached to its epic later is an orphan in every
     roll-up run in between, and nothing complains. POLICY.md §3.
     """
-    require_sprint_config(args._config, "creating a story")
+    return file_under_epic(args, "story")
+
+
+def cmd_bug(args) -> int:
+    """File a bug, under an epic if one is named, and set its fields (#252).
+
+    The same call as `story`, with one difference POLICY.md states: a bug "may
+    or may not have an epic", because bugs arrive without asking whether they
+    fit a plan. So `--epic` is optional and its absence is not an accident to
+    refuse -- where a story without one must say `none`.
+
+    It was the one type `ISSUE_TYPES` named and no command filed. A bug went in
+    as a story relabelled by hand, or as a plain `gh issue create` that `sync
+    --adopt` boards but never types, leaving `validate` to report it.
+    """
+    return file_under_epic(args, "bug")
+
+
+def file_under_epic(args, kind: str) -> int:
+    """`story create` and `bug create`: one issue, its parent epic, its fields.
+
+    `kind` is the type label it carries. A story's `--epic` is required, with
+    `none` the deliberate opt-out; a bug's is optional, so `None` stands alone.
+    """
+    require_sprint_config(args._config, f"creating a {kind}")
     require_key_for_prefix(args._config, getattr(args, "key", None))
     # **`--epic none` is an explicit opt-out, and a bare omission still refuses.**
     # Some teams file one-off and ad-hoc work, and refusing it pushes that work
@@ -3309,7 +3333,7 @@ def cmd_story(args) -> int:
     # great project management, and not this tool's decision to enforce. But an
     # orphan story is far more often an accident than an intention, so saying so
     # is required. POLICY.md §2.
-    orphan = str(args.epic).strip().casefold() == "none"
+    orphan = args.epic is None or str(args.epic).strip().casefold() == "none"
     # Resolved and read before the story exists, as `task` does its `--story`:
     # an issue number is never reused, so a mistyped parent must cost nothing.
     # This used to create the story first and look the epic up afterwards, so
@@ -3320,31 +3344,31 @@ def cmd_story(args) -> int:
     if not orphan:
         if not looks_like_issue_ref(str(args.epic).strip(), args._config):
             sys.exit(f"--epic {args.epic!r} names no epic: give its number, KEY-NUMBER or "
-                     f"URL, or `none`.\n  `--epic none` files a story that stands alone.")
+                     f"URL, or `none`.\n  `--epic none` files a {kind} that stands alone.")
         epic_repo, epic = parse_issue_ref(str(args.epic), args._config, args.repo)
         try:
             parent = json.loads(gh(["issue", "view", str(epic), "--repo", epic_repo,
                                     "--json", "id,labels"]))
         except SystemExit as exc:
             sys.exit(f"--epic {args.epic!r} could not be read: {exc}\n"
-                     f"  Nothing was created. `--epic none` files a story that stands "
+                     f"  Nothing was created. `--epic none` files a {kind} that stands "
                      f"alone.")
         parent_type = next((lb["name"][len("type:"):] for lb in parent.get("labels") or []
                             if lb["name"].startswith("type:")), None)
         if parent_type and parent_type != "epic":
-            sys.exit(f"{epic_repo}#{epic} is a {parent_type}, and a story belongs to an "
+            sys.exit(f"{epic_repo}#{epic} is a {parent_type}, and a {kind} belongs to an "
                      f"epic.\n  Nothing was created.")
     # Read and checked before anything is created: an issue number is never
     # reused, so a refused body or label must cost nothing.
     body, extras = create_body(args), extra_labels(getattr(args, "label", None))
-    labels = ["type:story"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
+    labels = [f"type:{kind}"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
     ensure_labels(args.repo, labels)
     number, node = create_issue(
         args.repo, args.title,
         body, labels + extras, create_issue_options(args),
     )
     title = apply_title_prefix(
-        args._config, args.repo, number, getattr(args, "key", None), "story", args.title
+        args._config, args.repo, number, getattr(args, "key", None), kind, args.title
     )
     url = f"https://github.com/{args.repo}/issues/{number}"
     # Announced as soon as it exists, for the same reason as `epic`: everything
@@ -3353,7 +3377,7 @@ def cmd_story(args) -> int:
     where = ("standing alone" if orphan else
              f"under epic #{epic}" if epic_repo == args.repo else
              f"under epic {epic_repo}#{epic}")
-    print(f"  story #{number} {where}: {title}")
+    print(f"  {kind} #{number} {where}: {title}")
     print(f"  {url}")
 
     if parent:
@@ -5907,14 +5931,14 @@ def show_board(args, view: dict, kind: str, typed_filter: str | None, *,
 #: What each work-item `list` selects, as a filter the board already understands.
 #: `None` is `issue list`: every work item on the board, whatever its type.
 TYPE_FILTERS = {"initiative": "label:type:initiative", "epic": "label:type:epic",
-                "story": "label:type:story", None: ""}
+                "story": "label:type:story", "bug": "label:type:bug", None: ""}
 
 #: `-s/--state`, as `gh issue list -s` takes it.
 STATE_FILTERS = {"open": "is:open", "closed": "is:closed", "all": ""}
 
 #: The heading each list prints, in place of a board's name.
 LIST_NAMES = {"initiative": "Initiatives", "epic": "Epics", "story": "Stories",
-              None: "Work items"}
+              "bug": "Bugs", None: "Work items"}
 
 
 def list_filter(args):
@@ -6220,7 +6244,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 CHILDREN = {"initiative": "epics", "epic": "stories", "story": "tasks"}
 
 #: The levels with a `view` of their own. `issue view` takes any of them.
-VIEWABLE = ("initiative", "epic", "story")
+VIEWABLE = ("initiative", "epic", "story", "bug")
 
 
 def _a(level: str) -> str:
@@ -9204,7 +9228,7 @@ IDENTIFIER_DESTS = {"initiative": "issue", "board": "name"}
 #: The top level, grouped as `gh --help` groups its own: the work-item groups,
 #: then the board's configuration, then the commands that are not a group.
 TOP_LEVEL_SECTIONS = (
-    ("WORK ITEM COMMANDS", ("initiative", "epic", "story", "task", "issue")),
+    ("WORK ITEM COMMANDS", ("initiative", "epic", "story", "bug", "task", "issue")),
     ("BOARD COMMANDS", ("board", "sprint", "project", "key")),
     ("GENERAL COMMANDS", ("init", "sync", "validate", "export")),
 )
@@ -9922,6 +9946,32 @@ default chosen for you.""",
     story.set_defaults(func=cmd_story, needs_repo=True)
     add_list(story_sub, "story", "stories")
     add_view(story_sub, "story", "one story")
+
+    bug_group = sub.add_parser("bug", help="Bugs: defects, under an epic or standing alone")
+    bug_sub = bug_group.add_subparsers(dest="bug_command", required=True)
+    bug = bug_sub.add_parser(
+        "create", kind=GENERAL, help="File a bug, under its epic if it has one, and set its fields",
+        epilog="""a bug and a story:
+  The same issue, typed `type:bug`, and one difference POLICY.md states: a bug
+  may or may not have an epic. Bugs arrive without asking whether they fit a
+  plan, so --epic is optional here, where a story must name one or say `none`.
+  Starting and finishing a bug is `issue move`, as for any work item.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_title(bug, "bug")
+    bug.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue in; defaults to the current clone")
+    bug.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
+    bug.add_argument("--epic", help=f"the epic it belongs to, if any: {ISSUE_REF_HELP}")
+    bug.add_argument("--points", type=float, help="Story Points, as `issue edit --points` "
+                                                  "writes them")
+    bug.add_argument("--priority", help="the Priority option: lowest, low, medium, high "
+                                        "or highest")
+    bug.add_argument("--intent", help="the ## Intent section: what is wrong, and how to see it; "
+                                      "_TBD_ if omitted")
+    bug.add_argument("--acceptance", help="the ## Acceptance section; _TBD_ if omitted")
+    add_create_flags(bug)
+    bug.set_defaults(func=cmd_bug, needs_repo=True)
+    add_list(bug_sub, "bug", "bugs")
+    add_view(bug_sub, "bug", "one bug")
 
     task_group = sub.add_parser(
         "task", help="Tasks: story-internal housekeeping, counted by nothing",
@@ -11023,7 +11073,7 @@ def apply_defaults(args) -> None:
         args.repo = repo
 
     # The key an issue is created with: explicit, else the first for this repo.
-    if hasattr(args, "key") and args.command in ("initiative", "epic", "story", "task"):
+    if hasattr(args, "key") and args.command in ("initiative", "epic", "story", "bug", "task"):
         available = keys_for_repo(config, args.repo) if args.repo else []
         if key:
             if available and key not in available:

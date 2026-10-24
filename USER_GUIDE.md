@@ -2017,6 +2017,15 @@ gh agile story create -t "Compute the reachable file set" --epic 31 \
   --acceptance "Every referenced file across all six metadata categories is returned."
 ```
 
+**A bug is filed the same way**, with one difference: its epic is optional, because
+bugs arrive without asking whether they fit a plan.
+
+```bash
+gh agile bug create -t "Export drops issues closed as not planned" --priority high \
+  --intent "github_issues has no row for an issue closed as not planned."
+gh agile bug create -t "Snapshot expiry deletes a live file" --epic 31 --priority highest
+```
+
 The story is created, attached to its epic as a sub-issue, added to the board and
 given its fields **in one call**. That matters: an issue created now and attached
 to its epic later is an orphan in every roll-up run in between, and nothing
@@ -2321,10 +2330,12 @@ and `issue` lists and views any of them:
 ```bash
 gh agile epic list                     # open epics on the board, by Status
 gh agile story list -s all -L 50       # every story, open or closed
+gh agile bug list                      # open bugs on the board, by Status
 gh agile initiative list
 gh agile issue list -S "sprint:@current"   # every work item in the current sprint
 gh agile epic view AGILE-200           # an epic: its stories, their Status, the rollup
 gh agile story view 202                # a story: its sprint, its tasks, every sprint: label
+gh agile bug view AGILE-234            # a bug, the same way
 gh agile initiative view hierarchy-visibility   # an initiative, by number or slug
 gh agile issue view 201 --json key,status,children   # any level, as JSON
 ```
