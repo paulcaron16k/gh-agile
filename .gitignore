@@ -7,3 +7,6 @@ exports/
 # `make merge-check` builds a throwaway worktree here and removes it again. Listed
 # so an interrupted run cannot leave a second copy of the repo staged for commit.
 .merge-check/
+
+# `make coverage` writes its data file here on every run.
+.coverage

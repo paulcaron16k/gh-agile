@@ -667,6 +667,7 @@ class TestALocalMergeCommit:
             hook.merged_pull_requests([(LOCAL_MERGE, [ORIG, UPSTREAM_MERGE])], REPO)
 
 
+@pytest.mark.runs("git")
 class TestAgainstRealGit:
     """The walk's two git questions, asked of a real repository holding the
     shape #233 is about: a pull that could not fast-forward."""
@@ -728,6 +729,7 @@ class TestTheHookScriptItself:
     def script(self, hook):
         return hook.POST_MERGE_HOOK
 
+    @pytest.mark.runs("sh")
     def test_it_is_valid_shell(self, hook, tmp_path):
         import subprocess
         path = tmp_path / "post-merge"

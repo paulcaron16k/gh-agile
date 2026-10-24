@@ -43,6 +43,12 @@ The three LIVE targets default to the sandbox and refuse anything else; see the 
 anyone invoking pytest directly. Never fall back to the system interpreter: a suite that runs against whatever is
 installed globally is testing a different environment on every machine.
 
+**`make test` is offline by construction, not by convention.** `offline` in `tests/conftest.py` is autouse and
+guards `subprocess.Popen`, the one place every route out passes — `gh()`, `graphql()`, any direct `["gh", ...]`
+— and refuses internet sockets. No program runs unless the test names it: `@pytest.mark.runs("git")`, and
+`git`'s network subcommands stay refused even then. Stub `gh`, `graphql` or `subprocess.run` instead. It exists
+because an opt-in `no_network` fixture went unused and #231's tests quietly ran real `gh api graphql` (#242).
+
 `ruff.toml` pins the rule set. Without it the rules are whatever the installed ruff defaults to, which changed
 mid-project — the same code passed with one version and reported thirty findings with the next.
 
