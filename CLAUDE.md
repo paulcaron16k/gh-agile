@@ -34,8 +34,9 @@ make hooks         # post-merge hook: a red main, and issues a merge left unfini
 **Green on a branch is not green on the merge.** Two pull requests cut from the same base, each passing
 alone, left `main` red the moment both landed — and the `push: main` run that caught it told nobody, so
 the next branch was cut from a broken `main`. Branch protection's *require branches to be up to date*
-would prevent it and needs GitHub Pro on a private repo (measured: 403). `merge-check` is the local form,
-`hooks` is the backstop. See `docs/lessons.md`.
+would prevent it, and is deliberately **not** used: this is one developer, and every such gate — required
+checks, required reviews, admin enforcement — would only be admin-bypassed (#262). `main`'s protection is
+deletion-only. So `merge-check` is the guard, by convention, and `hooks` is the backstop. See `docs/lessons.md`.
 
 The three LIVE targets default to the sandbox and refuse anything else; see the testing policy below.
 
