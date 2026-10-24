@@ -847,7 +847,7 @@ class TestTheColumnsAreCapped:
     def test_a_mail_domain_is_dropped(self, tool):
         """The domain is the same for everyone on the board and says nothing
         about who has the work."""
-        assert tool.render_who(who_row(["paul@experienceflow.com"])) == "paul"
+        assert tool.render_who(who_row(["alex@example.com"])) == "alex"
 
     def test_a_login_is_capped(self, tool):
         out = tool.render_who(who_row(["averylonggithublogin"]))

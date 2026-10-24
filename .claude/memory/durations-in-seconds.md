@@ -14,5 +14,5 @@ moment the unit changes, while every consumer keeps dividing by the old one.
 
 **How to apply:** `seconds_between`, never a `days_between`. Presentation is the consumer's problem.
 `cadence_days` survives as the profile's hand-authored spelling (a person writes 14) — the one
-exception, and the user may yet want it renamed. The Gold catalog's `*_hours` columns live outside
-this repo and still need changing.
+exception, and the user may yet want it renamed. The Gold model now lives in `agile-reports`
+and states its own units.

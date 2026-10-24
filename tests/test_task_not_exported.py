@@ -87,14 +87,7 @@ class TestTheContractSaysSo:
         assert not any("task" in i for i in ids)
 
 
-class TestTheBoundaryIsRecorded:
-    @staticmethod
-    def gold():
-        return (pathlib.Path(__file__).resolve().parent.parent
-                / "GOLD_MODEL.md").read_text()
-
-    def test_gold_model_records_it_as_a_boundary(self):
-        assert "Tasks: below the boundary" in self.gold()
-
-    def test_it_says_gold_gains_no_task_grain(self):
-        assert "no task grain" in self.gold()
+# `TestTheBoundaryIsRecorded` read GOLD_MODEL.md's "Tasks: below the boundary".
+# That document moved to agile-reports with the model (#248); the boundary as
+# this repository states it -- the catalog's exclusion and no task stream -- is
+# asserted above.

@@ -163,13 +163,13 @@ these is a manual web-UI step.
 **out of scope and closed as such** -- the day export must emit Parquet is the day it leaves the extension.
 Meltano and dlt already do GitHub ELT; this repo produces silver files and says what is in them. CSVs carry
 no schema, so that saying is `github_catalog.json` (`#92`) -- Singer/Meltano shape, and named `github_` not
-`agile_` because ExperienceFlowAI's Gold `agile_catalog.json` already exists outside this repo.
+`agile_` because `agile_*` is the Gold model's namespace, which lives in `agile-reports`.
 
 **`github_catalog.json` is the export contract**, in Singer/Meltano shape: every stream, every column,
 typed, nullable-or-not, keyed, with the replication method. A CSV carries no schema, so without it a
 loader guesses -- and an empty `time_to_first_review` read as `0` rather than null is the same class of
-error as `cycle_time_days` against `cycle_time_hours`. Not `agile_catalog.json`: that name is
-ExperienceFlowAI's **Gold** catalog, outside this repo. Two things it states that a type cannot: joined
+error as a duration read in the wrong unit. Not `agile_*`: that is the **Gold** model's namespace, in
+`agile-reports`. Two things it states that a type cannot: joined
 lists stay **strings** with a `;` separator, because promising an array means owning the escaping; and
 `github_events` declares **no replication key**, because the watermark filters the *issue* on
 `updated_at` and an event's `occurred_at` is not the field the window was applied to.
@@ -181,8 +181,8 @@ and the next person has no reason to know the file exists. A catalog that has dr
 because it is trusted.
 
 **Export: silver tables.** `github_issues`, `github_events`, `github_prs`, `github_project`, `github_boards`, `github_sprints`.
-Gold `agile_*` belongs to the ExperienceFlow model and is produced by a silver→gold transform in the IWS pipeline;
-nothing here writes an `agile_*` file. See `GOLD_MODEL.md`.
+Gold `agile_*` is a generic Agile metrics model, built from these files by a silver→gold transform, and both live
+in `agile-reports` (`GOLD_MODEL.md` there); nothing here writes an `agile_*` file.
 
 - **`event_hash` must be unique.** It covers `issue|kind|occurred|actor|previousStatus|status|detail`. Timestamps
   are per-second, and two status changes on one issue in the same second are ordinary — the earlier
@@ -288,7 +288,7 @@ Tidying it would clear every assignment on the board.
 | `docs/tasks.md` | The work breakdown for what is left, cross-referenced to board ids, **and the live state** — repositories, projects, keys, checkouts. **The board is the source of truth for status; that file carries method** — the order, and the gotcha that costs an afternoon |
 | `docs/lessons.md` | Findings that cost something to learn, with the measurement. Read before repeating an experiment |
 | `POLICY.md` | The conventions `validate` enforces |
-| `GOLD_MODEL.md` | The silver→gold boundary, and what this repo does not write |
+| `agile-reports`' `GOLD_MODEL.md` | The Gold model the export feeds, in the sibling repository — not here, and nothing here writes it |
 | `USER_GUIDE.md` | The published guide; `make check-guide` keeps it honest |
 | `README.md` | **The release policy lives there**, under *Versions, and what installing gets you*: `main` is the release, tags name builds and nothing installs from one, and consumers are told not to pin. Stated where a consumer reads rather than here (#197) |
 

@@ -124,7 +124,7 @@ surfaced as `gh label create` returning 403 — labels are REST.
 Do not over-read this. Those runs plausibly account for a few hundred REST calls,
 not five thousand, so **something else spends REST and it has not been
 identified**. What is established: the two budgets are separate, GraphQL is no
-longer the one that runs out first, and `CLAUDE.md`/`GOLD_MODEL.md` both still say
+longer the one that runs out first, and `CLAUDE.md` and `GOLD_MODEL.md` (since moved to `agile-reports`) both said
 the GraphQL budget is the binding constraint on this tool. That claim is now in
 question rather than known-wrong. Measuring it is one instrumented run away and
 should happen before either document is rewritten.

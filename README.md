@@ -399,7 +399,7 @@ A repository that is not the main one carries only `{"config_from": "owner/main-
 adds missing *options* to a single-select that already exists, never removing
 one — removing an option silently clears the field on every item holding it.
 
-| Field | Type | Gold model |
+| Field | Type | [Gold model](https://github.com/paulcaron16k/agile-reports/blob/main/GOLD_MODEL.md) |
 |---|---|---|
 | `Story Points` | number | `story_points` |
 | `Priority` | single-select — `lowest…highest` | `priority_id` |
@@ -685,17 +685,15 @@ status never reached Done.
 ## Export: silver tables, four grains
 
 **What is exported is silver.** `github_issues` and `github_events` are GitHub's
-facts under GitHub's names. The Gold `agile_*` tables belong to the
-ExperienceFlow model and are produced by a **silver → gold transform in the IWS
-Partner pipeline** — the place where `org_master_employees` exists to resolve a
-login into an `actor_id`. Nothing here writes an `agile_*` file, and the `github_`
-prefix is the reminder.
+facts under GitHub's names, for whatever model is built downstream of them.
+Nothing here writes an `agile_*` file, and the `github_` prefix is the reminder.
 
-The transform is not cosmetic. Of the Gold model's 58 `agile_issues` fields only
-two names match, and where they do the **units differ**: `cycle_time_days`
-against `cycle_time_hours`, a factor of 24 that corrupts a dashboard quietly
-rather than failing loudly. Events fare better — 14 of 22 — having been built to
-Gold's vocabulary. See [GOLD_MODEL.md](GOLD_MODEL.md).
+One such model is the **Gold Agile model** in
+[`agile-reports`](https://github.com/paulcaron16k/agile-reports/blob/main/GOLD_MODEL.md): a generic shape for Agile metrics, so a measure taken on
+GitHub can be set beside the same measure from another Agile tool, such as Jira.
+Getting there is a transform, not a rename — it renames, converts units (every
+duration here is integer seconds), resolves logins to people, and leaves what
+GitHub cannot supply null — and it lives there, not here.
 
 | Grain | Rows | Refresh |
 |---|---|---|
@@ -1013,9 +1011,10 @@ no job tests is a promise nothing keeps.**
 
 ## Mapping to the Gold Agile data model
 
-[GOLD_MODEL.md](GOLD_MODEL.md) maps every column onto ExperienceFlowAI's
-`agile_issues` and `agile_events`, so GitHub and Jira land in one shape. It also
-records the two things measurement turned up rather than documentation:
+[`agile-reports`' GOLD_MODEL.md](https://github.com/paulcaron16k/agile-reports/blob/main/GOLD_MODEL.md) maps the export onto a generic
+`agile_issues` and `agile_events`, so GitHub and other Agile tools, such as
+Jira, land in one shape. Two things measurement turned up, rather than
+documentation, shape what the export can carry:
 GitHub emits **no event for a Projects v2 custom field change** (only Status has
 one), and the timeline is **eventually consistent** — a transition can take a
 minute or more to become readable.
