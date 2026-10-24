@@ -2,7 +2,7 @@
 
 `move --close --not-planned` was the only close, and `--not-planned` without
 `--close` was parsed, accepted and dropped. `gh issue close -r "not planned" -c`
-is the spelling `gh` users already have -- the cleanup of ZMBNI-185 was exactly
+is the spelling `gh` users already have -- the cleanup of WIDG-185 was exactly
 that -- so it is the spelling here.
 
 **Nothing reaches Done without evidence.** `issue move` is where Done asks for
@@ -65,7 +65,7 @@ def parsed(tool, *argv):
     args = tool.build_parser().parse_args(list(argv))
     args.owner, args.project, args.repo = "o", 1, "o/r"
     args._config = {"sprint": {"cadence_days": 14},
-                    "keys": [{"key": "ZMBNI", "repo": "o/zamboni"}]}
+                    "keys": [{"key": "WIDG", "repo": "o/widgets"}]}
     return args
 
 
@@ -114,8 +114,8 @@ class TestCloseNotPlanned:
         tool.cmd_close(parsed(tool, "issue", "close", "7", "-r", "not planned"))
         assert board["labels"] == [True]
 
-    def test_the_zmbni_185_cleanup_is_one_command(self, tool, board):
-        tool.cmd_close(parsed(tool, "issue", "close", "ZMBNI-185",
+    def test_the_widg_185_cleanup_is_one_command(self, tool, board):
+        tool.cmd_close(parsed(tool, "issue", "close", "WIDG-185",
                               "-r", "not planned", "-c", "created by mistake"))
         assert board["closed"] == [(True, "created by mistake")]
 
@@ -180,8 +180,8 @@ class TestTheRetiredSpellings:
     @pytest.mark.parametrize("argv,suggested", [
         (["move", "185", "--status", "Done", "--not-planned", "--close"],
          "gh agile issue close 185 -r 'not planned'"),
-        (["move", "ZMBNI-34", "--status", "Done", "--close", "--evidence-file", "e.md"],
-         "gh agile issue close ZMBNI-34 --evidence-file e.md"),
+        (["move", "WIDG-34", "--status", "Done", "--close", "--evidence-file", "e.md"],
+         "gh agile issue close WIDG-34 --evidence-file e.md"),
         (["story", "create", "-t", "S", "--epic", "none", "--status", "In Progress"],
          "gh agile issue move <number> 'In Progress'"),
         (["story", "S", "--epic", "none", "--status=Blocked"],

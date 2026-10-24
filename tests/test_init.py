@@ -320,7 +320,7 @@ class TestTheCrossTeamBoard:
         assert self.names(tmp_path) == {"Sprint board", "Backlog", "Roadmap"}
 
     def test_several_keys_get_it(self, tool, run, tmp_path):
-        run(project=7, _config={"keys": [{"key": "ZMBNI", "repo": "o/zamboni"}]})
+        run(project=7, _config={"keys": [{"key": "WIDG", "repo": "o/widgets"}]})
         assert tool.CROSS_TEAM_BOARD["name"] in self.names(tmp_path)
         assert len(self.names(tmp_path)) == 4
 
@@ -341,7 +341,7 @@ class TestASecondKeySaysSo:
     @pytest.fixture
     def record(self, tool, tmp_path, capsys):
         def go(config):
-            args = argparse.Namespace(key="ZMBNI", repo="o/zamboni", name=None,
+            args = argparse.Namespace(key="WIDG", repo="o/widgets", name=None,
                                       project=None, owner="o", _config=config,
                                       config=str(tmp_path / "agile.json"))
             tool.cmd_key_add(args)

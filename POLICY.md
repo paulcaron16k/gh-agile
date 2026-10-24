@@ -62,7 +62,7 @@ ceremony this row exists to avoid. Add it when you have something to put in it.
 
 **Identifiers.** GitHub's issue number is the address; it is assigned in one
 sequence shared with pull requests, starts at 1, and cannot be namespaced or
-reserved. Where a project already has its own scheme — Zamboni's `ZMBNI-1817` —
+reserved. Where a project already has its own scheme — say `WIDG-1817` —
 that identifier stays **in the issue title**, because existing references in code
 and documentation resolve to it and `#7` never will.
 

@@ -1,6 +1,6 @@
 """`list` and `view` for every level, and `issue` for any of them. #202.
 
-`gh agile epic list` filed an epic called "list" (ZMBNI-185) because there was no
+`gh agile epic list` filed an epic called "list" (WIDG-185) because there was no
 `epic list` -- the one command a `gh` user would reach for first. Now there is,
 for each level, as `gh issue list` and `gh issue view` are.
 

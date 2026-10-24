@@ -1,6 +1,6 @@
 """AGILE-200: every retired spelling fails loudly, and names its replacement.
 
-`gh agile epic list` filed an epic called "list" (ZMBNI-185), because `epic`
+`gh agile epic list` filed an epic called "list" (WIDG-185), because `epic`
 took its first word as a title. The work-item types are now noun groups, and a
 title is `-t`, as `gh issue create -t` takes it (#202).
 
@@ -66,7 +66,7 @@ class TestTheOldTitleSpelling:
 
 
 class TestAVerbIsNeverATitle:
-    """The hint must not be ZMBNI-185 offered as advice."""
+    """The hint must not be WIDG-185 offered as advice."""
 
     @pytest.mark.parametrize("verb", ["edit", "close", "status", "delete"])
     def test_no_create_is_suggested(self, tool, monkeypatch, capsys, verb):
@@ -116,14 +116,14 @@ class TestTheCommandsThatMovedUnderIssue:
     keeps such verbs: under `issue`, the issue first."""
 
     @pytest.mark.parametrize("argv,suggested", [
-        (["move", "ZMBNI-34", "--status", "Done", "--evidence-file", "notes.md", "--close"],
-         "gh agile issue close ZMBNI-34 --evidence-file notes.md"),
+        (["move", "WIDG-34", "--status", "Done", "--evidence-file", "notes.md", "--close"],
+         "gh agile issue close WIDG-34 --evidence-file notes.md"),
         (["move", "12", "--status=In Progress"],
          "gh agile issue move 12 'In Progress'"),
         (["move", "--evidence", "some text", "12", "--status", "Done"],
          "gh agile issue move 12 Done --evidence 'some text'"),
-        (["set", "--issue", "ZMBNI-34", "--field", "Sprint", "--value", "@current"],
-         "gh agile issue edit ZMBNI-34 --field Sprint --value @current"),
+        (["set", "--issue", "WIDG-34", "--field", "Sprint", "--value", "@current"],
+         "gh agile issue edit WIDG-34 --field Sprint --value @current"),
         (["--project", "4", "fix", "--id", "26", "--dry-run"],
          "gh agile --project 4 issue reconcile 26 --dry-run"),
         (["set", "--issue", "12", "--field", "Story Points", "--number", "3"],
@@ -185,7 +185,7 @@ class TestTheBoardsDialect:
          "gh agile project edit --sprint-template 2-week"),
         (["project", "title-prefix", "--mode", "key", "--backfill", "--dry-run"],
          "gh agile project edit --title-prefix key --backfill --dry-run"),
-        (["key", "--key", "ZMBNI", "--name", "Z"], "gh agile key add ZMBNI --name Z"),
+        (["key", "--key", "WIDG", "--name", "Z"], "gh agile key add WIDG --name Z"),
         (["key"], "gh agile key list"),
         (["export", "--csv", "--out-dir", "x"], "gh agile export --format csv --out-dir x"),
         (["export", "--state", "w.json"], "gh agile export --state-file w.json"),

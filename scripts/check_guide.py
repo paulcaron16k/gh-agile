@@ -58,7 +58,7 @@ SAFE = {
 GLOBAL_FLAGS = {"--owner": True, "--project": True, "--config": True, "--help": False}
 
 #: Never executed, whatever SAFE says. Learned by running this script the first
-#: time: `key --key SPARK` (now `key add SPARK`) wrote a third key into the profile and
+#: time: `key --key PARTS` (now `key add PARTS`) wrote a third key into the profile and
 #: `export --out-dir exports/` created a directory. A checker with side effects
 #: is worse than no checker -- it makes the thing it checks wrong.
 #:

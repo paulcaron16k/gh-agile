@@ -78,8 +78,8 @@ class TestKeysRatherThanNumbers:
     def test_the_parents_own_key_label_wins(self, tool):
         """Explicit beats assumed, the same rule `issue_key` follows, so a parent
         and the issue it parents cannot disagree about its name."""
-        row = tool.parent_columns(parent(12, repo="o/one", keys=("ZMBNI",)), KEYS)
-        assert row["parent_key"] == "ZMBNI-12"
+        row = tool.parent_columns(parent(12, repo="o/one", keys=("WIDG",)), KEYS)
+        assert row["parent_key"] == "WIDG-12"
 
     def test_a_repository_with_no_key_falls_back_to_the_github_form(self, tool):
         """Which an integer column cannot hold at all."""

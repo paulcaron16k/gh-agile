@@ -20,7 +20,7 @@ import json
 
 import pytest
 
-CONFIG = {"keys": [{"key": "AGILE", "repo": "o/agile"}, {"key": "ZMBNI", "repo": "o/zamboni"}]}
+CONFIG = {"keys": [{"key": "AGILE", "repo": "o/agile"}, {"key": "WIDG", "repo": "o/widgets"}]}
 
 
 def subparsers(parser):
@@ -113,9 +113,9 @@ class TestShortFlagsAreGhs:
 class TestOneIssueGrammar:
     @pytest.mark.parametrize("text,want", [
         ("34", ("o/here", 34)),
-        ("ZMBNI-34", ("o/zamboni", 34)),
-        ("https://github.com/o/zamboni/issues/34", ("o/zamboni", 34)),
-        ("https://github.com/o/zamboni/issues/34#issuecomment-1", ("o/zamboni", 34)),
+        ("WIDG-34", ("o/widgets", 34)),
+        ("https://github.com/o/widgets/issues/34", ("o/widgets", 34)),
+        ("https://github.com/o/widgets/issues/34#issuecomment-1", ("o/widgets", 34)),
         ("https://ghe.example.com/team/repo/issues/9", ("team/repo", 9)),
         (" https://github.com/o/my-repo/issues/5 ", ("o/my-repo", 5)),
     ])
@@ -142,7 +142,7 @@ class TestOneIssueGrammar:
 def story(monkeypatch, tool, capsys):
     """`cmd_story` against a fake GitHub that knows a few epics."""
     record = {"viewed": [], "created": [], "linked": []}
-    known = {("o/agile", 9): "epic", ("o/zamboni", 40): "epic", ("o/agile", 12): "story"}
+    known = {("o/agile", 9): "epic", ("o/widgets", 40): "epic", ("o/agile", 12): "story"}
 
     def fake_gh(argv, **kwargs):
         if argv[:2] == ["issue", "view"]:
@@ -187,10 +187,10 @@ class TestStoryEpic:
         assert record["linked"] == [{"parent": "I_9", "child": "I_7"}]
 
     def test_an_epic_in_another_repository(self, story):
-        """Refused before #201 while `task --story ZMBNI-40` worked."""
-        record = story("ZMBNI-40")
-        assert record["viewed"] == [("o/zamboni", 40)]
-        assert "under epic o/zamboni#40" in record["out"]
+        """Refused before #201 while `task --story WIDG-40` worked."""
+        record = story("WIDG-40")
+        assert record["viewed"] == [("o/widgets", 40)]
+        assert "under epic o/widgets#40" in record["out"]
 
     def test_same_repository_reads_as_before(self, story):
         assert "under epic #9" in story("9")["out"]

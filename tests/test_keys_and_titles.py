@@ -6,8 +6,8 @@ import pytest
 
 PROFILE = {
     "keys": [
-        {"key": "ZMBNI", "repo": "o/Zamboni"},
-        {"key": "SPARK", "repo": "o/Zamboni"},
+        {"key": "WIDG", "repo": "o/widgets"},
+        {"key": "PARTS", "repo": "o/widgets"},
         {"key": "AGILE", "repo": "o/gh-agile"},
     ],
     "project": {"number": 4, "key": "AGILE"},
@@ -17,7 +17,7 @@ PROFILE = {
 class TestKeyFormat:
     """Jira's rules, plus one of ours that is load-bearing."""
 
-    @pytest.mark.parametrize("key", ["ZM", "ZMBNI", "AGILE", "A1", "PROJECT123"])
+    @pytest.mark.parametrize("key", ["ZM", "WIDG", "AGILE", "A1", "PROJECT123"])
     def test_legal_keys(self, tool, key):
         assert tool.key_problem(key) is None
 
@@ -34,7 +34,7 @@ class TestKeyFormat:
         assert tool.key_problem(key) is not None, because
 
     def test_hyphen_is_rejected_because_it_breaks_references(self, tool):
-        """`ZMBNI-34` is split on the last hyphen. A key containing one makes
+        """`WIDG-34` is split on the last hyphen. A key containing one makes
         every reference ambiguous, so this is not merely Jira convention."""
         assert tool.key_problem("MY-KEY") is not None
 
@@ -45,14 +45,14 @@ class TestKeyFormat:
 
 class TestIssueReferences:
     def test_key_number_resolves_to_its_repository(self, tool):
-        assert tool.parse_issue_ref("ZMBNI-34", PROFILE, None) == ("o/Zamboni", 34)
+        assert tool.parse_issue_ref("WIDG-34", PROFILE, None) == ("o/widgets", 34)
 
     def test_a_bare_number_uses_the_fallback_repository(self, tool):
         assert tool.parse_issue_ref("34", PROFILE, "o/gh-agile") == ("o/gh-agile", 34)
 
     def test_a_second_key_on_one_repo_resolves_to_the_same_repo(self, tool):
         """Mono-repo support: several keys may name one repository."""
-        assert tool.parse_issue_ref("SPARK-7", PROFILE, None)[0] == "o/Zamboni"
+        assert tool.parse_issue_ref("PARTS-7", PROFILE, None)[0] == "o/widgets"
 
     def test_an_unknown_key_is_refused(self, tool):
         with pytest.raises(SystemExit):
@@ -63,7 +63,7 @@ class TestProfileLookups:
     def test_keys_for_repo_preserves_profile_order(self, tool):
         """The order is the default: the first key for a repo is the one used
         when --key is not given."""
-        assert tool.keys_for_repo(PROFILE, "o/Zamboni") == ["ZMBNI", "SPARK"]
+        assert tool.keys_for_repo(PROFILE, "o/widgets") == ["WIDG", "PARTS"]
 
     def test_repo_for_key(self, tool):
         assert tool.repo_for_key(PROFILE, "AGILE") == "o/gh-agile"
@@ -81,11 +81,11 @@ class TestTitlePrefix:
 
     @pytest.mark.parametrize("mode,expected", [
         ("off", "Retention policy"),
-        ("key", "ZMBNI-34 Retention policy"),
-        ("key+type", "ZMBNI-34 Epic: Retention policy"),
+        ("key", "WIDG-34 Retention policy"),
+        ("key+type", "WIDG-34 Epic: Retention policy"),
     ])
     def test_each_mode(self, tool, mode, expected):
-        assert tool.prefixed_title(mode, "ZMBNI", 34, "epic", "Retention policy") == expected
+        assert tool.prefixed_title(mode, "WIDG", 34, "epic", "Retention policy") == expected
 
     def test_story_capitalises_its_own_type(self, tool):
         assert tool.prefixed_title("key+type", "Z", 1, "story", "T") == "Z-1 Story: T"

@@ -147,7 +147,7 @@ workflows that read it.
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `keys` | **ordered list** | yes | One entry per key: `{"key", "name", "repo"}`. **The order is the default** — the first entry for a repository is the key used when `--key` is not given |
-| `keys[].key` | string | yes | Short uppercase key, `[A-Z0-9]+`. No hyphen: the hyphen separates key from number in `ZMBNI-34` |
+| `keys[].key` | string | yes | Short uppercase key, `[A-Z0-9]+`. No hyphen: the hyphen separates key from number in `WIDG-34` |
 | `keys[].repo` | string | yes | `owner/name` the key applies to. Several keys may name the same repo — see Mono-repo support |
 | `keys[].name` | string | no | What that key is for, shown by `gh agile key list` |
 | `project.number` | integer | no | The board's **number**, not its node id — what `--project` takes. Written by `gh agile init`, and what every command defaults to |
@@ -160,16 +160,16 @@ workflows that read it.
 ```json
 {
   "keys": [
-    { "key": "ZMBNI", "name": "Zamboni Iceberg table maintainer", "repo": "paulcaron16k/Zamboni" },
-    { "key": "SPARK", "name": "Zamboni Spark maintainer",         "repo": "paulcaron16k/Zamboni" },
-    { "key": "TRINO", "name": "Zamboni Trino maintainer",         "repo": "paulcaron16k/Zamboni" },
-    { "key": "AGILE", "name": "GitHub Agile extension",           "repo": "paulcaron16k/gh-agile" }
+    { "key": "WIDG",  "name": "Widgets service",            "repo": "acme/widgets" },
+    { "key": "PARTS", "name": "Widgets parts maintainer",   "repo": "acme/widgets" },
+    { "key": "TOOLS", "name": "Widgets tooling maintainer", "repo": "acme/widgets" },
+    { "key": "AGILE", "name": "GitHub Agile extension",     "repo": "paulcaron16k/gh-agile" }
   ],
   "project": {
     "number": 5,
     "owner": "paulcaron16k",
-    "name": "Zamboni Iceberg table maintainer",
-    "key": "ZMBNI"
+    "name": "Widgets service",
+    "key": "WIDG"
   }
 }
 ```
@@ -201,20 +201,20 @@ are a per-repository sequence and a project may span repositories, so a
 project-level key would make `KEY-12` ambiguous the moment a second repository
 joined the board.
 
-A key gives the Jira equivalent of `{PROJECT_KEY}-{ISSUE_ID}`: **`ZMBNI-34`
+A key gives the Jira equivalent of `{PROJECT_KEY}-{ISSUE_ID}`: **`WIDG-34`
 identifies a repository and an issue in one string**, and is accepted anywhere
 an issue number is.
 
 ### How an issue's key is decided, and where it is stored
 
-**Explicitly, on the issue, as a label — `key:ZMBNI`.** Written at creation by
+**Explicitly, on the issue, as a label — `key:WIDG`.** Written at creation by
 `epic create` and `story create`, so it is recorded rather than inferred.
 
 GitHub Issue Fields would be the natural home and are unavailable:
 `createIssueField` requires an **Organization** owner and refuses a user
 account, the same limitation as Issue Types. A label is the next best carrier —
 it lives on the issue rather than the board, shows in the UI, survives removal
-from a project, and is filterable with `is:issue label:key:ZMBNI`.
+from a project, and is filterable with `is:issue label:key:WIDG`.
 
 On export, `issue_key` uses the `key:` label when present, and otherwise falls
 back to the **first** profile key for that issue's repository.
@@ -223,10 +223,10 @@ back to the **first** profile key for that issue's repository.
 
 A product in one repository with several services — which would be separate
 repos, or separate Jira projects with their own keys — can list **several keys
-against the same repo**. `--key SPARK` on creation labels the issue
-`key:SPARK`, and it exports as `SPARK-41`.
+against the same repo**. `--key PARTS` on creation labels the issue
+`key:PARTS`, and it exports as `PARTS-41`.
 
-The ids are not monotonic per key: `ZMBNI-34` may be followed by `SPARK-35`,
+The ids are not monotonic per key: `WIDG-34` may be followed by `PARTS-35`,
 because all keys share one repository sequence. That is a cosmetic difference
 from Jira and a real advantage — the numbers **cannot collide**, where Jira's
 per-project sequences require the key to disambiguate them.
@@ -238,7 +238,7 @@ carries, where most issues are filed. Supporting repositories carry a pointer
 and nothing else:
 
 ```json
-{ "config_from": "paulcaron16k/Zamboni" }
+{ "config_from": "acme/widgets" }
 ```
 
 Resolved through the API, so it works for private repositories on the token `gh`
@@ -265,7 +265,7 @@ exits rather than guessing.
 | **Project** | `--project`, else `project.number` from the profile. Absent both, an error |
 | **Repository** | `--repo`, else the repo named by `--key`, else the repository you are running in |
 | **Key for a new issue** | `--key` — which must be listed for that repo — else the **first** key listed for that repo |
-| **Issue** | `34` uses the repository resolved above; `ZMBNI-34` names it itself, and so does a URL, `https://github.com/owner/name/issues/34` — then `--repo`/`--key` are not needed. The same three spellings work wherever an issue is named, the parent flags `--epic`, `--story` and `--initiative` included |
+| **Issue** | `34` uses the repository resolved above; `WIDG-34` names it itself, and so does a URL, `https://github.com/owner/name/issues/34` — then `--repo`/`--key` are not needed. The same three spellings work wherever an issue is named, the parent flags `--epic`, `--story` and `--initiative` included |
 
 `--owner`, `--project` and `--config` may go before the subcommand or after it:
 `gh agile --project 5 board list` and `gh agile board list --project 5` are the
@@ -314,21 +314,21 @@ need to be checked in.
 ```bash
 # The board, its key, and the sprint cadence -- all three at creation, then its
 # fields, labels and boards. Idempotent -- run it again after editing a --spec.
-gh agile init -t "Zamboni Iceberg table maintainer" --key ZMBNI --sprint-template 2-week
+gh agile init -t "Widgets service" --key WIDG --sprint-template 2-week
 
 # Further keys, for a mono-repo holding several components.
-gh agile key add SPARK --repo paulcaron16k/Zamboni --name "Zamboni Spark maintainer"
+gh agile key add PARTS --repo acme/widgets --name "Widgets parts maintainer"
 gh agile key list
 ```
 
 After this, `--project` and `--repo` are unnecessary in the same repository.
 
 A key is removed with `key delete`, which refuses while any issue still carries
-`key:SPARK` and says how many do -- the label is how every board, `validate` and
+`key:PARTS` and says how many do -- the label is how every board, `validate` and
 the export decide whose an issue is:
 
 ```bash
-gh agile key delete SPARK
+gh agile key delete PARTS
 ```
 
 `init` creates five fields. `Status` already exists with three options and
@@ -366,7 +366,7 @@ disagree.
 ```mermaid
 flowchart LR
     subgraph repos["1 · Repositories — issues are created and numbered here"]
-        RZ["<b>Zamboni</b> · key ZMBNI<br/>ZMBNI-1817, ZMBNI-1818 …"]
+        RZ["<b>widgets</b> · key WIDG<br/>WIDG-1817, WIDG-1818 …"]
         RA["<b>gh-agile</b> · key AGILE<br/>AGILE-36, AGILE-37 …"]
     end
 
@@ -376,7 +376,7 @@ flowchart LR
 
     subgraph boards["3 · Boards — views of that project, each filtered"]
         BE["<b>Engineering</b> · kanban<br/>-status:Done<br/><i>everything in flight, both repos</i>"]
-        BZ["<b>Team ZMBNI</b> · scrum<br/>sprint:@current<br/>label:key:ZMBNI"]
+        BZ["<b>Team WIDG</b> · scrum<br/>sprint:@current<br/>label:key:WIDG"]
         BA["<b>Team AGILE</b> · scrum<br/>sprint:@current<br/>label:key:AGILE"]
         BB["<b>Backlog</b> · table<br/>no:sprint -status:Done<br/><i>not yet committed</i>"]
     end
@@ -405,14 +405,14 @@ flowchart LR
 
 Reading it:
 
-- **Issues are born in a repository** and numbered there. `ZMBNI-1817` and
+- **Issues are born in a repository** and numbered there. `WIDG-1817` and
   `AGILE-36` cannot collide, because each key belongs to one repository.
 - **`sync` puts them on the project.** Nothing arrives by matching a filter —
   see [Why `sync` exists](#why-sync-exists-a-project-is-a-collection-not-a-filter).
 - **The project holds the planning state.** One `Status`, one `Sprint`, one
   estimate per item, wherever it is shown.
-- **A team board is one filter away from the engineering board.** `Team ZMBNI`
-  is `label:key:ZMBNI` plus the current sprint; `Engineering` drops both
+- **A team board is one filter away from the engineering board.** `Team WIDG`
+  is `label:key:WIDG` plus the current sprint; `Engineering` drops both
   clauses. A story appearing on both is the *same* story, not a copy.
 
 **Add a third repository** by giving it a key and running `sync`: it flows into
@@ -767,7 +767,7 @@ the filter term 'assignee' is not one this tool can evaluate.
     status   an item's Status field, e.g. status:Done or -status:Done
 ```
 
-Dropping `label:key:ZMBNI` would render one team's board full of another team's
+Dropping `label:key:WIDG` would render one team's board full of another team's
 work, and it would look entirely correct. Everything the four board types
 generate is in that list; a filter edited in the web UI beyond it stops the
 command rather than misleading it.
@@ -852,7 +852,7 @@ choice Jira makes at board creation, which is why the command names it the same
 way:
 
 ```bash
-gh agile board create "Team SPARK"  --type scrum  --filter "label:key:SPARK" --save
+gh agile board create "Team PARTS"  --type scrum  --filter "label:key:PARTS" --save
 gh agile board create "Engineering" --type kanban --save
 gh agile board create "Backlog"     --type backlog --save
 gh agile board list
@@ -860,7 +860,7 @@ gh agile board list
 ```
   #  name         type     layout  filter
   ─  ───────────  ───────  ──────  ──────────────────────────────
-  2  Team SPARK   scrum    board   sprint:@current label:key:SPARK
+  2  Team PARTS   scrum    board   sprint:@current label:key:PARTS
   3  Engineering  kanban   board   -status:Done
   4  Backlog      backlog  table   no:sprint -status:Done
 ```
@@ -880,7 +880,7 @@ type plus one clause. `--save` records the board in the profile, after which
 than hand-built.
 
 Across repositories the team filter is `repo:owner/name`; in a mono-repo it is
-`label:key:SPARK`, which is what the key label exists for.
+`label:key:PARTS`, which is what the key label exists for.
 
 **One honest limitation: WIP limits are not automatable.** A kanban board's
 column limits are not exposed in the API — `ProjectV2View` has no limit field of
@@ -1019,7 +1019,7 @@ both back. To track a fork's issues with this tool:
    checkbox, did not appear until the page was reloaded.
 3. Confirm **Auto-close issues with merged linked pull requests** is on. It was
    on when it appeared, on the fork whose Issues had just been enabled, and on
-   in the fork this tool already tracks (`target-ducklake-definite`) — the same
+   in a fork this tool already tracks — the same
    default as an ordinary repository. It is the one setting here the API cannot
    read, so look rather than assume: in `gh-agile` it had been turned off by
    hand.
@@ -1236,10 +1236,10 @@ That is what the rest of the design already assumes. `keys` is an ordered *list*
 `issue_key` puts the key on the repository rather than the project, because a
 project may span repositories and `KEY-12` would be ambiguous the moment a second
 one joined; and a scrum board slices one team's work out of the shared board with
-`label:key:ZMBNI`. Watch the count: a profile listing two repositories that
+`label:key:WIDG`. Watch the count: a profile listing two repositories that
 reports `across 1 repo(s)` is filling half a board.
 
-`--repo` narrows to one, and `--key ZMBNI` narrows to that key's repository —
+`--repo` narrows to one, and `--key WIDG` narrows to that key's repository —
 both more explicit than the clone you happen to be standing in, which is why
 neither is guessed for this command.
 
@@ -1375,7 +1375,7 @@ matters. Instead, in order of preference:
    HOME=/home/you
    LOG=/home/you/.local/state/gh-agile/sync.log
 
-   0 7 * * *  cd /srv/projects/Zamboni && gh-agile sync >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
+   0 7 * * *  cd /srv/projects/widgets && gh-agile sync >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
    ```
 
    **`cd` into the repository first, and it is not optional.** The profile is
@@ -1435,7 +1435,7 @@ matters. Instead, in order of preference:
 
    ```bash
    env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin \
-     sh -c 'cd /srv/projects/Zamboni && gh-agile sync --dry-run'
+     sh -c 'cd /srv/projects/widgets && gh-agile sync --dry-run'
    ```
 
    `env -i` clears the environment, so this fails the same way cron would
@@ -1534,7 +1534,7 @@ which clears every assignment, since iterations carry no id. The cost of getting
 this wrong is paid later, and by someone else.
 
 ```bash
-gh agile init -t "…" --key ZMBNI --sprint-template 2-week
+gh agile init -t "…" --key WIDG --sprint-template 2-week
 gh agile project edit --sprint-template 2-week        # an existing project
 ```
 
@@ -1569,7 +1569,7 @@ Configuration lives in the profile:
 
 The template is `str.format`, not Jinja: this tool has no dependencies and
 Jinja2 would be its only one. The default follows Jira's `<Board> Sprint <n>`,
-so a board keyed `ZMBNI` produces `ZMBNI Sprint 3`.
+so a board keyed `WIDG` produces `WIDG Sprint 3`.
 
 **Changing the template is safe, and affects only sprints created afterwards.**
 Existing sprints keep their names because nothing rewrites them: `ensure`
@@ -2369,17 +2369,17 @@ never read as one.
 
 GitHub calls the issue above `#31`. Nobody in the standup can say "thirty-one"
 and have it mean anything outside that one repository — and on a board spanning
-two repositories, there are two `#31`s. Jira teams say "ZMBNI-34" and everyone
+two repositories, there are two `#31`s. Jira teams say "WIDG-34" and everyone
 knows what is meant, including which project it belongs to.
 
 `project.issue_title_prefix` writes that identifier into the title itself. Three
 values, `off` by default:
 
-| Mode | Title of epic 34, key ZMBNI | What it buys |
+| Mode | Title of epic 34, key WIDG | What it buys |
 |---|---|---|
 | `off` | `Retention policy` | GitHub's own convention, untouched |
-| `key` | `ZMBNI-34 Retention policy` | An identifier people can say out loud |
-| `key+type` | `ZMBNI-34 Epic: Retention policy` | Epics stand out from stories in a flat list |
+| `key` | `WIDG-34 Retention policy` | An identifier people can say out loud |
+| `key+type` | `WIDG-34 Epic: Retention policy` | Epics stand out from stories in a flat list |
 
 ```bash
 gh agile project edit --title-prefix key
@@ -2394,7 +2394,7 @@ only from here on.
 ### Bringing the issues that predate it into line: `--backfill`
 
 Left there, a board that adopts the setting is permanently mixed — everything
-before it bare, everything after carrying `KEY-<n>`. On the Zamboni board the day
+before it bare, everything after carrying `KEY-<n>`. On another team's board the day
 it was taken up, 18 of 19 issues predated it. So when you *do* want the sweep, ask
 for it:
 
@@ -2403,7 +2403,7 @@ gh agile project edit --title-prefix key --backfill --dry-run
 gh agile project edit --title-prefix key --backfill
 ```
 ```
-  issue title prefix: key  e.g. ZMBNI-34 Retention policy
+  issue title prefix: key  e.g. WIDG-34 Retention policy
   would write to .github/agile.json
     would rename paulcaron16k/gh-agile#9: AGILE-9 Read side: export and validate
     would rename paulcaron16k/gh-agile#10: AGILE-10 Write side: setup, epic, story
@@ -2418,8 +2418,8 @@ That is the difference between this and the shell loop everyone writes first:
 skip on "this one has a prefix" and a re-run double-prefixes, because the prefix
 it found may carry a *different* issue's number. Here the result depends on the
 issue, not on how many times the command has run — so a second run reports
-`renamed 0`, and an issue mistakenly carrying `ZMBNI-12` is corrected to
-`ZMBNI-34` rather than becoming `ZMBNI-34 ZMBNI-12 …`.
+`renamed 0`, and an issue mistakenly carrying `WIDG-12` is corrected to
+`WIDG-34` rather than becoming `WIDG-34 WIDG-12 …`.
 
 **`--title-prefix off --backfill` strips only what this tool would have written** —
 `KEY-12 ` and an optional `Epic: `. A title that merely begins that way,
@@ -2442,7 +2442,7 @@ and then renamed — two API calls, and a `RenamedTitleEvent` in the timeline th
 than a defect, but it is the reason `off` is the default.
 
 It also makes a third copy of something already recorded twice: the key is on
-the `key:ZMBNI` label and in the export's `issue_key` column, and the type is on
+the `key:WIDG` label and in the export's `issue_key` column, and the type is on
 `type:epic`. Move a component to a different key later and every title it
 created is wrong, because a title is a string and not a reference.
 
@@ -2507,7 +2507,7 @@ person type the same command.
 ```bash
 gh agile story create -t "Compute the reachable file set" --epic 31 \
   --points 5 --priority highest --intent "..." --acceptance "..."
-#   story #32 under epic #31    (labelled key:ZMBNI, so it is ZMBNI-32)
+#   story #32 under epic #31    (labelled key:WIDG, so it is WIDG-32)
 ```
 
 **At stand-up — what is yours, what is waiting, what nobody has**
@@ -2520,12 +2520,12 @@ gh agile issue status
 
 Assigned to you
   In Progress
-    ZMBNI-32  Compute the reachable file set
+    WIDG-32  Compute the reachable file set
   In Review
-    ZMBNI-29  Expire snapshots past retention
+    WIDG-29  Expire snapshots past retention
 
 In Review, not yours
-  ZMBNI-30  Remove orphan files  (a-teammate)
+  WIDG-30  Remove orphan files  (a-teammate)
 
 In the sprint, and nobody holds it
   There is nothing in the sprint without an assignee
@@ -2542,7 +2542,7 @@ as; a teammate with read access to the project sees the same board, through
 **3 — start work; the sprint and the assignee follow**
 
 ```bash
-gh agile issue move ZMBNI-32 "In Progress"
+gh agile issue move WIDG-32 "In Progress"
 #   #32 Status = In Progress
 #   #32 Sprint = Sprint 1 (current)
 #   #32 assigned to @me
@@ -2565,7 +2565,7 @@ reported and not touched, because silently adding yourself to another person's
 work would make the convention argue with the team:
 
 ```bash
-gh agile issue move ZMBNI-32 "In Progress"
+gh agile issue move WIDG-32 "In Progress"
 #   #32 already assigned to a-teammate; left alone
 ```
 
@@ -2574,8 +2574,8 @@ yourself, as `gh issue edit` takes it — assigns whatever the status and whoeve
 already holds it:
 
 ```bash
-gh agile issue move ZMBNI-32 "In Progress" --add-assignee a-teammate
-gh agile issue move ZMBNI-32 Blocked --add-assignee @me
+gh agile issue move WIDG-32 "In Progress" --add-assignee a-teammate
+gh agile issue move WIDG-32 Blocked --add-assignee @me
 ```
 
 It is `--add-assignee`, not `--assignee`, because it adds: two people on one
@@ -2584,7 +2584,7 @@ issue is expressible, and nobody is silently dropped.
 To place it in a different sprint, say so:
 
 ```bash
-gh agile issue edit ZMBNI-32 --field Sprint --value "Sprint 2"
+gh agile issue edit WIDG-32 --field Sprint --value "Sprint 2"
 ```
 
 `issue edit` is `gh issue edit` with the board added. It takes several issues,
@@ -2594,13 +2594,13 @@ same field flags `story create` takes, so a value is written the same way
 whichever command writes it:
 
 ```bash
-gh agile issue edit ZMBNI-32 ZMBNI-33 --points 3
-gh agile issue edit ZMBNI-32 -t "Compute the reachable set, once"
-#   #32 title = ZMBNI-32 Compute the reachable set, once
+gh agile issue edit WIDG-32 WIDG-33 --points 3
+gh agile issue edit WIDG-32 -t "Compute the reachable set, once"
+#   #32 title = WIDG-32 Compute the reachable set, once
 ```
 
 `-t` keeps the prefix: on a profile with `issue_title_prefix` set, plain `gh
-issue edit -t` drops `ZMBNI-32 `, and this rebuilds it. Every refusal is
+issue edit -t` drops `WIDG-32 `, and this rebuilds it. Every refusal is
 checked on every issue named before anything is written to any of them.
 
 **A story may stand alone, if you say so.** `--epic none` files one with no
@@ -2608,7 +2608,7 @@ parent:
 
 ```bash
 gh agile story create -t "Bump the pinned ruff" --epic none --intent "..." --acceptance "..."
-#   story #58 standing alone: ZMBNI-58 Bump the pinned ruff
+#   story #58 standing alone: WIDG-58 Bump the pinned ruff
 ```
 
 Omitting `--epic` altogether still refuses, and that asymmetry is deliberate: an
@@ -2639,14 +2639,14 @@ something is Blocked is worth having: a blocked issue with no note of what
 blocks it is the least useful state on a board.
 
 ```bash
-gh agile issue move ZMBNI-32 Blocked --evidence "waiting on the Iceberg 1.6 bump"
+gh agile issue move WIDG-32 Blocked --evidence "waiting on the Iceberg 1.6 bump"
 #   #32 body updated: Evidence
 #   #32 Status = Blocked
 ```
 
 The flag used to be read *only* on the status that demands it, so text passed to
 any other was parsed, accepted and thrown away — no warning, exit 0, and the
-status change succeeded. Four issues on the Zamboni board went to `In Review`
+status change succeeded. Four issues on another team's board went to `In Review`
 with substantial evidence and kept empty `## Evidence` sections; it was noticed
 days later, by which time the text existed nowhere else.
 
@@ -2658,8 +2658,8 @@ not only the flags, so an issue whose `## Evidence` was written earlier closes
 with nothing supplied at all:
 
 ```bash
-gh agile issue move ZMBNI-32 "In Review" --evidence "the probe table, the numbers"
-gh agile issue close ZMBNI-32
+gh agile issue move WIDG-32 "In Review" --evidence "the probe table, the numbers"
+gh agile issue close WIDG-32
 #   #32 Evidence already in the body
 #   #32 Status = Done
 ```
@@ -2690,7 +2690,7 @@ the issue body does not carry what a move to Done requires:
 **5 — fixed, with evidence**
 
 ```bash
-gh agile issue close ZMBNI-32 --evidence-file evidence.md
+gh agile issue close WIDG-32 --evidence-file evidence.md
 ```
 
 where `evidence.md` is:
@@ -2729,8 +2729,8 @@ reads as live work to every board. `-c` leaves a closing comment, as in
 `Todo` unless `--status` names another:
 
 ```bash
-gh agile issue close ZMBNI-185 -r "not planned" -c "created by mistake"
-gh agile issue reopen ZMBNI-32 --status "In Progress"
+gh agile issue close WIDG-185 -r "not planned" -c "created by mistake"
+gh agile issue reopen WIDG-32 --status "In Progress"
 ```
 
 **The close happens before the status is written, and that ordering is load-bearing.**
@@ -2753,7 +2753,7 @@ If the reason comes back wrong anyway, it says so on stderr rather than printing
 **6 — close the epic**
 
 ```bash
-gh agile issue close ZMBNI-31 --evidence-file epic-evidence.md
+gh agile issue close WIDG-31 --evidence-file epic-evidence.md
 ```
 
 Close it when its stories are closed. `gh agile validate` reports an epic marked
@@ -2775,7 +2775,7 @@ property that makes it drivable. A working sequence:
 
 ```bash
 # No --project or --repo: both come from the profile and the working directory.
-# $ISSUE may be 32 or ZMBNI-32.
+# $ISSUE may be 32 or WIDG-32.
 
 # Pick up the work, and say so on the board. The current sprint follows, and so
 # does the assignee -- an issue nobody holds is claimed for whoever `gh` is
@@ -2884,7 +2884,7 @@ PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
 HOME=/home/you
 LOG=/home/you/.local/state/gh-agile/export.log
 
-0 6 * * *  cd /srv/projects/Zamboni && gh-agile export --grain issues,events --format csv --out-dir /srv/exports >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
+0 6 * * *  cd /srv/projects/widgets && gh-agile export --grain issues,events --format csv --out-dir /srv/exports >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
 ```
 
 `CRON_TZ=UTC` because cron otherwise uses the system timezone, and a job named
@@ -2920,8 +2920,8 @@ Analysis lives in a companion script, which declares its dependency with PEP 723
 inline metadata so `uv` fetches it into an ephemeral environment:
 
 ```bash
-uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI compact
-uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI metrics
+uv run scripts/agile_analytics.py --dir /srv/exports/WIDG compact
+uv run scripts/agile_analytics.py --dir /srv/exports/WIDG metrics
 ```
 
 `compact` folds the daily files into one per month, keeping the newest row per
@@ -2939,7 +2939,7 @@ export deliberately creates collapses:
 across:
 
 ```bash
-uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI metrics \
+uv run scripts/agile_analytics.py --dir /srv/exports/WIDG metrics \
     --time-range quarterly --context key
 ```
 ```
@@ -2984,7 +2984,7 @@ memory. Either would work; this is less code.
 Monthly, after that day's export:
 
 ```cron
-0 7 1 * *  cd /srv/projects/Zamboni && uv run scripts/agile_analytics.py --dir /srv/exports/ZMBNI compact >> $LOG 2>&1
+0 7 1 * *  cd /srv/projects/widgets && uv run scripts/agile_analytics.py --dir /srv/exports/WIDG compact >> $LOG 2>&1
 ```
 
 ## 10. Who did the work

@@ -107,8 +107,8 @@ def asked(monkeypatch, tool):
 
 class TestBoardItemFor:
     """The item is asked of the issue (#231). GitHub can leave a new item out of
-    `projectV2.items` for an hour or more while it exists -- Zamboni #228 was
-    refused as "not on project 23" from 71 minutes to ~10.5 hours."""
+    `projectV2.items` for an hour or more while it exists -- another team's #228 was
+    refused as "not on project N" from 71 minutes to ~10.5 hours."""
 
     def test_an_item_the_board_list_leaves_out_is_found(self, tool, asked):
         assert tool.board_item_for("owner", 1, "owner/repo-a", 12) == {"id": "PVTI_a"}
@@ -173,7 +173,7 @@ class TestTheSprintComesFromTheItem:
 
     def test_move_and_the_label_never_read_the_whole_board_for_it(self):
         """`sprint_assignments` pages `projectV2.items`, the list that left
-        Zamboni #228 out. It stays for the iteration repairs, which need the
+        another team's #228 out. It stays for the iteration repairs, which need the
         whole board; one issue's move does not."""
         source = (pathlib.Path(__file__).resolve().parent.parent / "gh-agile").read_text()
         for name in ("def cmd_move", "def record_sprint_label"):

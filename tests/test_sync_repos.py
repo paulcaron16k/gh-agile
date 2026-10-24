@@ -25,7 +25,7 @@ PROFILE = {
     "project": {"number": 4, "owner": "o", "key": "AGILE"},
     "keys": [
         {"key": "AGILE", "repo": "o/gh-agile"},
-        {"key": "ZMBNI", "repo": "o/zamboni"},
+        {"key": "WIDG", "repo": "o/widgets"},
     ],
 }
 
@@ -65,12 +65,12 @@ class TestSyncDefaultsToEveryRepository:
         assert defaults(["sync"]).repo is None
 
     def test_an_explicit_repo_still_narrows(self, tool, defaults):
-        assert defaults(["sync"], repo="o/zamboni").repo == "o/zamboni"
+        assert defaults(["sync"], repo="o/widgets").repo == "o/widgets"
 
     def test_a_key_still_resolves_to_its_repository(self, tool, defaults):
-        """`--key ZMBNI` names a repository on its own, and that is more explicit
+        """`--key WIDG` names a repository on its own, and that is more explicit
         than the clone you happen to be standing in."""
-        assert defaults(["sync"], key="ZMBNI").repo == "o/zamboni"
+        assert defaults(["sync"], key="WIDG").repo == "o/widgets"
 
     def test_it_does_not_need_to_be_run_inside_a_clone(self, tool, defaults):
         """Filling a shared board is not a thing you do from one of its
@@ -79,7 +79,7 @@ class TestSyncDefaultsToEveryRepository:
 
 
 class TestEveryOtherCommandKeepsItsWorkingDirectoryDefault:
-    @pytest.mark.parametrize("argv", [EPIC, STORY, SET, MOVE, FIX, ["key", "add", "ZMBNI"]])
+    @pytest.mark.parametrize("argv", [EPIC, STORY, SET, MOVE, FIX, ["key", "add", "WIDG"]])
     def test_the_clone_is_the_right_guess(self, tool, defaults, argv):
         assert defaults(argv).repo == "o/gh-agile"
 
@@ -100,7 +100,7 @@ class TestTheSweep:
             listed = {
                 "o/gh-agile": [{"number": 1, "title": "an AGILE issue", "url": "u",
                                 "state": "OPEN", "labels": []}],
-                "o/zamboni": [{"number": 2, "title": "a ZMBNI issue", "url": "u",
+                "o/widgets": [{"number": 2, "title": "a WIDG issue", "url": "u",
                                "state": "OPEN", "labels": []}],
             }
 
@@ -120,12 +120,12 @@ class TestTheSweep:
 
     def test_an_unset_repo_sweeps_every_repository_in_the_profile(self, tool, sync):
         out = sync(repo=None)
-        assert "o/gh-agile#1" in out and "o/zamboni#2" in out
+        assert "o/gh-agile#1" in out and "o/widgets#2" in out
         assert "across 2 repo(s)" in out
 
     def test_an_explicit_repo_sweeps_only_that_one(self, tool, sync):
-        out = sync(repo="o/zamboni")
-        assert "o/zamboni#2" in out and "o/gh-agile#1" not in out
+        out = sync(repo="o/widgets")
+        assert "o/widgets#2" in out and "o/gh-agile#1" not in out
         assert "across 1 repo(s)" in out
 
     def test_a_repository_listed_twice_is_swept_once(self, tool, sync):

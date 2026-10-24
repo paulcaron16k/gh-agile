@@ -8,7 +8,7 @@
     "data, and `tests/test_export_catalog.py` fails when it drifts from what the",
     "export actually produces.",
     "",
-    "Singer/Meltano catalog shape, because that is what the consumers already read.",
+    "Singer catalog shape, because that is what ELT loaders already read.",
     "",
     "NOT the `agile_*` tables. Those are the GOLD model, a generic Agile metrics",
     "model built from this export, defined in the agile-reports repository's",

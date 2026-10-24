@@ -62,8 +62,7 @@ While the race above was being fixed, every auto-close setting was disabled. One
 the *repository* setting *Auto-close issues with merged linked pull requests* (Settings → General →
 Issues), which closes an issue when a pull request saying `Closes #n` merges. That one never raced
 anything — a merge happens before anybody runs `issue move ... Done` — and it is **on by default**:
-measured on `agile-reports`, on repositories created since, and on the fork
-`paulcaron16k/target-ducklake-definite`.
+measured on `agile-reports`, on repositories created since, and on a fork this tool tracks.
 
 With it off, `#232`, `#235` and `#236` each merged and left their issue open. `closingIssuesReferences`
 named the issue every time, so the pull request side looked right; the issue side did not, and the
@@ -140,14 +139,14 @@ stays uncached for the iteration repairs, whose heal reads the board straight
 after the restore writes it.)
 
 **`projectV2.items` can leave out an item that exists, for hours.** Measured on
-Zamboni #228, 2026-10-22: the item was created three seconds after the issue,
-and `node(id:)` and `issue.projectItems` both returned it on project 23 with
+another team's #228, 2026-10-22: the item was created three seconds after the issue,
+and `node(id:)` and `issue.projectItems` both returned it on its project with
 `isArchived: false` -- while paging every one of the project's items did not
 find it and `items.totalCount` read 139 where it should have read 140. It
 appeared between 71 minutes and about 10.5 hours later. A field written through
 the item id in the meantime stuck. So the board list is right for "what is on
 this board" eventually, and wrong for "where is this issue's item" now: `issue
-edit`, `move` and `close` refused #228 as "not on project 23" the whole time,
+edit`, `move` and `close` refused #228 as "not on project N" the whole time,
 while `issue reconcile`, which asked the issue, was right throughout. Since
 #231 every one-issue command asks the issue.
 
