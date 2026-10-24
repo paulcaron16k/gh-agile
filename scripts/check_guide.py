@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that USER_GUIDE.md's commands are real, and that the safe ones run.
+"""Check that USER_GUIDE.md's and README.md's commands are real, and that the safe ones run.
 
 Three defects reached the published guide before this existed, every one of
 them found by hand-running a command that had already been written down: a raw
@@ -31,6 +31,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GUIDE = ROOT / "USER_GUIDE.md"
+#: The front page: the first commands anybody copies (#253). Checked as the guide
+#: is -- every command exists, and the safe ones run -- but the coverage rule,
+#: that every command is documented somewhere, is the guide's alone.
+README = ROOT / "README.md"
 TOOL = ROOT / "gh-agile"
 
 #: Executed for real. Everything else is checked for existence only.
@@ -83,11 +87,11 @@ CRON_ENV = {
 }
 
 
-def documented_commands() -> list[tuple[int, str]]:
+def documented_commands(doc: Path = GUIDE) -> list[tuple[int, str]]:
     """`gh agile ...` lines from fenced blocks, joined across backslashes."""
     out, lineno, buffer, start = [], 0, "", 0
     in_block = False
-    for lineno, raw in enumerate(GUIDE.read_text().splitlines(), 1):
+    for lineno, raw in enumerate(doc.read_text().splitlines(), 1):
         stripped = raw.strip()
         if stripped.startswith("```"):
             in_block = not in_block
@@ -347,11 +351,17 @@ def main() -> int:
     if not commands:
         sys.exit("no commands found in USER_GUIDE.md; the extraction stopped matching")
 
+    readme = documented_commands(README)
+    if not readme:
+        sys.exit("no commands found in README.md; the extraction stopped matching")
+
     problems, ran, skipped = coverage_problems(commands), 0, {}
-    for line, command in commands:
+    every = ([(GUIDE.name, line, command) for line, command in commands]
+             + [(README.name, line, command) for line, command in readme])
+    for doc, line, command in every:
         issues = check(command)
         for issue in issues:
-            problems.append(f"USER_GUIDE.md:{line}: {issue}")
+            problems.append(f"{doc}:{line}: {issue}")
         if issues:
             continue
         ok, note = run_safe(command)
@@ -369,10 +379,11 @@ def main() -> int:
         finding = f"  -- {note}" if ok and "problem(s) across" in note else ""
         print(f"  [{status}] {command[:72]}{finding}")
         if not ok:
-            problems.append(f"USER_GUIDE.md:{line}: {command[:60]} -> {note}")
+            problems.append(f"{doc}:{line}: {command[:60]} -> {note}")
 
     covered = len(parser_leaves()) - len(UNDOCUMENTED_OK)
-    print(f"\n  {len(commands)} documented command(s): {ran} executed in a cron-like "
+    print(f"\n  {len(every)} documented command(s), {len(readme)} of them in README.md: "
+          f"{ran} executed in a cron-like "
           f"environment, {sum(len(v) for v in skipped.values())} checked but not run")
     print(f"  {covered} command(s) require documenting; "
           f"{len(UNDOCUMENTED_OK)} exempt, with a reason each")
