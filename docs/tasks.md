@@ -179,7 +179,7 @@ Two loose ends remain, one inside this repo and one outside it.
 | id | title | description | status |
 |---|---|---|---|
 | WBS-4.1 | Decide `cadence_days` | The last `_days` name in the repo. Deliberate — it is hand-authored config, a person writes `14`, and the suffix stops at the file's edge — but the rule was stated as "no exceptions", so whether it stays is the owner's call | `blocked` on owner |
-| WBS-4.2 | Rename the Gold catalog's `*_hours` | `GOLD_MODEL.md` is already fixed. The authoritative `agile_data_model.md` and `agile_catalog.json` live **outside this repo** and must change too, or the silver→gold transform reintroduces the unit. Related: `#12` | `todo` |
+| WBS-4.2 | Rename the Gold catalog's `*_hours` | **Moved to `agile-reports`** with `GOLD_MODEL.md` (REPORTS-3, AGILE-248). The model there now defines its own fields and says silver durations are integer seconds, so the unit is that repository's to keep. Related: `#12` | `todo` |
 
 WBS-4.2 is the one that actually breaks something. A convention enforced on one side of a transform and
 not the other is not a convention.
@@ -192,7 +192,7 @@ Listed so that "not in the WBS" does not read as "not needed".
 
 | id | title | description | status |
 |---|---|---|---|
-| WBS-5.1 | Synthesise custom-field history | **Moved out of this repository, 2026-09-08.** GitHub emits a timeline event for `Status` and for nothing else, so points / sprint / priority history has to come from **diffing scheduled exports** — a transform over silver, not an extraction from GitHub, and `GOLD_MODEL.md` puts `agile_*` outside this repo. It also wants a query engine, and the extension is standard-library-only permanently. `scripts/agile_analytics.py` is the home. `#24` closed as not planned. **The requirement survives the move and is time-sensitive: the export cadence is a data-model decision, not an ops one, and it cannot be retrofitted — the snapshots nobody took do not exist** | `decided` |
+| WBS-5.1 | Synthesise custom-field history | **Moved out of this repository, 2026-09-08.** GitHub emits a timeline event for `Status` and for nothing else, so points / sprint / priority history has to come from **diffing scheduled exports** — a transform over silver, not an extraction from GitHub, and the Gold model (`agile-reports`) puts `agile_*` outside this repo. It also wants a query engine, and the extension is standard-library-only permanently. `scripts/agile_analytics.py` is the home. `#24` closed as not planned. **The requirement survives the move and is time-sensitive: the export cadence is a data-model decision, not an ops one, and it cannot be retrofitted — the snapshots nobody took do not exist** | `decided` |
 | WBS-5.2 | Export PRs, reviews and comments as events | `#37`. No diff hunks, no patches — events only. **Stays here**: it extends `github_events`, which is silver and this tool's own table, and it needs `gh`, the pager, the `event_hash` rule and the watermark. A separate tool would re-implement all of that to append rows to a table this repository already writes | `todo` |
 
 ---

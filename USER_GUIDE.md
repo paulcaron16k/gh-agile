@@ -4,8 +4,8 @@ Setting up a board, and the commands for a real day's work — including the one
 that takes an epic from created to closed. Written so a person can follow it and
 an agent can run it on a developer's behalf.
 
-The *rules* are in [POLICY.md](POLICY.md); the *data mapping* is in
-[GOLD_MODEL.md](GOLD_MODEL.md). This is the *how*.
+The *rules* are in [POLICY.md](POLICY.md); the *data mapping* onto a generic
+Agile metrics model is `agile-reports`' [GOLD_MODEL.md](https://github.com/paulcaron16k/agile-reports/blob/main/GOLD_MODEL.md). This is the *how*.
 
 **Which version you are running.** A `gh` script extension is a clone of the
 default branch: `gh extension install paulcaron16k/gh-agile` clones `main`,
@@ -2809,7 +2809,7 @@ Two rules worth encoding in whatever drives it:
 
 Three grains, because they answer different questions and cannot share a file:
 
-| Grain | One row per | Gold table |
+| Grain | One row per | [Gold](https://github.com/paulcaron16k/agile-reports/blob/main/GOLD_MODEL.md) table |
 |---|---|---|
 | `issues` | work item, every custom field flattened, joined to its status history | `agile_issues` |
 | `events` | thing that happened — status change, assignment, label, close, reopen, and a pull request's opened / reviewed / commented / merged | `agile_events` |

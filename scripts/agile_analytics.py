@@ -6,10 +6,10 @@
 """Compact daily GitHub exports into monthly files, and compute Agile metrics.
 
 Reads `github_issues_*.csv` and `github_events_*.csv` -- the **silver** tables,
-GitHub's facts under GitHub's names. The Gold `agile_*` tables belong to the
-ExperienceFlow model and are produced by a silver -> gold transform in the IWS
-pipeline, where `org_master_employees` exists to resolve a login into an
-`actor_id`. Nothing here writes an `agile_*` file.
+GitHub's facts under GitHub's names. The Gold `agile_*` tables are a generic
+Agile metrics model, built from these files by a silver -> gold transform that
+resolves logins to people; both are defined in the agile-reports repository's
+GOLD_MODEL.md. Nothing here writes an `agile_*` file.
 
 **Why this is not part of `gh-agile`.** `gh extension install` clones the
 repository and installs nothing -- there is no dependency step for a script

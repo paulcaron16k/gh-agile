@@ -23,7 +23,7 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-DOCS = ["README.md", "USER_GUIDE.md", "POLICY.md", "GOLD_MODEL.md"]
+DOCS = ["README.md", "USER_GUIDE.md", "POLICY.md"]
 
 #: A block is a profile if it carries one of these. `keys` alone is too loose --
 #: the export catalog talks about keys too.

@@ -97,22 +97,11 @@ class TestTheThreeThingsATypeCannotSay:
         assert "leaf" in described
 
 
-class TestGoldAgrees:
-    @staticmethod
-    @pytest.fixture(scope="class")
-    def gold():
-        return flowing((ROOT / "GOLD_MODEL.md").read_text())
-
-    def test_it_says_where_container_progress_belongs(self, gold):
-        assert "Container progress is silver's, not Gold's" in gold
-
-    def test_and_why_gold_does_not_copy_the_pair(self, gold):
-        """Two definitions of one number disagree the first time an issue closes
-        between two exports."""
-        assert "second definition" in gold
-
-    def test_it_warns_against_treating_it_as_transitive(self, gold):
-        assert "must not do is treat `sub_issues_done` as transitive" in gold
+# `TestGoldAgrees` checked GOLD_MODEL.md's side of this: progress is aggregated
+# in Gold rather than copied, and never summed across levels. That document
+# moved to the agile-reports repository with the model (#248), so the Gold side
+# is asserted there; what this repository says -- the catalog's columns above --
+# is still asserted here.
 
 
 class TestNothingElseChanged:
