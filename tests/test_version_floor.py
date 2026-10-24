@@ -14,6 +14,9 @@ Three places have to agree:
     ruff.toml    target-version = "py310"
     ci.yml       matrix: '3.10' … '3.13'
 
+and a fourth says so to a reader: the README's Python badge (#246), which is
+static and so drifts unless something holds it.
+
 **These parse the files as text, on purpose.** `tomllib` arrived in 3.11, there is
 no YAML parser in the standard library, and this suite runs under the floor
 interpreter in CI -- so a test *of* the floor may not use a parser that postdates
@@ -106,6 +109,33 @@ class TestTheThreeAgree:
             f"the CI matrix {[spell(v) for v in matrix]} skips a release between "
             f"{spell(matrix[0])} and {spell(matrix[-1])}."
         )
+
+
+def readme_badge_versions() -> list[tuple[int, int]]:
+    """The versions the README's Python badge names: `python-3.10%20%7C%203.11...`."""
+    for line in (ROOT / "README.md").read_text().splitlines():
+        if line.startswith("[![Python]("):
+            label = line.split("/badge/python-", 1)[1].rsplit("-", 1)[0]
+            out = []
+            for part in label.split("%20%7C%20"):
+                major, minor = part.split(".")
+                out.append((int(major), int(minor)))
+            return out
+    raise AssertionError("README.md carries no Python badge")
+
+
+class TestTheBadgeSaysTheSame:
+    """A static badge is a fourth copy of the matrix, and a copy nothing checks is
+    the one that goes stale (#246)."""
+
+    def test_the_badge_names_exactly_the_matrix(self):
+        badge, matrix = readme_badge_versions(), ci_matrix_versions()
+        assert badge == matrix, (
+            f"the README's Python badge says {[spell(v) for v in badge]} and the CI "
+            f"matrix runs {[spell(v) for v in matrix]}.")
+
+    def test_its_lowest_is_the_floor(self, tool):
+        assert min(readme_badge_versions()) == tool.RUNTIME_FLOOR
 
 
 class TestWhenToLookAgain:
