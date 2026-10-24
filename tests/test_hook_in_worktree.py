@@ -20,7 +20,10 @@ import subprocess
 
 import pytest
 
-pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+#: Every test here builds and asks a real repository, which is the point: the
+#: bug was in what git answers from a worktree. Local only (#242).
+pytestmark = [pytest.mark.skipif(shutil.which("git") is None, reason="needs git"),
+              pytest.mark.runs("git")]
 
 
 def git(cwd, *argv) -> str:

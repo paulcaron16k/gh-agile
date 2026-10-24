@@ -124,6 +124,7 @@ class TestEveryReadCommand:
         assert code == 0 and out.out.startswith("[")
 
     @pytest.mark.skipif(shutil.which("jq") is None, reason="needs jq")
+    @pytest.mark.runs("jq")
     def test_jq(self, tool, run, argv, is_list):
         code, out = run(argv, "-q", "type")
         assert code == 0
@@ -168,6 +169,7 @@ class TestJq:
         assert "jq" in str(caught.value) and "jqlang.org" in str(caught.value)
 
     @pytest.mark.skipif(shutil.which("jq") is None, reason="needs jq")
+    @pytest.mark.runs("jq")
     def test_strings_come_out_raw_as_gh_prints_them(self, tool, run):
         _code, out = run(["key", "list"], "--json", "key", "-q", ".[].key")
         assert out.out == "AGILE\n"
