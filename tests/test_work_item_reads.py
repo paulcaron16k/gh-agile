@@ -191,6 +191,7 @@ class TestCmdList:
         (["epic", "list"], "label:type:epic is:open"),
         (["story", "list", "-s", "closed"], "label:type:story is:closed"),
         (["initiative", "list", "-s", "all"], "label:type:initiative"),
+        (["bug", "list"], "label:type:bug is:open"),
         (["issue", "list"], "is:open"),
     ])
     def test_each_level_is_a_filter_the_board_understands(self, tool, listed, argv, expected):

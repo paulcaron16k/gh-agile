@@ -83,7 +83,7 @@ class TestEveryCommandIsDeclared:
         targeted = {" ".join(path) for path, _t, parser in leaves(tool)
                     if parser.command_kind == tool.TARGETED}
         assert {"issue view", "issue move", "issue edit", "issue close", "issue reopen",
-                "issue reconcile", "epic view", "story view", "initiative view",
+                "issue reconcile", "epic view", "story view", "bug view", "initiative view",
                 "initiative reconcile", "board view", "sprint view"} == targeted
 
 

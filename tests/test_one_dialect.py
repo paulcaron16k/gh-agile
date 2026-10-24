@@ -29,7 +29,7 @@ def every_parser(parser, path=()):
                 yield from every_parser(child, (*path, name))
 
 
-GROUPS = {"initiative", "epic", "story", "task", "issue", "board", "sprint", "project",
+GROUPS = {"initiative", "epic", "story", "bug", "task", "issue", "board", "sprint", "project",
           "key"}
 
 
