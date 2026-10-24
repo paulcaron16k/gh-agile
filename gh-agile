@@ -71,8 +71,8 @@ Also, because Jira has them and their absence is felt
     `Done` and open ones are not, everything carries a `type:` label.
 
 **Incremental export with a watermark**, for feeding another system on a
-    schedule. Files are named `agile_issues_<ISO8601 basic>.csv`, which sorts
-    lexicographically, and the watermark is pulled *back* by an overlap because
+    schedule. Files are named `github_<table>_<ISO8601 basic>.csv` -- silver,
+    GitHub's facts under GitHub's names -- which sorts lexicographically, and the watermark is pulled *back* by an overlap because
     the timeline is eventually consistent — a duplicate row is free, a hole is
     not.
 
@@ -7871,7 +7871,7 @@ def cmd_export(args) -> int:
 
     if args.out_dir:
         # One directory per project key, so several projects can export into one
-        # tree without colliding: exports/WIDG/agile_issues_....csv
+        # tree without colliding: exports/WIDG/github_issues_....csv
         directory = pathlib.Path(args.out_dir)
         project_key = (args._config.get("project") or {}).get("key")
         if project_key and directory.name != project_key:
@@ -10445,7 +10445,12 @@ No --status, and --field Status is refused: Status changes through
     )
     export.add_argument("--no-state", dest="state_file", action="store_const", const=None,
                         help="do not read or write a watermark; always a full export")
-    export.add_argument("--out-dir", help="write agile_issues_<ISO8601>.<ext> here instead of stdout")
+    # Named for what the loop below writes (#256). It said `agile_issues_*` for
+    # long after the silver tables became `github_*`, pointing a loader's file
+    # glob at a name that never appears -- and at the Gold model's namespace.
+    export.add_argument("--out-dir", help="write one github_<table>_<ISO8601>.<ext> per table "
+                                          "here, under a directory named for the project key, "
+                                          "instead of stdout")
     export.add_argument("--overlap-seconds", type=int, default=DEFAULT_OVERLAP_SECONDS,
                         help="how far back the next run re-reads (default %(default)s)")
     export.add_argument(
