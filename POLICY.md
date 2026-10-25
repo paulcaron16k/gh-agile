@@ -56,7 +56,7 @@ ceremony this row exists to avoid. Add it when you have something to put in it.
 
 | **Bug** | An issue labelled `type:bug`; may or may not have an epic | Bugs arrive without asking whether they fit a plan |
 | **Sprint** | Project **iteration** field named `Sprint`, named `0004 W38-2026` — number, ISO week, year. **Never renamed**: the iteration configuration has no per-sprint id, so any write replaces it wholesale and clears every item's `Sprint` value board-wide. A rename buys a cosmetic change and costs a reconstruction | The one field GitHub genuinely provides for this. `gh project field-create` cannot make one — its `--data-type` accepts only TEXT, SINGLE_SELECT, DATE and NUMBER — so `init` creates it through the GraphQL mutation |
-| **Status** | Project single-select: `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` | Deliberately five. Every extra column is a state someone must decide between. GitHub ships three; `init` adds the other two, because `blocked_hours` and `review_hours` are computed from time spent in them |
+| **Status** | Project single-select: `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` | Deliberately five. Every extra column is a state someone must decide between. GitHub ships three; `init` adds the other two, because `blocked_time` and `review_time` are computed from time spent in them |
 | **Estimate** | Project number field `Story Points` | Number, not select, so it can be summed. Named for the Gold model's `story_points`, so the export column needs no translation |
 | **Traceability** | Project text field `FR`, free text | Carries the requirement id where one exists |
 

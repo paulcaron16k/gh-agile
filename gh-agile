@@ -1402,7 +1402,7 @@ DEFAULT_SPEC = {
         # mutation does, which is why setup does not go through the CLI for it.
         {"name": "Sprint", "type": "ITERATION"},
         # Status exists on every new project with three options. The two the
-        # policy adds are not decoration: blocked_hours and review_hours are
+        # policy adds are not decoration: blocked_time and review_time are
         # computed from time spent in them, so without the options those Gold
         # columns can never be anything but null.
         {"name": "Status", "type": "SINGLE_SELECT", "options": list(STATUSES)},
@@ -9824,6 +9824,8 @@ project fields created:
   FR            text                              requirement traceability
   Sprint        iteration                         Gold sprint_id; via GraphQL, gh cannot
   Status        single-select  Todo..Done         Gold state_id; two options added to GitHub's three
+  Start date    date                              where the roadmap places an item
+  Target date   date                              where the roadmap ends it
 
 It refuses what the rest of the tool refuses. A key must match Jira's rules, a
 cadence is a decision, and the title prefix is written into every issue title --

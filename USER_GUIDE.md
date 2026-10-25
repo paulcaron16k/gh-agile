@@ -21,8 +21,8 @@ To say what you are running — and the first thing to paste into a bug report:
 gh agile --version
 ```
 
-> `gh-agile v0.3.0-2-ge160178  (main)`
-> `python 3.14.7  (floor 3.10+), /usr/local/bin/python3`
+> `gh-agile v0.4.0-48-gc903b28  (main)`
+> `python 3.13.2  (floor 3.10+), /usr/local/bin/python3`
 > `profile: .github/agile.json`
 
 Three facts, and each has cost somebody an afternoon. The **build**, derived from
@@ -60,7 +60,7 @@ gh agile --project 4 init --key AGILE --sprint-template 2-week   # adopt an exis
   label 'type:epic' created
   ...
 
-  Two things the API cannot do, so they are yours in the web UI:
+  Project automation. The API can read these and cannot write them, so they are yours:
     https://github.com/users/you/projects/7/workflows
 
     [off] enable    Item added to project
@@ -249,7 +249,7 @@ pointer to a pointer is a loop waiting to happen, so the tool ignores
 Resolution order, first match wins: `.github/agile.json` → `agile.json` →
 `.gh_agile.json`.
 
-For consisency we recommend always store this file in `.github/agile.json`.
+For consistency, we recommend always storing this file in `.github/agile.json`.
 
 ### CLI defaults
 
@@ -1118,7 +1118,7 @@ own words rather than leaving a stray `gh` error to stand in for it, and the
 commonest cause is the ordinary one:
 
 > `gh-agile: the post-merge check did not finish, so not everything was checked.`
-> `gh agile: error: argument command: invalid choice: 'unfinished'`
+> `gh agile: argument <command>: invalid choice: 'unfinished' (choose from ...)`
 > `If that says the command is unknown, this clone's gh-agile is older than`
 > `its hook:  gh extension upgrade agile`
 
@@ -1185,9 +1185,9 @@ It is read-only, silent when the check ran and found nothing, and **exits 0 on
 every path** — no `gh`, no network, no board, a fresh clone with no `ORIG_HEAD`. A
 hook that can stop you pulling is a hook people delete.
 
-It does not restate what a finished issue looks like: it asks `gh agile validate
---id`, whose exit code is 1 when it found something. A second copy of that rule
-is one that can disagree with the first.
+It does not restate what a finished issue looks like: it runs `validate`'s own
+checks on each issue the merge closed. A second copy of that rule is one that can
+disagree with the first.
 
 **`Auto-close issue` is the one to actively avoid.** It is the mirror image and it
 races this tool: `issue close ISSUE -r "not planned"` sets Status first, the
@@ -1564,12 +1564,13 @@ Configuration lives in the profile:
 | `start_day` | `"monday"` | Weekday new sprints begin on |
 | `ahead` | `2` | Future sprints `ensure` keeps |
 | `autocreate` | `true` | Whether `issue move` may create one as a fallback |
-| `name_template` | `"{key} Sprint {n}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
+| `name_template` | `"{n:04d} W{iso_week}-{year}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
 | `record_label` | `true` | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes |
 
 The template is `str.format`, not Jinja: this tool has no dependencies and
-Jinja2 would be its only one. The default follows Jira's `<Board> Sprint <n>`,
-so a board keyed `WIDG` produces `WIDG Sprint 3`.
+Jinja2 would be its only one. The default produces `0004 W38-2026`; for Jira's
+`<Board> Sprint <n>`, set `"{key} Sprint {n}"`, which on a board keyed `WIDG`
+produces `WIDG Sprint 3`.
 
 **Changing the template is safe, and affects only sprints created afterwards.**
 Existing sprints keep their names because nothing rewrites them: `ensure`
@@ -2818,13 +2819,14 @@ Two rules worth encoding in whatever drives it:
 
 ## 9. Exporting issues, events and pull requests
 
-Three grains, because they answer different questions and cannot share a file:
+Four grains, because they answer different questions and cannot share a file:
 
 | Grain | One row per | [Gold](https://github.com/paulcaron16k/agile-reports/blob/main/GOLD_MODEL.md) table |
 |---|---|---|
 | `issues` | work item, every custom field flattened, joined to its status history | `agile_issues` |
 | `events` | thing that happened — status change, assignment, label, close, reopen, and a pull request's opened / reviewed / commented / merged | `agile_events` |
 | `prs` | pull request: size, review round-trips, and the issues it closes | — |
+| `master` | the configuration — the project, its boards and its sprints, as `github_project`, `github_boards` and `github_sprints`; always a full refresh | — |
 
 ```bash
 gh agile export --grain issues,events --format csv --out-dir exports/
@@ -2874,7 +2876,7 @@ a line of source.
 
 **Events cost no extra API calls.** The expensive part of an issue export is the
 timeline query, one per issue, and it already runs to produce the history
-columns — `started_at`, `done_at`, `cycle_time_days`. The event grain is that
+columns — `started_at`, `done_at`, `cycle_time`. The event grain is that
 same data reshaped.
 
 **Output goes under the project key**, so several projects can export into one
@@ -2954,14 +2956,15 @@ uv run scripts/agile_analytics.py --dir /srv/exports/WIDG metrics \
     --time-range quarterly --context key
 ```
 ```
-  context                    2025-Q3    2025-Q4    2026-Q1    2026-Q2  2026-Q3 in-progress
-  throughput                       0          0          0          0                   14
-  points_done                    0.0        0.0        0.0        0.0                 54.0
-  created                          0          0          0          0                   24
-  cycle_time_median                                                                    0.0
-  lead_time_median                                                                    0.45
-  carryover                        0          0          0          0                    1
-  AGILE - throughput               0          0          0          0                   14
+  context                                   2025-Q4             2026-Q1             2026-Q2             2026-Q3 2026-Q4 in-progress
+  ---------------------------------------------------------------------------------------------------------------------------------
+  throughput                                      0                   0                   0                  79                  35
+  points_done                                   0.0                 0.0                 0.0               122.0                 0.0
+  created                                         0                   0                   0                  95                  41
+  cycle_time_median                                                                                        2582                1701
+  lead_time_median                                                                                        86852               37999
+  carryover                                       0                   0                   0                   5                   1
+  AGILE - throughput                              0                   0                   0                  79                  34
   …
 ```
 
@@ -2970,8 +2973,8 @@ uv run scripts/agile_analytics.py --dir /srv/exports/WIDG metrics \
 | `throughput` | items reaching Done |
 | `points_done` | story points completed |
 | `created` | items created |
-| `cycle_time_median` | median days *In Progress* → *Done* |
-| `lead_time_median` | median days on the board → *Done* |
+| `cycle_time_median` | median seconds *In Progress* → *Done* |
+| `lead_time_median` | median seconds on the board → *Done* |
 | `carryover` | started but not finished |
 
 `--time-range quarterly|monthly|yearly`, four complete periods plus the one in
