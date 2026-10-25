@@ -254,4 +254,7 @@ class TestTheNextReleasesRows:
                 / "docs" / "release-next.md").read_text()
         rows = [line for line in note.splitlines()
                 if line.startswith("| ") and not line.startswith("| Was ")]
-        assert rows == [f"| {was} | {now} |" for was, now, _a, _e in tool.RETIRED_NEXT]
+        # The *Stage* column is the README's deprecation policy (AGILE-264):
+        # every row here already fails at parsing, which is stage 2.
+        assert rows == [f"| {was} | {now} | Retired |"
+                        for was, now, _a, _e in tool.RETIRED_NEXT]

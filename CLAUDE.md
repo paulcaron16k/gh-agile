@@ -60,7 +60,7 @@ issues enabled, its own board (project `#19`), its own profile with key `TEST` a
 
 This exists because live-repo testing did real damage: a `key:TEST` label applied to all 26 `gh-agile` issues, ~13
 throwaway issues created and deleted leaving permanent holes in the issue-number sequence, 11 scratch projects, and
-two export files deleted. `gh-agile` is near alpha with issue tracking now load-bearing, and other teams' boards
+two export files deleted. `gh-agile` is in beta with issue tracking load-bearing, and other teams' boards
 run on this tool too. Neither is a test fixture.
 
 Order of escalation: **offline tests → agile-test → gh-agile.** Another team's repository is never an escalation
@@ -237,8 +237,10 @@ Tidying it would clear every assignment on the board.
   every subcommand `kind=GENERAL` or `kind=TARGETED, identifier=...` — the one declaration files it in `--help`
   *and* gives it the identifier as its first positional, and `tests/test_help_sections.py` walks the parser and
   fails on anything undeclared. Descriptions are capitalised with no full stop. No flag means two things, none is
-  accepted abbreviated, and a `list` into a pipe prints tab-separated rows with no header. A spelling retired
-  goes in `RETIRED_TABLE` with a runnable example, and fails at parsing — never reinterpreted.
+  accepted abbreviated, and a `list` into a pipe prints tab-separated rows with no header. A rename follows
+  README's *Deprecation policy*, stated there and not here; a deprecated spelling runs exactly what it ran,
+  and a retired one goes in `RETIRED_TABLE` with a runnable example and fails at parsing — never
+  reinterpreted as something else.
 - **Every duration is an integer count of seconds, and no column name carries a unit suffix.** No `_days`, no
   `_hours`, no exceptions. In days, cycle times reported `0.0` and a median of `0.0` was published as a
   measurement; the same work reads 165, 181, 17, 76, 561 seconds. `cadence_days` is the profile's hand-authored

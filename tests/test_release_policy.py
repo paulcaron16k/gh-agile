@@ -51,8 +51,19 @@ class TestTheDecisionIsWhereAConsumerReads:
 
     def test_it_states_the_stability(self, readme):
         """The claim that used to live only in CLAUDE.md, where a consumer
-        never looks."""
-        assert "near alpha" in readme
+        never looks. Beta since AGILE-264, and the badge says the same."""
+        assert "**Status: beta.**" in readme
+        assert "status-beta-" in readme
+        assert "alpha" not in readme.lower()
+
+    def test_it_states_how_a_spelling_is_retired(self, readme):
+        """Beta's one promise (AGILE-264): a rename warns before it breaks."""
+        policy = readme.split("### Deprecation policy\n", 1)[1].split("\n## ", 1)[0]
+        for stage in ("**Deprecated.**", "**Retired.**", "**Removed.**"):
+            assert stage in policy
+        assert "warns on stderr" in policy
+        assert "What changed spelling" in policy
+        assert "github_catalog.json" in policy and "agile.json" in policy
 
     def test_it_names_what_is_treated_as_a_contract(self, readme):
         """*No compatibility promise* is not the same as *nothing is stable*,
@@ -72,6 +83,9 @@ class TestTheOtherTwoFilesAgree:
         claude = (ROOT / "CLAUDE.md").read_text()
         assert "The release policy lives there" in claude
         assert "Do not pin" not in claude
+        assert "Deprecation policy*, stated there and not here" in claude
+        assert "60 days" not in claude
+        assert "near alpha" not in claude
 
 
 class TestNothingRequiresATag:
