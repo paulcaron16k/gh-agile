@@ -33,8 +33,9 @@ That one command creates:
 
 - **`.github/agile.json`**, the profile — project number and owner, the key,
   the sprint cadence and the boards. Check it in; every teammate's clone uses it.
-- **a GitHub Project** with `Status`, `Story Points`, `Priority` and `Sprint`
-  fields, and the `type:` and `key:` labels in the repository
+- **a GitHub Project** with seven fields — `Status`, `Sprint`, `Story Points`,
+  `Priority`, `FR`, `Start date` and `Target date` — and the `type:` and `key:`
+  labels in the repository
 - **starter boards**: *Sprint board*, *Backlog* and *Roadmap*
 - **a post-merge hook** in this clone, which names any issue a merge closed and
   nobody finished
@@ -485,8 +486,8 @@ runs both queries and joins them on the issue node ID, so each row carries:
 | `added_to_board_at` | when the item joined the project |
 | `started_at` | first transition to *In progress* |
 | `done_at` | arrival at *Done* |
-| `cycle_time_days` | `started_at` → `done_at` |
-| `lead_time_days` | `added_to_board_at` → `done_at` |
+| `cycle_time` | `started_at` → `done_at`, in seconds |
+| `lead_time` | `added_to_board_at` → `done_at`, in seconds |
 
 plus every custom field flattened to a `field_*` column, the epic from the
 sub-issue parent, labels, assignees and sub-issue roll-up counts.
@@ -537,7 +538,7 @@ one — removing an option silently clears the field on every item holding it.
 | `Status` | single-select — `Todo`, `In Progress`, `Blocked`, `In Review`, `Done` | `state_id` |
 
 `Status` exists on every new project with three options; the other two are added,
-because `blocked_hours` and `review_hours` are computed from time spent in them
+because `blocked_time` and `review_time` are computed from time spent in them
 and are otherwise permanently null. Epic, parent and sub-issue progress need no
 custom field — GitHub provides them natively.
 
@@ -720,7 +721,7 @@ Profile settings, all under `sprint`:
 | `start_day` | `"monday"` | Weekday new sprints begin on |
 | `ahead` | `2` | Future sprints kept stocked |
 | `autocreate` | `true` | Whether `issue move` may create the covering sprint when none is active |
-| `name_template` | `"{key} Sprint {n}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
+| `name_template` | `"{n:04d} W{iso_week}-{year}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
 | `record_label` | `true` | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes |
 
 ### Requirements, and how each is met
