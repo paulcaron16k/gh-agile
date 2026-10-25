@@ -3,7 +3,7 @@
 [![CI](https://github.com/paulcaron16k/gh-agile/actions/workflows/ci.yml/badge.svg)](https://github.com/paulcaron16k/gh-agile/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](.github/workflows/ci.yml)
 [![Dependencies](https://img.shields.io/badge/dependencies-none%20%28stdlib%29-brightgreen.svg)](#requirements)
-[![Status](https://img.shields.io/badge/status-near%20alpha-orange.svg)](#versions-and-what-installing-gets-you)
+[![Status](https://img.shields.io/badge/status-beta-yellow.svg)](#deprecation-policy)
 [![Install](https://img.shields.io/badge/install-tracks%20main-blue.svg)](#versions-and-what-installing-gets-you)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -158,17 +158,37 @@ cut at points worth referring back to, so a bug report, a changelog entry or a
 v0.3.0-7-g440d984
 ```
 
-The leading `0.` carries the only compatibility promise there is, which is none.
+The leading `0.` says the command line may still change before 1.0; how it
+changes is the [deprecation policy](#deprecation-policy).
 The number is a counter rather than a measurement — it starts at `0.3.0` because
 nothing is gained by pretending the tool is younger than it is. **Do not pin to
 a tag.** `gh extension install --pin` works, and a pinned clone stops receiving
 fixes silently, which is how an installed extension ends up older than the git
 hook that calls it.
 
-**Status: near alpha, with issue tracking load-bearing.** Commands and flags are
-still added and occasionally renamed; the profile format and the export columns
-are the parts treated as contracts, and `github_catalog.json` is where the second
-of those is written down.
+**Status: beta.**
+
+### Deprecation policy
+
+Commands and flags may still be renamed before 1.0. A rename goes through three
+stages, and the release note's *What changed spelling* table says which stage
+each old spelling is at:
+
+1. **Deprecated.** The old spelling still runs the command it always ran, and
+   warns on stderr with the new spelling. For at least 60 days, and through at
+   least one tagged build.
+2. **Retired.** The old spelling fails before doing anything, with an error that
+   names the replacement as a command you can run. For at least one more tagged
+   build.
+3. **Removed.** It fails like any other typo.
+
+The profile (`.github/agile.json`) and the export columns (`github_catalog.json`)
+follow the same stages: a field or column is added at any time, and a renamed one
+is read or written under both names while it is deprecated.
+
+A spelling that could write to the wrong board or the wrong issue may skip
+stage 1, and the release note says so. Renames made before beta went straight to
+stage 2.
 
 ## The hierarchy
 

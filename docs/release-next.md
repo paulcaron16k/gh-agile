@@ -5,14 +5,15 @@ brings these; the tag, when one is cut, names the build.
 
 ## What changed spelling
 
-| Was | Is |
-|---|---|
-| `--format json` on a list, view or status | `--json [fields]`, with `-q/--jq` and `-t/--template` |
+| Was | Is | Stage |
+|---|---|---|
+| `--format json` on a list, view or status | `--json [fields]`, with `-q/--jq` and `-t/--template` | Retired |
 
 `--format jsonl` stays on the lists, `board view` and `sprint view`, where it
 streams one object per line, and `export --format json|csv` stays: `gh` has no
 flag for either. The old spelling fails at argument parsing and, for one
-release, names `--json`.
+release, names `--json`. *Stage* is the README's
+[deprecation policy](../README.md#deprecation-policy); this rename predates it.
 
 ## New
 
