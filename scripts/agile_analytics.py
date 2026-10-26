@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --quiet --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["duckdb>=1.0"]
+# dependencies = ["duckdb>=1.0,<3"]
 # ///
 """Compact daily GitHub exports into monthly files, and compute Agile metrics.
 
@@ -34,9 +34,25 @@ from pathlib import Path
 
 import duckdb
 
+# Every timestamp in an export is UTC, and so is every period boundary here. DuckDB
+# reads `2026-10-01T00:00:00Z` as a TIMESTAMPTZ and casts it to the *machine's*
+# zone, so on a New York clock that row was compacted into September's file and
+# counted in Q3 (#272). UTC for the session, as `periods` already is.
+duckdb.sql("SET TimeZone = 'UTC'")
+
 #: Deduplication keys per grain. Exports overlap on purpose -- an incremental
 #: run re-reads a window because the timeline is eventually consistent -- so the
 #: same row arrives many times and the newest must win.
+def scalar(sql: str):
+    """The one value a query returns.
+
+    `fetchall()`, not `fetchone()`: DuckDB 2.0 removed `fetchone()` from a
+    relation -- one keeps no result between calls -- and `metrics` crashed on
+    every cell (#272). `fetchall()` works on 1.x and 2.x alike.
+    """
+    return duckdb.sql(sql).fetchall()[0][0]
+
+
 GRAINS = {
     "issues": ("number", "exported_at"),
     "events": ("event_hash", "exported_at"),
@@ -74,7 +90,7 @@ def compact(directory: Path, month: str | None, keep: bool) -> int:
                     ) WHERE rn = 1
                 ) TO '{out}' (HEADER, DELIMITER ',')
             """)
-            rows = duckdb.sql(f"SELECT count(*) FROM read_csv_auto('{out}')").fetchone()[0]
+            rows = scalar(f"SELECT count(*) FROM read_csv_auto('{out}')")
             print(f"  {out.name}: {rows} row(s) from {len(daily)} daily file(s)")
             written += 1
 
@@ -224,15 +240,19 @@ def metrics(directory: Path, kind: str, start_date, context: str) -> int:
                 column = "created_at" if metric == "created" else "coalesce(done_at, started_at)"
                 sql = (f"SELECT {expression} FROM issues WHERE CAST({column} AS DATE) "
                        f"BETWEEN DATE '{first}' AND DATE '{last}'{where_key}")
-                value = duckdb.sql(sql).fetchone()[0]
+                value = scalar(sql)
                 values.append("" if value is None else value)
             rows.append((label, about, values))
 
     width = max(len(r[0]) for r in rows) + 2
-    print("  " + "context".ljust(width) + "".join(h.rjust(20) for h in headers))
-    print("  " + "-" * (width + 20 * len(headers)))
+    # Each column as wide as its header plus a gap, never less than 20: the
+    # last header, `2026-Q4 in-progress`, is 19 wide and ran into its neighbour.
+    widths = [max(20, len(h) + 2) for h in headers]
+    print("  " + "context".ljust(width) + "".join(h.rjust(w) for h, w in zip(headers, widths, strict=True)))
+    print("  " + "-" * (width + sum(widths)))
     for label, _about, values in rows:
-        print("  " + label.ljust(width) + "".join(str(v).rjust(20) for v in values))
+        print("  " + label.ljust(width)
+              + "".join(str(v).rjust(w) for v, w in zip(values, widths, strict=True)))
     print()
     for metric, (about, _e) in PERIOD_METRICS.items():
         print(f"    {metric:20} {about}")
