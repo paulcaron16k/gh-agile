@@ -43,9 +43,9 @@ jobs:
         # python3.10, with lint and the whole suite green because both ran on
         # 3.12.
         #
-        # 3.10 is `RUNTIME_FLOOR` and `ruff.toml`'s target-version. 3.12 is what
-        # `make venv` builds. Adding a version here means adding it to the README
-        # too, and dropping one means dropping it from both.
+        # 3.10 is `RUNTIME_FLOOR` and `ruff.toml`'s target-version. Adding a
+        # version here means adding it to the README too, and dropping one means
+        # dropping it from both.
         python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +57,23 @@ jobs:
       # `make venv` rather than a bare pip install: every Python target refuses
       # to run outside .venv, from the Makefile and again from conftest.py, so
       # CI has to build the same environment a developer does.
-      - run: make venv
+      #
+      # **With the matrix interpreter named.** `make venv` defaults to
+      # python3.12, and the runner image has one on PATH, so until #275 every
+      # job here built its venv from 3.12 whatever setup-python installed: four
+      # green runs of one interpreter, and the floor never tested.
+      - run: make venv PYTHON=python${{ matrix.python-version }}
+
+      # And then checked, because the failure above was silent: the job names
+      # an interpreter and nothing compared it with the one that ran.
+      - name: The suite runs on the matrix interpreter
+        run: |
+          .venv/bin/python -c "
+          import sys
+          want, have = '${{ matrix.python-version }}', '%d.%d' % sys.version_info[:2]
+          print('suite runs on', sys.version.split()[0])
+          sys.exit(0 if have == want else f'.venv is {have}, the matrix says {want}')
+          "
 
       - run: make lint
 
