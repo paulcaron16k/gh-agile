@@ -2956,15 +2956,15 @@ uv run scripts/agile_analytics.py --dir /srv/exports/WIDG metrics \
     --time-range quarterly --context key
 ```
 ```
-  context                                   2025-Q4             2026-Q1             2026-Q2             2026-Q3 2026-Q4 in-progress
-  ---------------------------------------------------------------------------------------------------------------------------------
-  throughput                                      0                   0                   0                  79                  35
-  points_done                                   0.0                 0.0                 0.0               122.0                 0.0
-  created                                         0                   0                   0                  95                  41
-  cycle_time_median                                                                                        2582                1701
-  lead_time_median                                                                                        86852               37999
-  carryover                                       0                   0                   0                   5                   1
-  AGILE - throughput                              0                   0                   0                  79                  34
+  context                                   2025-Q4             2026-Q1             2026-Q2             2026-Q3  2026-Q4 in-progress
+  ----------------------------------------------------------------------------------------------------------------------------------
+  throughput                                      0                   0                   0                  79                   35
+  points_done                                   0.0                 0.0                 0.0               122.0                  0.0
+  created                                         0                   0                   0                  95                   41
+  cycle_time_median                                                                                        2582                 1701
+  lead_time_median                                                                                        86852                37999
+  carryover                                       0                   0                   0                   5                    1
+  AGILE - throughput                              0                   0                   0                  79                   34
   …
 ```
 

@@ -1,3 +1,7 @@
 pytest>=8
 pytest-cov>=5
 ruff>=0.6
+# scripts/agile_analytics.py, for tests/test_agile_analytics.py only -- the
+# extension itself stays standard library. The same bounds the script declares,
+# so CI tests what `uv run` installs for a user, newest release first (#272).
+duckdb>=1.0,<3; python_version >= "3.11"
