@@ -83,7 +83,7 @@ column by hand, that is a bug in the tooling.
 | Start work | **Machine** | `gh agile issue move N "In Progress"` sets Status, the current sprint, the `sprint:` label and the assignee in one call. Dragging the card sets Status alone; `validate` then reports it as *In Progress but in no sprint* or *unassigned* |
 | Move an item to `Todo`, `Blocked` or `In Review` | Person | The board is the interface; dragging is fine |
 | Close the issue when its pull request merges | **Machine** | `Closes #N` in the pull request, with the repository's *Auto-close issues with merged linked pull requests* left on |
-| Finish it: `Done`, with evidence | Person, prompted | The post-merge hook names every issue a merge closed and nobody finished; `gh agile issue move N Done --evidence "..."` finishes it. Nothing sets `Done` automatically: it would skip the evidence and the closing `sprint:` label |
+| Finish it: `Done`, with evidence | Person, prompted | The post-merge hook names every issue a merge closed and nobody finished; `gh agile issue close N --evidence "..."` finishes it, closed or not. Nothing sets `Done` automatically: it would skip the evidence and the closing `sprint:` label |
 | Check every story has an epic, statuses are legal, closed items are dated, a parent and its children agree at every level | **Machine** | `gh agile validate`, in CI |
 | Export the backlog with history for analysis | **Machine** | `gh agile export` |
 | Decide what the export means | Person | See §6 |
@@ -137,8 +137,8 @@ the export.
    already holds it. Moving to `In Review` means a pull request exists and
    references the issue with `Closes #N`.
 4. **Close** — the merge closes the issue, and the post-merge hook names it.
-   Whoever did the work finishes it with `gh agile issue move N Done --evidence
-   "..."`. `Done` is never set by automation; see §3.
+   Whoever did the work finishes it with `gh agile issue close N --evidence
+   "..."`, which does not close it twice. `Done` is never set by automation; see §3.
 5. **Carry over** — what did not finish moves to the next sprint with
    `gh agile sprint carryover`; finished work stays where it was finished.
 6. **Review** — export, look at the numbers in §6, write down one thing to change.

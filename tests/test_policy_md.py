@@ -54,7 +54,7 @@ def test_it_does_not_say(spelling):
 
 def test_finishing_is_a_person_prompted_by_the_hook():
     assert "post-merge hook" in section(3) and "post-merge hook" in section(5)
-    assert 'issue move N Done --evidence' in section(3)
+    assert 'issue close N --evidence' in section(3)
 
 
 def subcommands(parser):

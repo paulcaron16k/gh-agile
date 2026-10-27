@@ -722,7 +722,7 @@ In Progress (2)
   AGILE-140   story    2  0004 W38  bea         Something somebody is actually doing
 
 * closed, but Status is not Done -- the board is showing finished work as live.
-    AGILE-123  Status: In Progress  ->  gh agile issue move 123 Done
+    AGILE-123  Status: In Progress  ->  gh agile issue close 123
 ```
 
 A footnote rather than a column: the condition is rare, and a column would cost
@@ -1059,7 +1059,7 @@ in every way that matters here:
   arrives through a pull request, so `issue close -r "not planned"` keeps that
   case.
 - **Nothing races it**, while `Item closed` and `Auto-close issue` stay off:
-  the Status is still this tool's to set, with `issue move N Done --evidence`.
+  the Status is still this tool's to set, with `issue close N --evidence`.
 
 **The API cannot read it.** A snapshot of the whole REST repository object and
 of every scalar GraphQL `Repository` field, taken before and after turning it
@@ -1083,13 +1083,13 @@ done, and the wrap-up is one command.
 That command is strictly better than the workflow, not merely equal:
 
 ```bash
-gh agile issue move AGILE-187 Done --evidence "..."
+gh agile issue close AGILE-187 --evidence "..."
 ```
 
-`issue move`, not `issue close`, because the issue is already closed and closing one twice is a
-no-op that exits 0 — which is how a close reason gets lost. It writes the
-Evidence, sets the Status, **and** stamps the closing sprint. The workflow
-produces none of those three.
+The issue is already closed, so `issue close` does not close it again: it writes
+the Evidence, sets the Status, **and** stamps the closing sprint. The workflow
+produces none of those three. A reason other than the one GitHub recorded is
+refused, because GitHub cannot change a closed issue's reason.
 
 ### What replaces it: the post-merge hook
 
@@ -1166,17 +1166,17 @@ its second parent; `unfinished` walks into them, stopping where the range does,
 and looks each one up. A local merge of an unpushed branch walks into commits
 GitHub does not know either, belongs to no pull request, and reports nothing.
 
-**A merge leaves an issue in one of two states, and they need different
-commands.** GitHub may close it and leave the board behind:
+**A merge leaves an issue in one of two states, and `issue close` finishes
+both.** GitHub may close it and leave the board behind:
 
 ```
   #187 was closed by this merge, and the board has not caught up:
       closed but status is not Done (1):
         #187 AGILE-187 A planner types a duration, not an end : 'In Progress'
 
-      finish it:  gh agile issue move 187 Done --evidence "..."
-      `issue move`, not `issue close`: it is already closed, and closing an issue
-      twice is a no-op that exits 0 -- which is how a close reason gets lost.
+      finish it:  gh agile issue close 187 --evidence "..."
+      `issue close` finishes an issue that is already closed: it writes the
+      evidence, sets Done and stamps the sprint, and does not close it twice.
 ```
 
 or — just as often — not close it at all:
@@ -1605,7 +1605,7 @@ says when `ensure` would have to run. A profile with `"autocreate": false`
 
 Finished work stays in the sprint it was finished in. An issue that is closed
 but never reached `Done` is named, not moved: it is a wrap-up, and
-`issue move N Done --evidence` is how it is finished. **No `sprint:` label is
+`issue close N --evidence` is how it is finished. **No `sprint:` label is
 written**: an item started in this sprint already carries its date, and gets the
 next one's when it finishes there, so the labels record the carryover without
 being told.
@@ -1903,7 +1903,7 @@ configuration:
 **Do in the tool, not the web UI:**
 
 - Starting and finishing work — `gh agile issue move N "In Progress"` and
-  `gh agile issue move N Done --evidence "..."`. A drag sets Status alone:
+  `gh agile issue close N --evidence "..."`. A drag sets Status alone:
   starting also sets the sprint, the `sprint:` label and the assignee, and
   finishing writes the evidence. `validate` reports a
   dragged start as *In Progress but in no sprint* or *unassigned*, and a dragged
@@ -2765,6 +2765,20 @@ the exit code:
 
 If the reason comes back wrong anyway, it says so on stderr rather than printing
 `closed`. Reopening and closing again is the only repair.
+
+**An issue a merge already closed is finished, not closed again.** `issue close`
+reads the issue first; already closed, it skips the close and does the rest —
+the evidence, Status, the closing `sprint:` label — and says so:
+
+```
+  #187 was already closed as completed; finishing it
+  #187 body updated: Evidence
+  #187 Status = Done
+```
+
+A `-c` comment is still left. A reason other than the one GitHub recorded is
+refused, naming the reopen-and-close that changes it, rather than keeping the
+old reason quietly.
 
 **6 — close the epic**
 

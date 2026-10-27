@@ -1034,7 +1034,7 @@ why each part of the replacement is what it is.
 **Leave `Item closed` off.** It writes Status = `Done` and nothing else — no
 Evidence, no closing `sprint:` label — so the issue reads finished when it is
 not. The post-merge hook that `gh agile init` installs asks a person to finish it
-instead, with `gh agile issue move N Done --evidence`.
+instead, with `gh agile issue close N --evidence`.
 
 In each **repository**, Settings → General → Issues: leave **Auto-close issues
 with merged linked pull requests** on. It is GitHub's default, and it is how
