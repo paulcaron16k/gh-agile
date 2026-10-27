@@ -34,8 +34,8 @@ make api-drift     # LIVE, read-only: GitHub's GraphQL schema against GitHub_API
 
 **Run `make api-drift` periodically, and before trusting a measured API fact.** GitHub changed the iteration
 input underneath this tool (#290) and nothing noticed until it was found by chance. It exits 1 on drift, having
-appended a timestamped summary to `GitHub_API_changelog.md` -- the changes to what the extension names listed
-first, beside GitHub's own dated changelog and the removals it has announced (#297) -- and rewritten the
+appended a timestamped summary to `GitHub_API_changelog.md` -- the changes to what the extension's GraphQL
+selects or sends listed first (read from the queries in context, not from the words in comments, #299), beside GitHub's own dated changelog and the removals it has announced (#297) -- and rewritten the
 snapshot; review both and commit them. With no drift it still prints any announced removal touching gh-agile
 that is overdue or due within 90 days, because that warning is worth nothing once the removal lands. `make api-spec` rewrites the baseline from
 scratch. Neither runs in CI, which has no token.
