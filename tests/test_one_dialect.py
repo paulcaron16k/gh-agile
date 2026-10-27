@@ -39,18 +39,17 @@ class TestTheTopLevel:
                    if isinstance(a, argparse._SubParsersAction))
         return {a.dest for a in top._choices_actions}
 
-    def test_four_commands_besides_the_groups(self, tool):
-        assert self.shown(tool) - GROUPS == {"init", "sync", "validate", "export"}
+    def test_five_commands_besides_the_groups(self, tool):
+        """`unfinished` is shown since #268: the hook runs it, and so may you."""
+        assert self.shown(tool) - GROUPS == {"init", "sync", "validate", "export",
+                                             "unfinished"}
 
-    @pytest.mark.parametrize("hidden", ["self-test", "unfinished"])
-    def test_hidden_commands_still_run(self, tool, hidden):
-        argv = [hidden] + (["-R", "o/r"] if hidden == "self-test" else [])
-        assert parse(tool, *argv).command == hidden
-        assert hidden not in self.shown(tool)
+    def test_the_hidden_command_still_parses(self, tool):
+        assert parse(tool, "self-test", "-R", "o/r").command == "self-test"
+        assert "self-test" not in self.shown(tool)
 
-    def test_help_does_not_spell_out_the_hidden_ones(self, tool):
-        text = tool.build_parser().format_help()
-        assert "self-test" not in text and "unfinished" not in text
+    def test_help_does_not_spell_out_the_hidden_one(self, tool):
+        assert "self-test" not in tool.build_parser().format_help()
 
     @pytest.mark.parametrize("gone", [["setup"], ["hooks"], ["project", "create", "-t", "x"],
                                       ["project", "owner"], ["project", "sprint-template"],

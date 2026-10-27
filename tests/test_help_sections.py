@@ -133,13 +133,18 @@ class TestTheSections:
         assert "  list:" in general and "  view:" in targeted
 
     def test_the_top_level_groups_like_gh(self, tool):
-        text = tool.build_parser().format_help()
-        work, rest = text.split("BOARD COMMANDS")
+        """Setup apart from the board since #268: `key` and `project` were filed
+        under BOARD COMMANDS, beside nothing they belong with."""
+        text = tool.build_parser().format_help().split("\nFLAGS")[0]
+        work, rest = text.split("SETUP COMMANDS")
+        setup, rest = rest.split("BOARD COMMANDS")
         board, general = rest.split("GENERAL COMMANDS")
         assert "WORK ITEM COMMANDS" in work and "  epic:" in work and "  issue:" in work
-        assert "  sprint:" in board and "  key:" in board
-        for name in ("init", "sync", "validate", "export"):
-            assert f"  {name}:" in general.split("FLAGS")[0]
+        for part, names in ((setup, ("init", "project", "key")),
+                            (board, ("board", "sprint", "sync")),
+                            (general, ("validate", "export", "unfinished"))):
+            assert sorted(line.split(":")[0].strip() for line in part.strip().splitlines()) \
+                == sorted(names)
 
     def test_a_group_opens_with_what_it_is_listed_as(self, tool):
         """As `gh issue --help` opens with the line `gh --help` lists it by."""
@@ -150,13 +155,35 @@ class TestTheSections:
 
 
 class TestHiddenCommands:
-    @pytest.mark.parametrize("hidden", ["self-test", "unfinished"])
-    def test_absent_from_help(self, tool, hidden):
-        assert hidden not in tool.build_parser().format_help()
+    def test_absent_from_help(self, tool):
+        assert "self-test" not in tool.build_parser().format_help()
 
-    def test_self_test_still_runs(self, tool):
+    def test_absent_from_an_unknown_commands_choices(self, tool, capsys):
+        """argparse lists every choice; a typo offered `self-test` (#268)."""
+        with pytest.raises(SystemExit):
+            tool.build_parser().parse_args(["frobnicate"])
+        err = capsys.readouterr().err
+        assert "'unfinished'" in err and "'init'" in err
+        assert "self-test" not in err
+
+    def test_self_test_still_parses(self, tool):
         assert tool.build_parser().parse_args(["self-test", "-R", "o/r"]).func \
             is tool.cmd_self_test
+
+    def test_and_refuses_unless_make_runs_it(self, tool, monkeypatch):
+        """It writes to whatever repository `-R` names."""
+        monkeypatch.delenv(tool.SELF_TEST_ENV, raising=False)
+        monkeypatch.setattr(tool, "gh", lambda *a, **k: pytest.fail("wrote"))
+        monkeypatch.setattr(tool, "graphql", lambda *a, **k: pytest.fail("wrote"))
+        args = tool.build_parser().parse_args(["self-test", "-R", "o/r"])
+        with pytest.raises(SystemExit) as refused:
+            tool.cmd_self_test(args)
+        assert "make self-test" in str(refused.value)
+
+    def test_the_makefile_sets_it(self, tool):
+        import pathlib
+        makefile = (pathlib.Path(__file__).resolve().parent.parent / "Makefile").read_text()
+        assert f"{tool.SELF_TEST_ENV}=1 ./gh-agile" in makefile
 
 
 class TestALeafListsItsFlags:
