@@ -370,6 +370,25 @@ class TestCheck:
         assert drift.cmd_check(spec, log, write=False) == 1
         assert spec.read_text() == before and not log.exists()
 
+    def test_summary_is_the_entry_alone(self, drift, files, base, monkeypatch, tmp_path):
+        """The scheduled workflow's pull request body (#298)."""
+        spec, log = files
+        new = copy.deepcopy(base)
+        new["types"].pop(0)
+        monkeypatch.setattr(drift, "fetch", lambda: new)
+        summary = tmp_path / "entry.md"
+        drift.cmd_check(spec, log, summary=summary)
+        text = summary.read_text()
+        assert text.startswith("## 2026-10-27T17:00:00Z") and "`Gist`" in text
+        assert "# GitHub API changelog" not in text
+
+    def test_no_drift_writes_no_summary(self, drift, files, base, monkeypatch, tmp_path):
+        spec, log = files
+        monkeypatch.setattr(drift, "fetch", lambda: copy.deepcopy(base))
+        summary = tmp_path / "entry.md"
+        drift.cmd_check(spec, log, summary=summary)
+        assert not summary.exists()
+
     def test_no_snapshot_exits_two(self, drift, tmp_path):
         assert drift.cmd_check(tmp_path / "absent.json", tmp_path / "log.md") == 2
 
