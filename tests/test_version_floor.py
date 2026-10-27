@@ -158,3 +158,27 @@ class TestWhenToLookAgain:
                 f"RUNTIME_FLOOR_REVIEW with it.",
                 stacklevel=2,
             )
+
+
+class TestEachJobRunsItsInterpreter:
+    """Listing the floor in the matrix is not testing it. AGILE-275.
+
+    `make venv` defaults to python3.12, and the runner image has one, so every
+    job built its venv from 3.12 whatever setup-python had installed. The
+    tests above all passed throughout: they read the matrix, not what ran.
+    """
+
+    def ci(self):
+        return (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+
+    def test_make_venv_is_given_the_matrix_interpreter(self):
+        runs = [line.strip() for line in self.ci().splitlines()
+                if line.strip().startswith("- run: make venv")]
+        assert runs == ["- run: make venv PYTHON=python${{ matrix.python-version }}"]
+
+    def test_the_job_checks_which_interpreter_ran(self):
+        ci = self.ci()
+        check = ci[ci.index("The suite runs on the matrix interpreter"):]
+        assert "sys.version_info" in check and "matrix.python-version" in check
+        assert ci.index("make venv PYTHON=") < ci.index("The suite runs on") \
+            < ci.index("- run: make test")

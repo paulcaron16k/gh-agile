@@ -11,8 +11,17 @@ import datetime as dt
 import os
 import time
 
+import pytest
+
+#: `time.tzset` is Unix-only, and missing from some builds even there: uv's
+#: standalone macOS CPython 3.10 and 3.11 lack it (#275). Without it the zone
+#: cannot be changed in-process, so these skip rather than fail.
+needs_tzset = pytest.mark.skipif(not hasattr(time, "tzset"),
+                                 reason="this interpreter has no time.tzset")
+
 
 class TestTodayIsUtc:
+    @needs_tzset
     def test_matches_utc_not_local(self, tool, monkeypatch):
         """Pinned with a timezone far enough from UTC that the date differs for
         part of every day: Kiritimati is UTC+14."""
@@ -24,6 +33,7 @@ class TestTodayIsUtc:
             monkeypatch.delenv("TZ", raising=False)
             time.tzset()
 
+    @needs_tzset
     def test_disagrees_with_local_when_it_should(self, tool, monkeypatch):
         """Not a tautology: at UTC+14 the local date is genuinely ahead for ten
         hours a day, so this asserts the tool follows UTC rather than whichever
@@ -66,6 +76,7 @@ class TestTimezoneIndependence:
             os.environ.pop("TZ", None)
             time.tzset()
 
+    @needs_tzset
     def test_alignment_is_the_same_in_every_timezone(self, tool):
         results = {
             tz: self._aligned(tool, tz)
