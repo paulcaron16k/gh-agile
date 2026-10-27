@@ -241,10 +241,10 @@ class TestSprintCreateDryRun:
         writes, _ = create()
         assert writes == []
 
-    def test_it_says_what_it_would_append_and_what_it_would_clear(self, create):
+    def test_it_says_what_it_would_append_and_what_it_keeps(self, create):
         _, out = create()
         assert "would append Sprint 3: 2026-10-26, 14 day(s)" in out
-        assert "2 assignment(s) would be re-applied" in out
+        assert "its 2 assignment(s) are kept" in out
 
     def test_the_default_start_follows_the_latest_sprint(self, tool, monkeypatch, create):
         """Not the last list entry, which is a completed sprint whenever there is

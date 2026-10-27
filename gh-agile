@@ -2163,23 +2163,12 @@ def converge_project(args) -> int:
         # affects what the web UI suggests, so the profile's `start_day` governs
         # what this tool actually does, which is align the sprints it creates.
         if current["duration"] != settings["cadence_days"]:
-            saved = sprint_assignments(args.owner, args.project)
-            require_graphql_budget(len(saved), "changing the sprint cadence")
             iterations_now = current["completedIterations"] + current["iterations"]
-            entries = ", ".join(
-                f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
-                f'title: {json.dumps(i["title"])}}}' for i in iterations_now
-            )
-            graphql(
-                "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
-                'iterationConfiguration: {startDate: "%s", duration: %d, iterations: [%s]}}) '
-                "{ projectV2Field { ... on ProjectV2IterationField { id } } } }"
-                % (iterations_now[0]["startDate"] if iterations_now else "2026-01-05",
-                   settings["cadence_days"], entries),
-                f=field["id"],
-            )
-            restore_assignments(args.owner, args.project, saved)
-            heal_sprint_fields(args.owner, args.project)
+            write_iterations(
+                args.owner, args.project, field["id"],
+                iterations_now[0]["startDate"] if iterations_now else "2026-01-05",
+                settings["cadence_days"], iterations_now,
+                doing="changing the sprint cadence")
             print(f"  Sprint cadence -> {settings['cadence_days']} days")
         else:
             print(f"  Sprint cadence in step ({settings['cadence_days']} days, "
@@ -3546,6 +3535,60 @@ def restore_assignments(login: str, project: int, saved: dict[str, str]) -> int:
     return restored
 
 
+def iteration_entry(iteration: dict) -> str:
+    """One `ProjectV2Iteration` input, carrying the iteration's `id` when it has one.
+
+    **The id is what keeps every assignment** (#290). The input carried
+    `startDate`, `duration` and `title` and no id, so the configuration was
+    replaced wholesale and GitHub re-minted every iteration, clearing every
+    item's Sprint board-wide. It gained `id` -- "Include this to preserve the
+    iteration's identity during replacement updates" -- and with it, measured on
+    the sandbox 2026-10-27, an append and a rename of the current and a
+    completed sprint each kept every id and all 13 assignments. A new sprint
+    has no id yet and is sent without one.
+    """
+    ident = f'id: {json.dumps(iteration["id"])}, ' if iteration.get("id") else ""
+    return (f'{{{ident}startDate: "{iteration["startDate"]}", '
+            f'duration: {iteration["duration"]}, title: {json.dumps(iteration["title"])}}}')
+
+
+def write_iterations(login: str, project: int, field_id: str, start: str, duration: int,
+                     iterations_out: list[dict], *, doing: str) -> int:
+    """Replace the Sprint field's iterations with `iterations_out`, keeping
+    every assignment. The one writer of the iteration configuration.
+
+    Each existing iteration is sent with its id, which preserves it. The
+    configuration is still replaced wholesale -- anything omitted is deleted --
+    so callers pass every iteration, completed ones included.
+
+    **The save-and-restore stays, as the fallback.** The assignments are read
+    first and the ids checked after; only if GitHub re-minted one anyway are
+    they put back and the field healed from the `sprint:` labels. So a
+    regression in GitHub costs a restore and a warning, not data. Returns how
+    many assignments were re-applied: 0 when the ids held.
+    """
+    saved = sprint_assignments(login, project)
+    require_graphql_budget(len(saved), doing)
+    graphql(
+        "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
+        'iterationConfiguration: {startDate: "%s", duration: %d, iterations: [%s]}}) '
+        "{ projectV2Field { ... on ProjectV2IterationField { id } } } }"
+        % (start, duration, ", ".join(iteration_entry(i) for i in iterations_out)),
+        f=field_id,
+    )
+    _FIELDS.pop((login, project), None)  # a new sprint has a new id
+    after = sprint_field(login, project)["configuration"]
+    kept = {i.get("id") for i in after["iterations"] + after["completedIterations"]}
+    lost = [i for i in iterations_out if i.get("id") and i["id"] not in kept]
+    if not lost:
+        return 0
+    print(f"  GitHub replaced {len(lost)} sprint id(s) though each was sent; "
+          f"restoring {len(saved)} assignment(s)", file=sys.stderr)
+    restored = restore_assignments(login, project, saved)
+    heal_sprint_fields(login, project)
+    return restored
+
+
 def iteration_spans(existing: list[dict]) -> list[tuple]:
     """[(start, end)] for every iteration, inclusive of the end day."""
     import datetime as dt
@@ -3629,10 +3672,7 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
     def overlaps(start, end):
         return overlapping(spans, start, end) is not None
 
-    made, entries = [], [
-        f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
-        f'title: {json.dumps(i["title"])}}}' for i in existing
-    ]
+    made, entries = [], list(existing)
     number = len(existing)
 
     # What is missing, rather than how many to make: a sprint covering today,
@@ -3649,10 +3689,8 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
             return None
         number += 1
         title = sprint_title(config, number, start, end)
-        entries.append(
-            f'{{startDate: "{start.isoformat()}", duration: {duration}, '
-            f'title: {json.dumps(title)}}}'
-        )
+        entries.append({"startDate": start.isoformat(), "duration": duration,
+                        "title": title})
         spans.append((start, end))
         spans.sort()
         made.append(f"{title}  {start} .. {end}")
@@ -3683,25 +3721,14 @@ def ensure_sprints(login: str, project: int, config: dict, ahead: int,
         if append(last_end + dt.timedelta(days=1)) is None:
             break  # cannot place another without overlapping; stop rather than loop
 
-    saved = sprint_assignments(login, project) if made else {}
     if made:
-        require_graphql_budget(len(saved), "creating a sprint")
-        # Every existing iteration is re-sent. The configuration is replaced
-        # wholesale -- the same trap that cleared Status from 16 items when
-        # options were re-sent without their ids -- so anything omitted here is
-        # deleted, taking its items' sprint assignment with it.
-        graphql(
-            "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
-            'iterationConfiguration: {startDate: "%s", duration: %d, iterations: [%s]}}) '
-            "{ projectV2Field { ... on ProjectV2IterationField { id } } } }"
-            % (aligned_start(today, settings["start_day"]).isoformat(), duration,
-               ", ".join(entries)),
-            f=field["id"],
-        )
-        restored = restore_assignments(login, project, saved)
+        # Every existing iteration is re-sent, with its id: the configuration is
+        # replaced wholesale, so anything omitted is deleted.
+        restored = write_iterations(login, project, field["id"],
+                                    aligned_start(today, settings["start_day"]).isoformat(),
+                                    duration, entries, doing="creating a sprint")
         if restored:
             print(f"  re-applied {restored} sprint assignment(s) the update cleared")
-        heal_sprint_fields(login, project)
     if not quiet:
         for line in made:
             print(f"  created {line}")
@@ -4030,6 +4057,9 @@ def cmd_sprint(args) -> int:
         ensure_sprints(args.owner, args.project, args._config, ahead)
         return 0
 
+    if args.sprint_command == "edit":
+        return cmd_sprint_edit(args)
+
     if args.sprint_command == "view":
         return cmd_sprint_view(args)
 
@@ -4104,11 +4134,6 @@ def cmd_sprint(args) -> int:
     # title -- GitHub does not generate one through the API the way the UI does.
     active, completed = iterations(args.owner, args.project)
     existing = completed + active
-    entries = [
-        f'{{startDate: "{i["startDate"]}", duration: {i["duration"]}, '
-        f'title: {json.dumps(i["title"])}}}'
-        for i in existing
-    ]
     # The same overlap rule `ensure` applies. Without it, `create --start` on a
     # date already covered produced a second sprint over the same days, and
     # `@current` then picked between them arbitrarily.
@@ -4126,29 +4151,21 @@ def cmd_sprint(args) -> int:
             f"place it."
         )
 
-    saved = sprint_assignments(args.owner, args.project)
-    require_graphql_budget(len(saved), "creating a sprint")
     # After every refusal -- the date, the overlap, the budget -- so a dry run
-    # that passes is one the real run would not refuse. The one write that
-    # clears every Sprint value on the board was the one write without a dry
-    # run (#201).
+    # that passes is one the real run would not refuse (#201).
     if getattr(args, "dry_run", False):
+        saved = sprint_assignments(args.owner, args.project)
+        require_graphql_budget(len(saved), "creating a sprint")
         print(f"  would append {title}: {start}, {duration} day(s)")
-        print(f"  the write clears every item's Sprint value; {len(saved)} "
-              f"assignment(s) would be re-applied")
+        print(f"  every existing sprint is sent with its id, so its {len(saved)} "
+              f"assignment(s) are kept")
         return 0
-    entries.append(f'{{startDate: "{start}", duration: {duration}, title: {json.dumps(title)}}}')
-    graphql(
-        "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
-        'iterationConfiguration: {startDate: "%s", duration: %d, iterations: [%s]}}) '
-        "{ projectV2Field { ... on ProjectV2IterationField { id } } } }"
-        % (start, duration, ", ".join(entries)),
-        f=field["id"],
-    )
-    restored = restore_assignments(args.owner, args.project, saved)
+    restored = write_iterations(
+        args.owner, args.project, field["id"], start, duration,
+        [*existing, {"startDate": start, "duration": duration, "title": title}],
+        doing="creating a sprint")
     if restored:
         print(f"  re-applied {restored} sprint assignment(s) the update cleared")
-    heal_sprint_fields(args.owner, args.project)
     print(f"  {title}: {start}, {duration} day(s)")
     return 0
 
@@ -4198,6 +4215,46 @@ def set_iteration(login: str, project: int, item_id: str, iteration_id: str) -> 
         sys.exit("no Sprint field on this project; run `gh agile init`")
     gh(["project", "item-edit", "--id", item_id, "--project-id", project_id(login, project),
         "--field-id", field["id"], "--iteration-id", iteration_id])
+
+
+def cmd_sprint_edit(args) -> int:
+    """`sprint edit SPRINT --title T`: rename one sprint, keeping every assignment.
+
+    Refused until #290: the iteration input carried no id, so any write
+    re-minted every iteration and cleared every item's Sprint board-wide, and a
+    rename bought a cosmetic change with a reconstruction. Each iteration's id is
+    now sent, so a rename is an ordinary write through `write_iterations`.
+
+    Title only. The start date is a sprint's identity -- the `sprint:` labels
+    carry it -- so re-dating one would detach it from its own history.
+    """
+    target, _state = find_sprint(args.owner, args.project, args.sprint)
+    title = args.title.strip()
+    if not title:
+        sys.exit("--title is empty")
+    if title == target["title"]:
+        print(f"  {target['title']} is already called that; nothing to change")
+        return 0
+    field = sprint_field(args.owner, args.project)
+    config = field["configuration"]
+    existing = config["completedIterations"] + config["iterations"]
+    taken = [it for it in existing
+             if it["id"] != target["id"] and it["title"].casefold() == title.casefold()]
+    if taken:
+        sys.exit(f"{taken[0]['title']!r} already names the sprint starting "
+                 f"{taken[0]['startDate']}; a title names one sprint.")
+    if args.dry_run:
+        print(f"  would rename {target['title']} ({target['startDate']}) to {title}")
+        return 0
+    renamed = [{**it, "title": title} if it["id"] == target["id"] else it for it in existing]
+    restored = write_iterations(
+        args.owner, args.project, field["id"],
+        min(it["startDate"] for it in existing), config["duration"], renamed,
+        doing="renaming a sprint")
+    if restored:
+        print(f"  re-applied {restored} sprint assignment(s) the update cleared")
+    print(f"  {target['title']} ({target['startDate']}) -> {title}")
+    return 0
 
 
 def cmd_sprint_carryover(args) -> int:
@@ -10547,6 +10604,18 @@ and the labels are the record of where work was done.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sprint_viewer.add_argument("--format", choices=["jsonl"], help="JSONL instead of text")
     add_json_flags(sprint_viewer, BOARD_FIELDS)
+    sprint_editor = sprint_sub.add_parser(
+        "edit", kind=TARGETED, identifier="sprint",
+        help="Rename a sprint; every item keeps its assignment",
+        epilog="""
+
+Each sprint's id is sent with the write, so renaming one keeps every item's
+Sprint value. The title only: a sprint's start date is its identity, and the
+sprint:YYYY-MM-DD labels carry it.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sprint_editor.add_argument("--title", required=True, help="the sprint's new title")
+    sprint_editor.add_argument("--dry-run", action="store_true",
+                               help="say what would change, and change nothing")
     sprint_carry = sprint_sub.add_parser(
         "carryover", kind=TARGETED, identifier="sprint",
         help="Move a sprint's unfinished work to the next sprint; finished work stays",

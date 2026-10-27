@@ -342,9 +342,11 @@ follow, and every design decision in this tool descends from one of them.
   `ProjectV2ItemStatusChangedEvent`. Every other field's history must be
   reconstructed from snapshots.
 
-`Sprint` is worse still: `ProjectV2Iteration` has no `id`, so any change to the
-iteration configuration mints new ids and **clears every item's sprint
-assignment**. This tool saves and re-applies them around any such change.
+`Sprint` was worse still: `ProjectV2Iteration` had no `id`, so any change to the
+iteration configuration minted new ids and **cleared every item's sprint
+assignment**. It has one now, and this tool sends it, so creating or renaming a
+sprint keeps every assignment; it still checks afterwards and re-applies them if
+GitHub replaced an id anyway.
 
 ### Project properties this tool sets
 
@@ -634,16 +636,13 @@ classDiagram
     ScrumBoard ..> Iteration : selects the active one
 ```
 
-**An iteration has an `id` you must point at, and no `id` you may send.**
-`ProjectV2Iteration` — the input object the configuration mutation accepts, and
-an input object despite the name — carries `startDate`, `duration` and `title`.
-The configuration is therefore replaced wholesale on every write, GitHub mints
-fresh ids for *every* iteration, and every item's `Sprint` value points at an id
-that no longer exists.
-
-**Every sprint is effectively immutable, and there is no safe write.** Measured
-on a live project with four items staged across a completed sprint, the current
-one and a far-future one:
+**An iteration has an `id` you must point at — and, since late 2026, one you
+must send back.** `ProjectV2Iteration`, the input object the configuration
+mutation accepts, carried `startDate`, `duration` and `title` and no id. The
+configuration is replaced wholesale on every write, so GitHub minted fresh ids for
+*every* iteration and every item's `Sprint` value pointed at an id that no longer
+existed. Measured on a live project with four items staged across a completed
+sprint, the current one and a far-future one:
 
 ```
 rename ONE unused future sprint ("Sprint 2", nothing assigned to it)
@@ -654,21 +653,23 @@ rename ONE unused future sprint ("Sprint 2", nothing assigned to it)
   draft in a future sprint               -> UNASSIGNED
 ```
 
-A closed issue in a finished sprint lost its assignment because an unrelated,
-unused, future sprint was renamed. And it is not renaming that does it — a pure
-**append**, re-sending every existing entry byte-identical and adding one at the
-end, clears them all just the same:
+A pure **append**, re-sending every existing entry and adding one, did the same.
+
+The input now has `id` — "Include this to preserve the iteration's identity
+during replacement updates" — and this tool sends every existing iteration's id
+on every write (#290). Measured on the sandbox, 2026-10-27, 13 items in sprints:
 
 ```
-append "Sprint 6", every existing entry unchanged
-  all three probes -> UNASSIGNED
+append one sprint, ids sent                 9/9 ids kept    0 assignments lost
+rename current + completed sprint, ids sent 10/10 ids kept  0 assignments lost
+the same write without ids (control)        0/10 ids kept   13 of 13 lost
 ```
 
-That append is the routine fortnightly act. So every two weeks the board's
-entire sprint history is destroyed and rebuilt by this tool's save-and-restore,
-which costs one API call per assigned item and **is not transactional**: during
-testing the GraphQL budget ran out partway through a restore and the remaining
-assignment was simply lost.
+So adding and renaming a sprint now cost the same, and neither touches an
+assignment. The tool still reads the assignments before every write and checks
+the ids after: if GitHub replaced one anyway, it re-applies them and heals from the
+labels, and says so. Any other client that writes the configuration without ids
+still clears the board.
 
 ### The sprint an issue was worked in is recorded on the issue
 
@@ -703,9 +704,10 @@ sprint_closed_in  = '2026-08-24'
 ```
 
 **The field is repaired from the labels, automatically.** Every write that
-clears assignments — `init` converging the cadence, `sprint ensure`,
-`sprint create` — restores from a snapshot and then heals from the labels, in
-that order, in the same run. The snapshot covers items the labels know nothing
+writes the iteration configuration — `init` converging the cadence, `sprint ensure`,
+`sprint create` — checks afterwards that every sprint kept its id, and if one did
+not, restores from a snapshot and then heals from the labels, in that order, in
+the same run. The snapshot covers items the labels know nothing
 about; the heal covers what the snapshot could not put back, including a run that
 died partway. `gh agile sprint reconcile` does it on demand, for a change made
 outside the tool.
@@ -753,7 +755,7 @@ Every `sprint` property, with its default, is in the user guide's
 | 8 | `ensure` is idempotent | It computes the shortfall against what exists. An early version created `ahead + 1` every run |
 | 9 | Assignments survive a configuration change | Read before, re-applied after — see above. Anything that could not be re-applied is named on stderr |
 | 10 | Starting work assigns the current sprint, and claims the issue | `issue move ISSUE "In Progress"` sets `Sprint` if the item has none, and assigns the issue if nobody holds it. Otherwise in-progress work sits outside every sprint and the sprint report quietly omits it, or reads unassigned and the board cannot say who has it. Both fill a gap and neither overrules a decision: an issue somebody already holds is reported and left alone, and `--add-assignee` is how to say otherwise |
-| 11 | The sprint an issue was worked in **survives** | A `sprint:YYYY-MM-DD` label on the issue. The `Sprint` field cannot be relied on for history: any iteration write clears it board-wide, including for closed issues in completed sprints |
+| 11 | The sprint an issue was worked in **survives** | A `sprint:YYYY-MM-DD` label on the issue. The `Sprint` field cannot be relied on for history: it holds one sprint, and an iteration write that omits the ids — from any client — clears it board-wide, including for closed issues in completed sprints. The labels are the backup for disaster recovery |
 | 12 | The field is repaired, not just reported | `gh agile sprint reconcile` sets each item's `Sprint` from its labels, latest winning. Safe to automate: it copies a recorded fact back into a field GitHub cleared, and invents nothing |
 | 13 | Carryover is visible | An issue worked across a boundary carries a label per sprint. The field holds only the latest |
 | 14 | Issues created outside the tool are upgraded | `gh agile sync --adopt`, or `templates/issue-adopt.yml` — see below |
@@ -792,7 +794,7 @@ Everything below was checked against the live API, not inferred.
 
 | What | Consequence |
 |---|---|
-| **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
+| **Editing sprints without their ids re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit. This tool sends the ids (#290), so its writes keep every assignment, and it re-applies them if an id changes anyway. A client that omits the ids gets no such protection, and there is no undo |
 | **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `init` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
 | **Auto-add by filter covers one repository, forward only** | A user-owned project had six built-ins and no auto-add by filter until October 2026; `Auto-add to project` is the seventh. GitHub Free allows one, Pro and Team 5, Enterprise 20. It watches one repository and only issues created or updated after it is on, and its filter cannot be read — so `sync` still backfills, and covers any repository without one |
 | **Closing on merge is a repository setting the API cannot read** | *Auto-close issues with merged linked pull requests*, under Settings → General → Issues. Off, `Closes #n` closes nothing; a before-and-after snapshot of every readable setting showed no difference |
@@ -813,9 +815,9 @@ configuration:
 **Do in the tool, not the web UI:**
 
 - Creating sprints — `gh agile sprint ensure`, or let `issue move` create one.
-- Renaming or re-dating a sprint. There is no safe web-UI path: it clears
-  assignments board-wide. Prefer changing `name_template`, which affects only
-  sprints created afterwards and leaves existing ones alone.
+- Re-dating a sprint. Whether the web UI sends the ids is not measured; if it
+  does not, it clears assignments board-wide, and `gh agile sprint reconcile`
+  rebuilds them from the labels.
 - Creating fields and boards — `init` converges them; a hand-made one drifts.
 
 **Two manual steps the API cannot do for you.** Enable the built-in *Item added
@@ -928,9 +930,8 @@ which are one per issue and the real cost.
 
 **Custom-field history.** GitHub emits a timeline event when `Status` changes
 and for nothing else, so the history of points, sprint or priority has to be
-reconstructed by diffing scheduled exports. `ProjectV2Iteration` carries no id
-either, which is why any sprint-configuration change clears every assignment and
-why this tool saves and re-applies them.
+reconstructed by diffing scheduled exports. The `sprint:YYYY-MM-DD` labels are
+how this tool keeps the sprint history, because the field holds one value.
 
 **WIP limits.** `ProjectV2View` exposes no limit field. A kanban board's column
 limits stay a web-UI setting.

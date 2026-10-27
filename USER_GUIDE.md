@@ -681,9 +681,8 @@ rearranged as work arrives, and an epic planned third but started first belongs
 first.
 
 **The headings carry their dates for a reason.** Sections sort by date, not by
-name, and a sprint is never renamed — so `AGILE Sprint 4` above is genuinely the
-*oldest* sprint on this board, two weeks before `Sprint 1`, and its name records
-only what it was called when it ran. Without the date the order looks wrong.
+name, and this board's sprints keep the names they ran under — so `AGILE Sprint 4`
+above is genuinely the *oldest* sprint on this board, two weeks before `Sprint 1`. Without the date the order looks wrong.
 
 **A long title wraps rather than losing its tail.** The board renders to the
 width of your window, so titles usually fit on one line; where one does not, the
@@ -700,14 +699,10 @@ default name are one decision, not two.
 `{n:04d} W{iso_week}-{year}` is the default `name_template` for a **new** project,
 and it is what this repository's own profile sets.
 
-**Adopting it renames nothing, and that is the point.** Changing `name_template`
-changes what the *next* sprint is called; every sprint that already exists keeps
-its name. Renaming one would clear every item's `Sprint` value board-wide —
-`ProjectV2Iteration` carries no id, so any write to the configuration replaces it
-wholesale and GitHub re-mints every iteration. The `sprint:` labels survive and
-`sprint reconcile` rebuilds the field from them, but that is a **reconstruction**,
-and anything predating the labels comes back only through
-`sprint backfill --source timeline`, which derives rather than reads.
+**Adopting it renames nothing.** Changing `name_template` changes what the
+*next* sprint is called; every sprint that already exists keeps its name. To
+bring an old one into line, rename it with `gh agile sprint edit` — see
+*Renaming a sprint* in §4. A rename keeps every assignment.
 
 So a series acquires a seam whenever the naming changes — this board reads
 `AGILE Sprint 4`, `Sprint 1`, `Sprint 2`, `Sprint 3`, and next `0004 W38-2026`.
@@ -1413,13 +1408,13 @@ With no argument it is the current sprint and never every sprint -- an
 identifier left out picks one default target, it does not widen the command.
 The current and future sprints are read from the `Sprint` field, the only thing
 that can say what is in a sprint *now*; a completed one from its
-`sprint:YYYY-MM-DD` labels, because every iteration write clears the field and
-the labels are the record that survives it.
+`sprint:YYYY-MM-DD` labels, because the field holds one sprint and the labels
+record every one the work lived in.
 
-Creating a sprint writes the iteration configuration, which clears every item's
-`Sprint` value board-wide; the tool re-applies them afterwards (see *Which sprint
-was this worked in?*). `--dry-run` says what would be appended and how many
-assignments the write would have to re-apply, and writes nothing:
+Creating a sprint rewrites the iteration configuration. The tool sends every
+existing sprint's id with it, so every assignment is kept; it checks afterwards
+and re-applies them if GitHub replaced an id anyway. `--dry-run` says what would
+be appended and writes nothing:
 
 ```bash
 gh agile sprint create --dry-run
@@ -1464,9 +1459,9 @@ from `Sprint 2` to `Sprint 5`, which is the honest record that nobody worked in
 `sprint ensure` refuse until it is.** Not ceremony: defaults used to apply
 silently, so the first sprint was created with whatever the tool assumed and the
 cadence was discovered afterwards — by which point sprints existed under it.
-Changing course then means living with the wrong rhythm or renaming sprints,
-which clears every assignment, since iterations carry no id. The cost of getting
-this wrong is paid later, and by someone else.
+Changing course then means living with the wrong rhythm, or re-dating sprints
+that work has already been recorded against. The cost of getting this wrong is
+paid later, and by someone else.
 
 ```bash
 gh agile init -t "…" --key WIDG --sprint-template 2-week
@@ -1514,15 +1509,25 @@ creating one sprint:
   AGILE-2026W40 Sprint 5  2026-09-28 .. 2026-10-11   ← the new template
 ```
 
-Sprint assignments survived that change, as they do any other: they are saved
-and re-applied around it.
+Sprint assignments survived that change, as they do any other.
 
-**Renaming a sprint that already exists is a different act, and this tool will
-not do it.** The name is what every historical item points at, and rewriting the
-iteration configuration to change one title clears every assignment on the
-board — recoverable, since the tool re-applies them, but it rewrites what a
-burndown from last quarter refers to. Live with the seam: names are cosmetic and
-the dates are the truth.
+### Renaming a sprint: `sprint edit`
+
+```bash
+gh agile sprint edit 2026-08-03 --title "0001 W32-2026" --dry-run
+gh agile sprint edit 2026-08-03 --title "0001 W32-2026"
+```
+
+Name the sprint by start date, title or `@current`; with none it is the current
+sprint. **Every item keeps its assignment**: each sprint's id is sent with the
+write, so a rename costs what creating a sprint costs. Until late 2026 GitHub's
+API took no id, every write re-created every sprint, and a rename cleared the
+whole board — so older boards, this one included, carry a naming seam that can
+now be tidied or kept.
+
+The title only. A sprint's start date is its identity, and the `sprint:` labels
+carry it, so a rename leaves history untouched; re-dating one would detach it
+from its own labels. A title already naming another sprint is refused.
 
 **A sprint created today starts on the last `start_day`, not today.** Asked for
 on a Wednesday with `start_day: monday`, it runs Monday to Sunday and already
@@ -1543,35 +1548,29 @@ in is the backfilling this avoids.
 If neither placement works it says so — `no sprint covers today (2026-08-16);
 the next starts 2026-08-17` — rather than reporting success. Sprint names are
 assigned by count, so a sprint placed before the series can be numbered after
-it. The dates are the truth; renaming would clear every assignment, since
-iterations carry no id.
+it. The dates are the truth; `sprint edit` renames one if the number reads wrong.
 
 **If `ensure` has not run, `issue move` covers for it.** Moving a story to
 `In Progress` when no sprint covers today, or fewer than `ahead` lie beyond it,
-runs `ensure` and says so. That is an iteration write with every assignment
-saved and restored around it, roughly once a sprint: the first start after a
-sprint begins. Set `autocreate: false` to have it never create one, and to warn
+runs `ensure` and says so, roughly once a sprint: the first start after a sprint
+begins. Every assignment is kept. Set `autocreate: false` to have it never create one, and to warn
 and leave the field empty when no sprint is active.
 
-> **Every change to the sprint configuration clears existing sprint
-> assignments** — all of them, not only the sprint you touched. This is GitHub's
-> behaviour rather than a choice: the configuration is replaced wholesale and
-> `ProjectV2Iteration`, the only input accepted, carries `startDate`, `duration`
-> and `title` and **no id**, so each update mints new iteration ids and orphans
-> every item pointing at an old one.
+> **A change to the sprint configuration that omits the sprints' ids clears
+> every sprint assignment** — all of them, not only the sprint you touched,
+> including closed issues in completed sprints. The configuration is replaced
+> wholesale, and without an id GitHub re-creates every sprint and orphans every
+> item pointing at an old one. Until late 2026 the API accepted no id at all, so
+> every change did this: renaming **one unused future sprint**, or appending one,
+> unassigned everything.
 >
-> Measured with four items staged across a completed, a current and a future
-> sprint: renaming **one unused future sprint** unassigned every one of them,
-> including a **closed issue in the completed sprint**. A pure append —
-> re-sending each existing entry byte-identical and adding one — does exactly
-> the same, and that append is the routine fortnightly act.
->
-> `gh agile` reads every assignment, makes the change, and re-applies them,
-> reporting how many it restored. That repair is one API call per assigned item
-> and is **not transactional**: during testing the GraphQL budget ran out
-> partway through and the remaining assignment was lost. Treat every sprint as
-> immutable once created, and see *Which sprint was this worked in?* below.
-> Changing the configuration in the **web UI** has no protection at all.
+> `gh agile` sends every sprint's id (#290). Measured on a sandbox with 13 items
+> in sprints: appending a sprint and renaming two kept every id and all 13
+> assignments; the same write without ids kept none. The tool still reads the
+> assignments before each write and checks the ids after, re-applying them if
+> GitHub replaced one anyway. Whether the **web UI** sends the ids has not been
+> measured; `gh agile sprint reconcile` rebuilds the field from the labels if
+> it clears.
 
 > `start_day` is this tool's alignment rule, not a GitHub setting. The API's
 > configuration input has no `startDay`, and GitHub does not derive one from a
@@ -1597,9 +1596,8 @@ gh agile sprint carryover 2026-10-12 --to @current   # the Monday after
 
 **It runs `sprint ensure` first**, so the sprint it moves into exists and the
 profile's `ahead` sprints lie beyond today, as `issue move` does when work
-starts. Creating a sprint is an iteration write, which clears every
-assignment on the board; `ensure` saves and restores them around it, and does
-nothing when the sprints already exist. `--dry-run` writes nothing, so it only
+starts. `ensure` keeps every assignment, and does nothing when the sprints
+already exist. `--dry-run` writes nothing, so it only
 says when `ensure` would have to run. A profile with `"autocreate": false`
 (the `none` template) skips it, and `carryover` refuses when no sprint follows.
 
@@ -1635,11 +1633,12 @@ The export carries both, beside the live field:
 
 | Column | Meaning |
 |---|---|
-| `field_sprint` | What the project item holds **now**. Cleared by any iteration write |
+| `field_sprint` | What the project item holds **now**. Cleared by an iteration write that omits the ids |
 | `sprint_starts` | Every sprint the issue lived in, oldest first — `2026-08-10;2026-08-24` |
 | `sprint_closed_in` | The last of them: the sprint it finished in |
 
-Demonstrated by renaming an unused future sprint and exporting immediately:
+Demonstrated, before the tool sent ids, by renaming an unused future sprint and
+exporting immediately:
 
 ```
 field_sprint      = ''                          ← wiped
@@ -1687,7 +1686,7 @@ nobody has edited by hand.
 
 | You see | Run |
 |---|---|
-| Items board-wide lost their Sprint, after a sprint was renamed or re-dated | `gh agile sprint reconcile` |
+| Items board-wide lost their Sprint, after a sprint was changed outside the tool | `gh agile sprint reconcile` |
 | One issue's Sprint is empty: `validate` says *In Progress but in no sprint* | `gh agile issue reconcile N` |
 | *Sprint field disagrees with the sprint: label(s)*, and the labels are right | `gh agile sprint reconcile --overwrite`; leave it if the item was re-planned on purpose |
 | *closed with no sprint: label* on issues that predate the stamping | `gh agile sprint backfill` |
@@ -1883,7 +1882,7 @@ Everything here was checked against the live API, not inferred. The README's
 
 | What | Consequence |
 |---|---|
-| **Editing any sprint re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit — see the note above. This tool saves and re-applies them; the web UI gives you no such protection, and there is no undo |
+| **Editing sprints without their ids re-mints every iteration id** | Every item's `Sprint` value is cleared, including items in sprints you did not edit — see the note above. This tool sends the ids, and re-applies the assignments if one changes anyway; a client that omits them gets no such protection, and there is no undo |
 | **Built-in project workflows can be read but not written** | `projectV2.workflows` gives each one's `name` and `enabled`; the schema has `deleteProjectV2Workflow` and no create or update, and a workflow's filter is not readable. `init` can neither turn them on nor converge them, so *every* project automation is a manual web-UI step |
 | **Auto-add by filter covers one repository, forward only** | A user-owned project had six built-ins and no auto-add by filter until October 2026; `Auto-add to project` is the seventh. GitHub Free allows one, Pro and Team 5, Enterprise 20. It watches one repository and only issues created or updated after it is on, and its filter cannot be read — so `sync` still backfills, and covers any repository without one |
 | **Closing on merge is a repository setting the API cannot read** | *Auto-close issues with merged linked pull requests*, under Settings → General → Issues. Off, `Closes #n` closes nothing; a before-and-after snapshot of every readable setting showed no difference |
@@ -1910,9 +1909,8 @@ configuration:
   dragged start as *In Progress but in no sprint* or *unassigned*, and a dragged
   finish as *status Done but still open*.
 - Creating sprints — `gh agile sprint ensure`, or let `issue move` create one.
-- Renaming or re-dating a sprint. There is no safe web-UI path: it clears
-  assignments board-wide. Prefer changing `name_template`, which affects only
-  sprints created afterwards.
+- Renaming a sprint — `gh agile sprint edit`. Whether the web UI keeps
+  assignments through a sprint change is not measured.
 - Creating fields and boards — `init` converges them; a hand-made one drifts.
 
 **Two manual steps the API cannot do for you.** Enable the built-in *Item added
@@ -3176,6 +3174,7 @@ gh agile issue move --help
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint view` / `sprint create` | Show the iterations; one sprint with its items; append one |
 | `sprint carryover` | Move a sprint's unfinished work into the next sprint at its end; finished work stays |
+| `sprint edit` | Rename a sprint; every item keeps its assignment |
 | `sprint ensure` / `sprint reconcile` / `sprint backfill` / `sprint unstamp` | Append sprints until one is current and enough lie ahead; set Sprint fields from the labels; add labels from history; remove labels from containers |
 | `initiative create` / `epic create` / `story create` / `bug create` / `task create` | Create work items with their parent, labels and fields; `gh issue create`'s flags, the title as `-t` |
 | `initiative list` / `epic list` / `story list` / `bug list` / `issue list` | List one level from the board, by Status; `issue list` takes every level |
