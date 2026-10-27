@@ -200,19 +200,18 @@ class TestTheTwoStatesAMergeLeaves:
     #186's own merge left it open. AGILE-190.
     """
 
-    def test_closed_and_not_done_reports_the_no_close_command(self, hook, monkeypatch):
+    def test_closed_and_not_done_reports_issue_close(self, hook, monkeypatch):
+        """One verb for both states since #285: `issue close` finishes an issue
+        a merge already closed, rather than closing it twice."""
         monkeypatch.setattr(hook, "cmd_validate",
                             lambda a: print("closed but status is not Done") or 1)
         text = hook.outstanding(args_for(hook), board(n174="CLOSED"), REPO, 174)
-        assert "gh agile issue move 174 Done --evidence" in text
-        assert "--close" not in text.split("finish it:")[1].splitlines()[0]
+        assert "gh agile issue close 174 --evidence" in text
 
-    def test_and_says_why_not(self, hook, monkeypatch):
-        """Closing an already-closed issue exits 0 and changes nothing, which is
-        how `--not-planned` lost its reason."""
+    def test_and_says_it_will_not_close_it_twice(self, hook, monkeypatch):
         monkeypatch.setattr(hook, "cmd_validate", lambda a: print("x") or 1)
         text = hook.outstanding(args_for(hook), board(n174="CLOSED"), REPO, 174)
-        assert "not `issue close`" in text and "exits 0" in text
+        assert "already closed" in text and "does not close it twice" in text
 
     def test_it_carries_what_validate_said(self, hook, monkeypatch):
         monkeypatch.setattr(hook, "cmd_validate",
@@ -251,13 +250,14 @@ class TestTheTwoStatesAMergeLeaves:
         assert hook.outstanding(args_for(hook), board(n1="CLOSED"), REPO, 186) is None
 
     def test_two_issues_are_each_in_their_own_state(self, hook, monkeypatch):
-        """One pull request can close several, and they need not agree."""
+        """One pull request can close several, and they need not agree: the
+        command is the same, and what each says about itself is not."""
         monkeypatch.setattr(hook, "cmd_validate", lambda a: print("stale") or 1)
         shared = board(n186="OPEN", n174="CLOSED")
-        assert "issue close" in hook.outstanding(
-            args_for(hook), shared, REPO, 186).split("finish it:")[1].splitlines()[0]
-        assert "issue close" not in hook.outstanding(
-            args_for(hook), shared, REPO, 174).split("finish it:")[1].splitlines()[0]
+        still_open = hook.outstanding(args_for(hook), shared, REPO, 186)
+        closed = hook.outstanding(args_for(hook), shared, REPO, 174)
+        assert "is still open" in still_open and "is still open" not in closed
+        assert "closed by this merge" in closed
 
 
 class TestTheBoardIsReadOnce:

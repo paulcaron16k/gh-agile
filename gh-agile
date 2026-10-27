@@ -1758,7 +1758,7 @@ WORKFLOW_ADVICE = {
         "by-hand",
         "it writes Status and nothing else -- no Evidence, no closing sprint: "
         "label, no completed-or-not-planned -- so an issue it touches reads Done "
-        "while being unfinished. `issue move ISSUE Done --evidence` writes all "
+        "while being unfinished. `issue close ISSUE --evidence` writes all "
         "three, and the post-merge hook asks for it at the terminal (#186)",
     ),
     "Item added to project": (
@@ -4339,7 +4339,7 @@ def cmd_sprint_carryover(args) -> int:
           f"{finished} finished stay in {source['title']}")
     if unfinished_closed:
         print(f"  closed but not {CYCLE_END}, left where they are -- finish each with "
-              f"`gh agile issue move N {CYCLE_END} --evidence \"...\"`: "
+              f"`gh agile issue close N --evidence \"...\"`: "
               + ", ".join(unfinished_closed))
     if containers:
         print(f"  an epic or initiative is in this sprint, which none should be; "
@@ -5918,7 +5918,7 @@ def render_board(view: dict, kind: str, rows: list[dict], sections, owner: str,
                    f"showing finished work as live.")
         for row in stale:
             out.append(f"    {row['key']}  Status: {row['status'] or '(none)'}  "
-                       f"->  gh agile issue move {row['number']} {CYCLE_END}")
+                       f"->  gh agile issue close {row['number']}")
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -7774,11 +7774,39 @@ def cmd_close(args) -> int:
     evidence and stamps no label, because a `sprint:` label asserts the sprint
     work was *done in*. Closed first, then Status, for the reason `cmd_move`
     gives where it does it.
+
+    **An issue already closed is finished, not closed again (#285).** A merge
+    closes the issue before anyone runs this, and `gh issue close` on a closed
+    issue is a no-op that exits 0 -- so this command did nothing while looking
+    like it worked, and finishing took a second verb, `issue move N Done`. Now
+    it skips the close and does the rest: the evidence, Status, the closing
+    `sprint:` label. A reason that differs from the one GitHub recorded is
+    refused: GitHub cannot change the reason of a closed issue, and keeping the
+    old one silently is how `not planned` was lost before (#96).
     """
+    repo, number = parse_issue_ref(args.issue, args._config, getattr(args, "repo", None))
+    args.issue, args.repo = str(number), repo
     args.status = CYCLE_END
     args.close = True
     args.not_planned = args.reason == "not planned"
     args.add_assignee = None
+    recorded = json.loads(gh(["issue", "view", str(number), "--repo", repo,
+                              "--json", "state,stateReason"]))
+    if recorded.get("state") == "CLOSED":
+        had = (recorded.get("stateReason") or "COMPLETED").upper()
+        wanted = CLOSE_REASONS[args.reason]
+        if had != wanted:
+            had_said = next((k for k, v in CLOSE_REASONS.items() if v == had), had.lower())
+            sys.exit(
+                f"#{number} is already closed as {had_said}, and GitHub cannot change "
+                f"the reason of a closed issue.\n"
+                f"  To close it as {args.reason}, reopen it and close it again:\n"
+                f"    gh agile issue reopen {number}\n"
+                f"    gh agile issue close {number} -r \"{args.reason}\"")
+        args._already_closed = True
+        print(f"  #{number} was already closed as {args.reason}; finishing it")
+        if getattr(args, "comment", None):
+            gh(["issue", "comment", str(number), "--repo", repo, "--body", args.comment])
     return cmd_move(args)
 
 
@@ -7900,7 +7928,7 @@ def cmd_move(args) -> int:
     # There is no repair afterwards; the reason cannot be changed on a closed
     # issue. Closing first, then setting Status, keeps `NOT_PLANNED` -- measured
     # on the same project that loses it the other way round.
-    if getattr(args, "close", False):
+    if getattr(args, "close", False) and not getattr(args, "_already_closed", False):
         close_issue(repo, args.issue, not_planned=args.not_planned,
                     comment=getattr(args, "comment", None))
     set_field(args.owner, args.project, item["id"], "Status", args.status)
@@ -8648,8 +8676,8 @@ STILL_OPEN = (
 )
 CLOSED_NOT_DONE = (
     "was closed by this merge, and the board has not caught up:",
-    "`issue move`, not `issue close`: it is already closed, and closing an issue\n"
-    "      twice is a no-op that exits 0 -- which is how a close reason gets lost.",
+    "`issue close` finishes an issue that is already closed: it writes the\n"
+    "      evidence, sets Done and stamps the sprint, and does not close it twice.",
 )
 
 
@@ -8704,7 +8732,7 @@ def outstanding(args, board: list[dict], repo: str, issue: int) -> str | None:
     detail, why = CLOSED_NOT_DONE
     return render_unfinished(
         issue, f"{detail}\n{said.getvalue().strip()}",
-        f'gh agile issue move {issue} Done --evidence "..."', why)
+        f'gh agile issue close {issue} --evidence "..."', why)
 
 
 #: The line that marks a hook as this tool's, so `init` knows what it may

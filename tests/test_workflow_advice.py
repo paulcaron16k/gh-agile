@@ -316,7 +316,7 @@ class TestItemClosedIsOffOnPurpose:
     def test_and_names_what_replaces_it(self, tool):
         """A verdict that only forbids leaves the reader with the gap."""
         _verdict, why = tool.WORKFLOW_ADVICE["Item closed"]
-        assert "issue move ISSUE Done --evidence" in why and "#186" in why
+        assert "issue close ISSUE --evidence" in why and "#186" in why
 
     def test_off_is_not_reported(self, tool):
         """The whole point: `validate` stopped arguing with the decision."""

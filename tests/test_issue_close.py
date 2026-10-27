@@ -17,6 +17,7 @@ Every door is tried below, through the real `cmd_move`, with only GitHub stubbed
 from __future__ import annotations
 
 import argparse
+import json
 
 import pytest
 
@@ -28,10 +29,12 @@ EMPTY = "## Intent\nx\n\n## Acceptance\ny\n\n## Evidence\n_TBD_\n"
 def board(monkeypatch, tool):
     """Every write `cmd_move` makes, against one issue whose body is settable."""
     record = {"order": [], "closed": [], "labels": [], "status": [], "gh": [],
-              "body": FILLED}
+              "body": FILLED, "state": {"state": "OPEN", "stateReason": None}}
 
     def fake_gh(argv, **kwargs):
         record["gh"].append(argv)
+        if "state,stateReason" in argv:
+            return json.dumps(record["state"])
         return ""
 
     monkeypatch.setattr(tool, "gh", fake_gh)
@@ -197,3 +200,52 @@ class TestTheRetiredSpellings:
         hint = tool.retired_spelling(["story", "create", "-t", "S", "--epic", "none",
                                       "--status", "Todo"])
         assert "issue move" not in hint
+
+
+class TestAnIssueAlreadyClosed:
+    """A merge closes the issue first; `issue close` then finishes it (#285).
+
+    `gh issue close` on a closed issue is a no-op that exits 0, so this command
+    did nothing while looking like it worked, and finishing took `issue move N
+    Done` instead."""
+
+    def closed(self, board, reason):
+        board["state"] = {"state": "CLOSED", "stateReason": reason}
+
+    def test_it_is_finished_not_closed_again(self, tool, board, capsys):
+        self.closed(board, "COMPLETED")
+        tool.cmd_close(parsed(tool, "issue", "close", "7"))
+        assert board["closed"] == []
+        assert board["status"] == ["Done"] and board["labels"] == [False]
+        assert "already closed as completed; finishing it" in capsys.readouterr().out
+
+    def test_it_still_needs_evidence(self, tool, board):
+        self.closed(board, "COMPLETED")
+        board["body"] = EMPTY
+        with pytest.raises(SystemExit):
+            tool.cmd_close(parsed(tool, "issue", "close", "7"))
+        assert board["status"] == []
+
+    def test_closed_as_not_planned_finishes_as_not_planned(self, tool, board):
+        self.closed(board, "NOT_PLANNED")
+        board["body"] = EMPTY
+        tool.cmd_close(parsed(tool, "issue", "close", "7", "-r", "not planned"))
+        assert board["closed"] == [] and board["status"] == ["Done"]
+        assert board["labels"] == [True]
+
+    @pytest.mark.parametrize("had,asked", [("COMPLETED", "not planned"),
+                                           ("NOT_PLANNED", "completed")])
+    def test_a_different_reason_is_refused(self, tool, board, had, asked):
+        """GitHub cannot change a closed issue's reason; keeping the old one
+        silently is how `not planned` was lost in #96."""
+        self.closed(board, had)
+        with pytest.raises(SystemExit) as refused:
+            tool.cmd_close(parsed(tool, "issue", "close", "7", "-r", asked))
+        assert "reopen it and close it again" in str(refused.value)
+        assert board["status"] == [] and board["closed"] == []
+
+    def test_the_comment_is_still_left(self, tool, board):
+        self.closed(board, "COMPLETED")
+        tool.cmd_close(parsed(tool, "issue", "close", "7", "-c", "merged in #12"))
+        assert ["issue", "comment", "7", "--repo", "o/r", "--body", "merged in #12"] \
+            in board["gh"]

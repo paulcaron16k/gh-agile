@@ -943,7 +943,7 @@ class TestAClosedIssueWithAStaleStatus:
         text = rendered(tool, rows, sections=[("In Progress", rows)])
         assert "closed, but Status is not Done" in text
         assert "showing finished work as live" in text
-        assert "gh agile issue move 123 Done" in text
+        assert "gh agile issue close 123" in text
 
     def test_a_board_in_order_says_nothing_at_all(self, tool):
         """An explanation of a mark nothing carries is noise on every board that
@@ -967,7 +967,7 @@ class TestAClosedIssueWithAStaleStatus:
     def test_it_lists_every_stale_row(self, tool):
         rows = [stale_row(key="AGILE-1", number=1), stale_row(key="AGILE-2", number=2)]
         text = rendered(tool, rows, sections=[("In Progress", rows)])
-        assert "issue move 1 Done" in text and "issue move 2 Done" in text
+        assert "issue close 1" in text and "issue close 2" in text
 
     def test_there_is_no_double_blank_before_the_footnote(self, tool):
         rows = [stale_row(key="AGILE-123")]
