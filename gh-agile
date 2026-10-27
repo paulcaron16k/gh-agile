@@ -3375,6 +3375,13 @@ def file_under_epic(args, kind: str) -> int:
     # reused, so a refused body or label must cost nothing.
     body, extras = create_body(args), extra_labels(getattr(args, "label", None))
     labels = [f"type:{kind}"] + ([f"{KEY_LABEL}{args.key}"] if getattr(args, "key", None) else [])
+    # **The epic's initiative, on the issue from the start.** A board filter
+    # cannot traverse the hierarchy, so a story under an epic under an initiative
+    # is on that initiative's board only if it carries the label; created without
+    # it, it was missing until somebody ran `initiative reconcile` (#281). Read
+    # off the epic already fetched above, so it costs no call.
+    labels += sorted(lb["name"] for lb in (parent or {}).get("labels") or []
+                     if lb["name"].startswith(INITIATIVE_LABEL))
     ensure_labels(args.repo, labels)
     number, node = create_issue(
         args.repo, args.title,
