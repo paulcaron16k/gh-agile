@@ -113,9 +113,9 @@ class TestTheRoadmap:
         assert "earliest" in flowing and "sprint:` label" in flowing
 
     def test_the_naming_seam_is_explained(self, flowing):
-        """`AGILE Sprint 4` above `Sprint 2` looks wrong until you know a
-        sprint is never renamed."""
-        assert "never renamed" in flowing
+        """`AGILE Sprint 4` above `Sprint 2` looks wrong until you know the
+        sprints keep the names they ran under."""
+        assert "keep the names they ran under" in flowing
         assert "oldest" in flowing
 
     def test_not_started_is_documented(self, tool, flowing):

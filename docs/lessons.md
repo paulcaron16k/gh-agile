@@ -11,8 +11,28 @@ Where a claim here has a number in it, that number came from a run.
 **Measure GitHub, do not reason about it.** Every significant finding came from an experiment on a scratch
 project, and several contradicted what the documentation and the type names implied. The iteration
 behaviour, the built-in workflows, the write-only series anchor, the `503`s — all measured. The type
-name `ProjectV2Iteration` implies an identified object; it carries `startDate`, `duration` and `title` and
-no id, which is the whole defect this tool is built around.
+name `ProjectV2Iteration` implies an identified object; it carried `startDate`, `duration` and `title` and
+no id, which was the whole defect this tool is built around.
+
+**And GitHub changes underneath you without saying so (#290).** By 2026-10-27 `ProjectV2Iteration` had
+gained `id` — "Include this to preserve the iteration's identity during replacement updates" — and nothing
+here noticed; it was found by introspecting the schema to answer an unrelated question. Measured that day
+on the sandbox (project 19, 13 items in sprints), full-board diff of every item's Sprint start date after
+each write:
+
+```
+write, iterations sent                           ids kept   assignments lost   restore
+append 1, existing sent WITH ids                    9 / 9         0 / 13          none
+rename current + completed sprint, WITH ids         10/10         0 / 13          none
+control: same configuration, WITHOUT ids             0 / 10       13 / 13          13 re-applied
+`sprint create` through write_iterations            10/10         0 / 13          none
+`sprint ensure` through write_iterations            11/11         0 / 13          none
+```
+
+So the defect is real only for a write that omits the ids — and the configuration is still replaced
+wholesale, so an omitted iteration is deleted. #291 watches the schema so the next change is found on
+purpose. Introspection is rationed per query: three uses of `__Type.inputFields` in one request is
+refused with `INTROSPECTION_LIMIT_EXCEEDED`.
 
 **A project's built-in workflows can be read, and reading them explains defects that look unrelated.**
 Measured 2026-09-16 — `projectV2.workflows` returns each one's `name` and `enabled`:

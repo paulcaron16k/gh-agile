@@ -83,30 +83,37 @@ gets no token and calls no `gh`. `check-guide` is read-only but *not* offline �
 commands against whichever board the profile in the checkout names — so it stays a local target, and a green CI
 run says the pure logic is sound and nothing about the write side.
 
-## The defect the design is built around
+## The defect the design is built around — and the fix, since #290
 
-**Any write to a project's iteration configuration re-mints every iteration id and clears every item's `Sprint`
-value — retroactively, silently, board-wide, including closed issues in completed sprints.**
+**A write to a project's iteration configuration that omits the iterations' ids re-mints every iteration id and
+clears every item's `Sprint` value — retroactively, silently, board-wide, including closed issues in completed
+sprints.**
 
-Measured, not inferred. Renaming *one unused future sprint* unassigned four items staged across a completed, a
-current and a future sprint. A pure **append** — every existing entry re-sent byte-identical plus one new — does
-the same, and that append is the routine fortnightly act.
+Measured, not inferred, and still true. Renaming *one unused future sprint* unassigned four items staged across a
+completed, a current and a future sprint. A pure **append** — every existing entry re-sent byte-identical plus one
+new — does the same. Re-measured 2026-10-27 as a control: 10 iterations sent without ids, 0 ids kept, 13 of 13
+assignments cleared.
 
-`ProjectV2Iteration`, the input object the mutation accepts, carries `startDate`, `duration` and `title` and **no
-id**, so the configuration is replaced wholesale. There is no safe write.
+**The input used to carry no id; it now does, and the tool sends it (#290).** `ProjectV2Iteration` was
+`startDate`, `duration` and `title`, so there was no safe write. It gained `id` — "Include this to preserve the
+iteration's identity during replacement updates" — found by chance in the schema, which is why #291 watches it.
+With ids sent, measured on the sandbox 2026-10-27: an append, `sprint create`, `sprint ensure`, and a rename of
+the current and a completed sprint each kept every id and every assignment, with no restore. The configuration is
+still replaced wholesale, so anything omitted is deleted: every write re-sends every iteration.
 
-Six workarounds exist for this one field, and they are not optional:
+`write_iterations` is the one writer, and the defences stay — as the fallback, and as disaster recovery:
 
-1. **Save and restore** every assignment around any iteration write (`sprint_assignments` / `restore_assignments`).
-2. **`require_graphql_budget`** refuses the destructive write when the budget cannot cover the restore — the repair
-   is one call per item with no transaction, and running out halfway loses assignments permanently.
-3. **`sprint:YYYY-MM-DD` labels** on the issue are the real record. Dated, not named: a title is cosmetic and
-   editable, a start date is identity, and dates sort.
+1. **Save and restore**, now conditional. `write_iterations` reads the assignments first and checks the ids after;
+   only if GitHub replaced one anyway does it restore them (`restore_assignments`) and heal, and say so.
+2. **`require_graphql_budget`** still refuses the write when the budget could not cover a restore. It goes once the
+   id path is proven in real use (#292).
+3. **`sprint:YYYY-MM-DD` labels** on the issue are the real record, permanently. Dated, not named: a title is
+   cosmetic and editable, a start date is identity, and dates sort. They are the backup for disaster recovery and
+   for whatever GitHub Projects gets wrong next.
 4. **`sprint backfill`** recovers history for issues predating the labels, from Status transitions.
 5. **`sprint reconcile`** sets the field from the labels, board-wide; **`issue reconcile`** is the same repair aimed at
    one issue, at 3 GraphQL points against a whole-board read.
-6. **`heal_sprint_fields`** runs that reconcile automatically after `restore_assignments` in all three destructive
-   paths.
+6. **`heal_sprint_fields`** runs that reconcile automatically after a restore.
 
 **Field for the present, labels for the past.** The field is live UI state, allowed to be lossy because it is
 re-derivable, and is the only thing that can answer "what is in the current sprint" — no label drives
@@ -202,7 +209,7 @@ in `agile-reports` (`GOLD_MODEL.md` there); nothing here writes an `agile_*` fil
   `owner/project` and written to `AGILE`; incremental file export never advanced and only appeared to work because
   stdout runs happened to move the read key.
 
-## Sprint naming, and why nothing is ever renamed
+## Sprint naming, and renaming
 
 **`{n:04d} W{iso_week}-{year}` — `0004 W38-2026`.** The default for a new project, and what this
 project's profile now sets.
@@ -214,21 +221,14 @@ that lines up, which `board view` spends eight characters on. Measured before th
 `0004 W38-2026` cuts to `0004 W38` and keeps the number and the week; Jira's `<Board> Sprint <n>` cuts
 to `AGILE S…` and keeps neither.
 
-**A sprint is never renamed. Not to adopt this, not for anything.** `ProjectV2Iteration` carries no id,
-so *any* write to the iteration configuration replaces it wholesale: GitHub re-mints every iteration id
-and every item's `Sprint` value points at one that no longer exists. Board-wide, retroactively, closed
-issues in completed sprints included. Measured — renaming one unused future sprint unassigned items
-across a completed, a current and a future one.
+**A sprint may be renamed.** Until #290 it could not be: any write to the iteration configuration re-minted
+every id and cleared every assignment, so a rename bought a cosmetic change with a board-wide repair. With the
+ids sent, a rename is an ordinary write and costs what adding a sprint costs. The start date, not the title, is
+still a sprint's identity — the `sprint:` labels carry the date, so a rename leaves history untouched.
 
-What survives is the `sprint:YYYY-MM-DD` labels, which is the whole reason they exist, and
-`sprint reconcile` rebuilds the field from them. That is **reconstruction, not intact data**: anything
-predating the labels is recoverable only by `sprint backfill --source timeline`, which derives rather
-than reads. So a rename costs a board-wide repair to buy a cosmetic change.
-
-**The consequence is a naming seam, and the seam is correct.** This board reads `AGILE Sprint 4`,
-`Sprint 1`, `Sprint 2`, `Sprint 3`, and the next one created will read `0004 W38-2026`. Three spellings
-in one series looks untidy and is the honest record: each says what the sprint was called when it ran.
-Tidying it would clear every assignment on the board.
+**The board this project runs on has a naming seam**: `AGILE Sprint 4`, `Sprint 1`, `Sprint 2`, `Sprint 3`, then
+`0005 W40-2026` onward. It was left because tidying it would have cleared every assignment; it can now be tidied
+or kept, as a choice rather than a constraint.
 
 ## Conventions
 

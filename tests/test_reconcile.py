@@ -132,17 +132,17 @@ class TestDamageVersusDecision:
         assert signature.parameters["dry_run"].default is False
         assert signature.parameters["quiet"].default is False
 
-    def test_every_destructive_path_heals(self, tool):
-        """The three writes that clear assignments -- cadence convergence,
-        `sprint ensure` and `sprint create` -- must each heal afterwards, or the
-        gap reopens in whichever one was missed."""
+    def test_every_iteration_write_goes_through_one_writer(self, tool):
+        """Cadence convergence, `sprint ensure` and `sprint create` each wrote
+        the configuration themselves, and each had to remember the restore and
+        the heal. Now `write_iterations` is the one writer (#290)."""
+        import pathlib
+
+        source = pathlib.Path(tool.__file__).read_text()
+        assert source.count("iterationConfiguration: {") == 1
         import inspect
 
-        for function in (tool.converge_project, tool.ensure_sprints, tool.cmd_sprint):
-            source = inspect.getsource(function)
-            if "restore_assignments" not in source:
-                continue
-            assert "heal_sprint_fields" in source, function.__name__
+        assert "iterationConfiguration: {" in inspect.getsource(tool.write_iterations)
 
     def test_heal_follows_restore_not_precedes_it(self, tool):
         """Order matters: `restore_assignments` replays a snapshot and covers
@@ -150,5 +150,5 @@ class TestDamageVersusDecision:
         moved through `move`. The heal only covers what the labels know."""
         import inspect
 
-        source = inspect.getsource(tool.ensure_sprints)
+        source = inspect.getsource(tool.write_iterations)
         assert source.index("restore_assignments") < source.index("heal_sprint_fields")
