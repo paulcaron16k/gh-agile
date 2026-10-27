@@ -196,12 +196,127 @@ class TestWhatTouchesUs:
         assert ours < entry.index("`ProjectV2Iteration.id`") < rest < entry.index("`Gist.forks`")
 
 
+#: Fixture copies of GitHub's published files, in their real shapes.
+PUBLISHED_LOG = [
+    {"date": "2026-10-27", "previewChanges": [], "upcomingChanges": [], "schemaChanges": [
+        {"title": "The GraphQL schema includes these changes:", "changes": [
+            "<p>Field <code>forks</code> was added to object type <code>Gist</code></p>"]}]},
+    {"date": "2026-10-01", "previewChanges": [], "upcomingChanges": [], "schemaChanges": [
+        {"title": "The GraphQL schema includes these changes:", "changes": [
+            "<p>Input field <code>id</code> of type <code>String</code> was added to input "
+            "object type 'ProjectV2Iteration'</p>"]}]},
+    {"date": "2026-06-23", "previewChanges": [], "schemaChanges": [], "upcomingChanges": [
+        {"title": "The following changes will be made to the schema:", "changes": [
+            "<p>On member <code>Gist.stars</code>: will be removed.</p>"]}]},
+]
+UPCOMING = {
+    "2026-12-01": [{"location": "ProjectV2Iteration.title", "date": "2026-12-01",
+                    "criticality": "breaking",
+                    "description": "<p><code>title</code> will be removed.</p>"}],
+    "2027-07-01": [{"location": "Mutation.updateProjectV2Field", "date": "2027-07-01",
+                    "criticality": "breaking",
+                    "description": "<p>Use <code>updateProjectV2IterationField</code>.</p>"},
+                   {"location": "Gist.stars", "date": "2026-11-01",
+                    "criticality": "breaking", "description": "<p>gone</p>"}],
+}
+
+
+class TestGitHubsPublishedRecord:
+    USED = {"ProjectV2Iteration", "updateProjectV2Field", "title"}
+    ROOTS = {"Query", "Mutation"}
+
+    def test_html_becomes_markdown(self, drift):
+        assert drift.as_markdown("<p>Field <code>a&amp;b</code> was <em>added</em></p>") == (
+            "Field `a&b` was added")
+
+    def test_items_since_our_last_entry_oldest_first(self, drift):
+        items = drift.published_since(PUBLISHED_LOG, "2026-10-01")
+        assert [d for d, _t in items] == ["2026-10-01", "2026-10-27"]
+        assert "'ProjectV2Iteration'" in items[0][1]
+
+    def test_no_previous_entry_means_no_window(self, drift):
+        assert drift.published_since(PUBLISHED_LOG, None) == []
+
+    def test_our_last_entry_date_is_read_from_the_changelog(self, drift, tmp_path):
+        log = tmp_path / "log.md"
+        log.write_text("# x\n\n## 2026-09-01T00:00:00Z\n\na\n\n## 2026-10-27T21:40:05Z\n\nb\n")
+        assert drift.last_entry_date(log) == "2026-10-27"
+        assert drift.last_entry_date(tmp_path / "absent.md") is None
+
+    def test_upcoming_removals_touching_us_due_first(self, drift):
+        import datetime as dt
+
+        items = drift.upcoming_for_us(UPCOMING, self.USED, self.ROOTS, dt.date(2026, 10, 27))
+        assert [(i["location"], i["due"]) for i in items] == [
+            ("ProjectV2Iteration.title", True), ("Mutation.updateProjectV2Field", False)]
+
+    def test_a_removal_of_a_member_we_do_not_use_is_not_ours(self, drift):
+        import datetime as dt
+
+        upcoming = {"2026-11-01": [{"location": "ProjectV2Iteration.weight",
+                                    "date": "2026-11-01", "criticality": "breaking",
+                                    "description": ""}]}
+        assert drift.upcoming_for_us(upcoming, self.USED, self.ROOTS,
+                                     dt.date(2026, 10, 27)) == []
+
+    @pytest.mark.parametrize("path,said", [
+        ("ProjectV2Iteration.id", True),      # the type is quoted, not in code
+        ("Gist.forks", True),
+        ("Gist.stars", True),                 # announced, in an upcomingChanges group
+        ("Gist.watchers", False),
+        ("ProjectV2Iteration.startDate", False),
+    ])
+    def test_whether_githubs_changelog_mentions_a_change(self, drift, path, said):
+        items = drift.published_since(PUBLISHED_LOG, "2026-01-01")
+        assert drift.mentioned({"path": path}, items) is said
+
+    def test_the_entry_says_what_github_did_not_mention(self, drift):
+        changes = [{"change": "added", "path": "ProjectV2Iteration.id", "what": "input field",
+                    "detail": "String"},
+                   {"change": "added", "path": "Gist.watchers", "what": "field", "detail": ""}]
+        published = {"since": "2026-10-01", "error": None,
+                     "items": drift.published_since(PUBLISHED_LOG, "2026-10-01"),
+                     "upcoming": []}
+        entry = drift.render(changes, "2026-10-27T17:00:00Z", self.USED, self.ROOTS, published)
+        lines = {line.split("`")[1]: line for line in entry.splitlines() if line.startswith("- ")
+                 and "`" in line and not line.startswith("- 2026")}
+        assert "not in GitHub's changelog" not in lines["ProjectV2Iteration.id"]
+        assert "not in GitHub's changelog" in lines["Gist.watchers"]
+        assert "### GitHub's changelog since 2026-10-01" in entry
+
+    def test_the_entry_lists_removals_touching_us(self, drift):
+        import datetime as dt
+
+        published = {"since": None, "error": None, "items": [],
+                     "upcoming": drift.upcoming_for_us(UPCOMING, self.USED, self.ROOTS,
+                                                       dt.date(2026, 10, 27))}
+        entry = drift.render([], "2026-10-27T17:00:00Z", self.USED, self.ROOTS, published)
+        removals = entry.split("### Announced removals touching gh-agile", 1)[1]
+        assert removals.index("due 2026-12-01 `ProjectV2Iteration.title` (breaking)") \
+            < removals.index("2027-07-01 `Mutation.updateProjectV2Field`")
+
+    def test_a_published_record_that_cannot_be_read_is_said_not_fatal(self, drift):
+        published = {"since": "2026-10-01", "error": "could not be read: 404",
+                     "items": [], "upcoming": []}
+        changes = [{"change": "added", "path": "Gist.x", "what": "field", "detail": ""}]
+        entry = drift.render(changes, "t", self.USED, self.ROOTS, published)
+        assert "could not be read: 404" in entry and "not in GitHub's changelog" not in entry
+
+    def test_fetch_failure_is_reported_not_raised(self, drift, monkeypatch):
+        def refuse(name):
+            raise OSError("no network")
+        monkeypatch.setattr(drift, "_get_json", refuse)
+        assert drift.fetch_published() == (
+            None, None, "GitHub's published changelog could not be read: no network")
+
+
 class TestCheck:
     @pytest.fixture
     def files(self, drift, tmp_path, base, monkeypatch):
         spec, log = tmp_path / "spec.json", tmp_path / "changelog.md"
         spec.write_text(drift.dump(base))
         monkeypatch.setattr(drift, "now_utc", lambda: "2026-10-27T17:00:00Z")
+        monkeypatch.setattr(drift, "fetch_published", lambda: (PUBLISHED_LOG, UPCOMING, None))
         return spec, log
 
     def test_no_drift_writes_nothing_and_exits_zero(self, drift, files, base, monkeypatch):
@@ -258,3 +373,18 @@ def test_the_committed_snapshot_has_the_field_that_started_this(drift):
     spec = json.loads((ROOT / "GitHub_API_spec.json").read_text())
     iteration = find(spec, "ProjectV2Iteration")
     assert "id" in {f["name"] for f in iteration["inputFields"]}
+
+
+def test_no_drift_still_warns_of_a_removal_that_is_due(drift, tmp_path, base, monkeypatch,
+                                                      capsys):
+    """A removal is announced months before the schema changes, and the warning
+    is worth nothing after it lands."""
+    spec = tmp_path / "spec.json"
+    spec.write_text(drift.dump(base))
+    monkeypatch.setattr(drift, "now_utc", lambda: "2026-10-27T17:00:00Z")
+    monkeypatch.setattr(drift, "fetch", lambda: copy.deepcopy(base))
+    monkeypatch.setattr(drift, "fetch_published", lambda: (PUBLISHED_LOG, UPCOMING, None))
+    assert drift.cmd_check(spec, tmp_path / "log.md") == 0
+    out = capsys.readouterr().out
+    assert "no drift" in out and "`ProjectV2Iteration.title`" in out
+    assert "updateProjectV2Field" not in out    # announced, but not due within 90 days
