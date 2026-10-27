@@ -206,8 +206,11 @@ believing either, and do not file a bug against the tool's lookup on the strengt
 
 **Destroy-then-repair needs the repair budgeted first.** The GraphQL budget ran out mid-restore during
 development and an assignment was lost for good — the repair is one call per item and it is not
-transactional. Hence `require_graphql_budget`, which refuses the destructive write when the budget cannot
-cover the restore. Refusing before the write costs nothing; refusing halfway through is not an option.
+transactional. Hence `require_graphql_budget`, which refused the destructive write when the budget could not
+cover the restore. Refusing before the write costs nothing; refusing halfway through is not an option. It was
+removed in #292, once the write stopped being destructive: with each sprint's id sent (#290), measured on project 4
+with 133 assignments, nothing needed restoring. A guard outlives its reason quietly; this one was retired on a
+measurement, not on a hunch.
 
 **`rm -rf` on a directory you did not create is a decision.** Two of the owner's export files went that
 way. Look first.
@@ -347,8 +350,8 @@ write is a read-modify-write", not "five call sites are".
 Check before characterising something as dead, and prefer "I have not found a reader" to "there is none".
 
 **Non-obvious workarounds need a comment saying why.** Several of them look like removable dead code —
-`heal_sprint_fields` after a restore, re-sending byte-identical iterations, the budget check before a
-mutation. Each carries the measurement that justifies it, because the next person to read it will
+`heal_sprint_fields` after a restore, re-sending every iteration with its id, the budget check that stood
+before a mutation until #292. Each carries the measurement that justifies it, because the next person to read it will
 otherwise delete it and be right to, on the evidence in front of them.
 
 **The owner caught things this tool's author missed** — a cron writing to `/var/log` that a user crontab

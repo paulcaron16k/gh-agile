@@ -99,30 +99,9 @@ class TestSprintConfigGate:
         tool.require_sprint_config({"sprint": {"cadence_days": 14}}, "creating a story")
 
 
-class TestBudgetPreflight:
-    def test_no_assignments_needs_no_budget(self, tool, monkeypatch):
-        """Nothing to restore, so nothing to protect -- and no reason to spend
-        a call asking."""
-        monkeypatch.setattr(tool, "graphql_remaining",
-                            lambda: (_ for _ in ()).throw(AssertionError("asked anyway")))
-        tool.require_graphql_budget(0, "creating a sprint")
-
-    def test_refuses_when_the_budget_cannot_cover_the_restore(self, tool, monkeypatch):
-        monkeypatch.setattr(tool, "graphql_remaining", lambda: 5)
-        with pytest.raises(SystemExit) as exit_info:
-            tool.require_graphql_budget(50, "creating a sprint")
-        assert "refused" in str(exit_info.value)
-
-    def test_proceeds_with_room_to_spare(self, tool, monkeypatch):
-        monkeypatch.setattr(tool, "graphql_remaining", lambda: 5000)
-        tool.require_graphql_budget(50, "creating a sprint")
-
-    def test_an_unknown_budget_does_not_block(self, tool, monkeypatch):
-        """Not being able to ask is not a reason to stop someone working."""
-        monkeypatch.setattr(tool, "graphql_remaining", lambda: None)
-        tool.require_graphql_budget(50, "creating a sprint")
-
-    def test_the_margin_is_counted(self, tool, monkeypatch):
-        monkeypatch.setattr(tool, "graphql_remaining", lambda: 50 + tool.BUDGET_MARGIN - 1)
-        with pytest.raises(SystemExit):
-            tool.require_graphql_budget(50, "creating a sprint")
+def test_no_budget_check_remains(tool):
+    """`require_graphql_budget` refused an iteration write the restore could not
+    cover. With each sprint's id sent the restore is a fallback, and the check
+    was removed once measured on project 4 (#292)."""
+    assert not hasattr(tool, "require_graphql_budget")
+    assert not hasattr(tool, "graphql_remaining")

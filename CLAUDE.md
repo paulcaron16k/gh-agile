@@ -117,15 +117,17 @@ still replaced wholesale, so anything omitted is deleted: every write re-sends e
 
 1. **Save and restore**, now conditional. `write_iterations` reads the assignments first and checks the ids after;
    only if GitHub replaced one anyway does it restore them (`restore_assignments`) and heal, and say so.
-2. **`require_graphql_budget`** still refuses the write when the budget could not cover a restore. It goes once the
-   id path is proven in real use (#292).
-3. **`sprint:YYYY-MM-DD` labels** on the issue are the real record, permanently. Dated, not named: a title is
+2. **`sprint:YYYY-MM-DD` labels** on the issue are the real record, permanently. Dated, not named: a title is
    cosmetic and editable, a start date is identity, and dates sort. They are the backup for disaster recovery and
    for whatever GitHub Projects gets wrong next.
-4. **`sprint backfill`** recovers history for issues predating the labels, from Status transitions.
-5. **`sprint reconcile`** sets the field from the labels, board-wide; **`issue reconcile`** is the same repair aimed at
+3. **`sprint backfill`** recovers history for issues predating the labels, from Status transitions.
+4. **`sprint reconcile`** sets the field from the labels, board-wide; **`issue reconcile`** is the same repair aimed at
    one issue, at 3 GraphQL points against a whole-board read.
-6. **`heal_sprint_fields`** runs that reconcile automatically after a restore.
+5. **`heal_sprint_fields`** runs that reconcile automatically after a restore.
+
+`require_graphql_budget`, which refused the write when the budget could not cover a full restore, is gone (#292):
+measured on project 4 on 2026-10-27, `sprint ensure` created a sprint through the id path with 133 assignments and
+every id and assignment intact. A fallback restore that runs short is now covered by the labels, not prevented.
 
 **Field for the present, labels for the past.** The field is live UI state, allowed to be lossy because it is
 re-derivable, and is the only thing that can answer "what is in the current sprint" — no label drives

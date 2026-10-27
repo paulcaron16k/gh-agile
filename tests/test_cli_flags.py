@@ -221,7 +221,6 @@ class TestSprintCreateDryRun:
             [{"title": "Sprint 1", "startDate": "2026-09-28", "duration": 14}]))
         monkeypatch.setattr(tool, "sprint_assignments", lambda *a: {"PVTI_1": "x",
                                                                     "PVTI_2": "y"})
-        monkeypatch.setattr(tool, "require_graphql_budget", lambda *a: None)
         monkeypatch.setattr(tool, "graphql", lambda *a, **k: writes.append(a))
         monkeypatch.setattr(tool, "restore_assignments", lambda *a: writes.append(a))
         monkeypatch.setattr(tool, "heal_sprint_fields", lambda *a: writes.append(a))
