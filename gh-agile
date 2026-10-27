@@ -8955,6 +8955,43 @@ def select_by_ref(data: list[dict], ref: str, config: dict) -> list[dict]:
     return matches
 
 
+def validation_findings(findings: dict[str, list[str]], data: list[dict]) -> list[dict]:
+    """`validate`'s findings as records: each rule, its count and its offenders.
+
+    Every rule writes its offender as `#N title` -- the title cut to 48 -- and
+    sometimes `: detail` after it, so the issue is recovered by matching that
+    prefix against the rows, not by parsing the line: a title can hold `: `
+    itself. A finding about the board rather than an issue (sprints that
+    overlap, automation that is off) matches no row and is all `detail`.
+    """
+    idents = {f"#{row['number']} {row['title'][:48]}": row for row in data}
+    out = []
+    for rule, offenders in findings.items():
+        issues = []
+        for line in offenders:
+            row = next((r for ident, r in idents.items()
+                        if line == ident or line.startswith(ident + ": ")), None)
+            if row is None:
+                issues.append({"key": None, "number": None, "repository": None,
+                               "title": None, "detail": line})
+                continue
+            prefix = f"#{row['number']} {row['title'][:48]}"
+            issues.append({"key": row.get("issue_key") or None, "number": row["number"],
+                           "repository": row.get("repository"), "title": row["title"],
+                           "detail": line[len(prefix) + 2:] or None})
+        out.append({"rule": rule, "count": len(offenders), "issues": issues})
+    return out
+
+
+def validation_record(data, problems, notes) -> dict:
+    problem_list = validation_findings(problems, data)
+    note_list = validation_findings(notes, data)
+    return {"ok": not problems, "item_count": len(data),
+            "problem_count": sum(f["count"] for f in problem_list),
+            "note_count": sum(f["count"] for f in note_list),
+            "problems": problem_list, "notes": note_list}
+
+
 def cmd_validate(args) -> int:
     """The conventions a machine can check. POLICY.md §3.
 
@@ -9247,6 +9284,12 @@ def cmd_validate(args) -> int:
                     overlaps_found.append(f"{start}..{end} overlaps {other_start}..{other_end}")
         for line in overlaps_found:
             problems["sprints overlap -- `@current` is ambiguous"].append(line)
+
+    if json_requested(args):
+        # The exit status says the same as the text run's: a scheduled job
+        # reads it whether or not it also reads the JSON (#284).
+        shown = emit_json(args, validation_record(data, problems, notes), VALIDATE_FIELDS)
+        return shown or (1 if problems else 0)
 
     def report(findings: dict[str, list[str]]) -> int:
         for rule, offenders in findings.items():
@@ -9854,6 +9897,7 @@ BOARD_LIST_FIELDS = ("number", "name", "type", "layout", "filter")
 BOARD_FIELDS = ("name", "type", "layout", "filter", "view_filter", "owner", "project",
                 "item_count", "board_item_count", "items")
 SPRINT_LIST_FIELDS = ("title", "startDate", "end", "duration", "state")
+VALIDATE_FIELDS = ("ok", "item_count", "problem_count", "note_count", "problems", "notes")
 KEY_FIELDS = ("key", "repo", "name")
 PROJECT_FIELDS = ("owner", "number", "title", "url", "profile", "keys", "sprint_template",
                   "cadence_days", "start_day", "issue_title_prefix", "boards")
@@ -10931,8 +10975,12 @@ No --status, and --field Status is refused: Status changes through
   2  the command line was wrong
 
 For a schedule or CI, the exit status is the signal: a red run means a
-problem a person should look at.""",
+problem a person should look at. --json reports the same findings as data
+and exits the same way. Each of problems and notes is a list of
+{rule, count, issues}, and each issue is {key, number, repository, title,
+detail}; a finding about the board rather than one issue has only detail.""",
                               formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_json_flags(validate, VALIDATE_FIELDS)
     validate.set_defaults(func=cmd_validate)
 
     inherit_global_flags(parser)

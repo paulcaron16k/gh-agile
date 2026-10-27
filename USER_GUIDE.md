@@ -3120,6 +3120,24 @@ without `gh` on `PATH` it says that too.
 
 The export pipeline in [§9](#a-daily-incremental-export) is the same shape.
 
+### Reading `validate` in a job
+
+The exit status is the signal: `0` when there are no problems, notes or not,
+and `1` when there is at least one. `--json` gives the same findings as data
+and exits the same way, so a job can post them or count them without scraping
+the text:
+
+```bash
+gh agile validate --json ok,problem_count,note_count
+gh agile validate --jq '.problems[] | "\(.rule): \(.count)"'
+```
+
+Each of `problems` and `notes` is a list of `{rule, count, issues}`, and each
+issue is `{key, number, repository, title, detail}` — `detail` is what the text
+prints after the issue, such as the status a closed issue was left in. A
+finding about the board rather than one issue, such as two overlapping sprints,
+has only `detail`.
+
 ### GitHub Actions
 
 **Never trigger a `gh-agile` workflow from `pull_request` or
@@ -3150,8 +3168,8 @@ COMMANDS** take no identifier (`create`, `list`, `status`), **TARGETED
 COMMANDS** take the same one every time as their first argument (`view`, `edit`,
 `close` take an issue). A group with only one kind -- `task`, `key`, `project`
 -- prints one **AVAILABLE COMMANDS** list, as `gh label` does. The only optional
-identifier is `sprint view`'s, and leaving it out means the current sprint,
-never every sprint.
+identifiers are the `sprint` commands' -- `view`, `edit` and `carryover` -- and
+leaving one out means the current sprint, never every sprint.
 
 A command's own help is laid out as `gh issue close --help` is: USAGE, its
 FLAGS -- each described once, with its type, its default and `(required)` where

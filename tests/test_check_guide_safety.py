@@ -82,3 +82,27 @@ class TestTheSafetyFlagSurvives:
         rewritten = guide.strip_comment("gh agile export --format csv   # to stdout")
         assert "#" not in rewritten
         assert rewritten == "gh agile export --format csv"
+
+
+class TestValidateFindingsAreAReport:
+    """`validate` exits 1 when the board has a problem; that is a report, not a
+    broken guide line. Its JSON prints no summary line (#284)."""
+
+    @pytest.fixture
+    def ran(self, guide, monkeypatch):
+        def go(stdout, stderr, code=1):
+            import subprocess
+
+            monkeypatch.setattr(guide.subprocess, "run", lambda *a, **k:
+                                subprocess.CompletedProcess(a, code, stdout, stderr))
+            return guide.run_safe("gh agile validate --json ok")[0]
+        return go
+
+    def test_text_summary(self, ran):
+        assert ran("\n1 problem(s) across 3 item(s)\n", "")
+
+    def test_json_report(self, ran):
+        assert ran('{\n  "ok": false\n}\n', "")
+
+    def test_a_refusal_still_fails(self, ran):
+        assert not ran("", "no project 4 found for 'o'\n")
