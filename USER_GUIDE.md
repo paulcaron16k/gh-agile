@@ -182,7 +182,7 @@ workflows that read it.
 | `sprint.cadence_days` | integer | no | Sprint length, 1–30, set by the template. Default `14` |
 | `sprint.start_day` | weekday | no | Weekday new sprints begin on. Default `"monday"` |
 | `sprint.ahead` | integer | no | Future sprints `sprint ensure` keeps stocked. Default `2` |
-| `sprint.autocreate` | boolean | no | Whether `issue move` may create the covering sprint when none is active. Default `true` |
+| `sprint.autocreate` | boolean | no | Whether `issue move` to `In Progress` and `sprint carryover` run `sprint ensure` when sprints fall short. Default `true` |
 | `sprint.name_template` | string | no | `str.format` template for a new sprint's title: `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}`. Default `"{n:04d} W{iso_week}-{year}"` — see §4 |
 | `sprint.record_label` | boolean | no | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes. Default `true` |
 
@@ -1436,8 +1436,8 @@ gh agile sprint ensure --ahead 4
 ```
 
 Idempotent: it creates only the shortfall, so running it twice is a no-op. This
-is Jira's model — future sprints waiting in the backlog — and it means starting
-work never has to change the project's configuration.
+is Jira's model — future sprints waiting in the backlog — so work can be
+committed to the next sprint before it begins.
 
 **Do not put this in cron** — unlike `sync`, which is scheduled below and
 should be. The difference is what each one does when nothing has happened:
@@ -1447,8 +1447,10 @@ empty iterations nobody planned, and a burndown that reports absence as
 activity. Sprint creation is driven by work instead:
 
 - `sprint ensure`, when a person or an agent runs it — typically at planning.
-- `issue move ISSUE "In Progress"`, which creates the sprint covering today if none
-  is active and `autocreate` is on.
+- `issue move ISSUE "In Progress"`, which runs `ensure` whenever no sprint covers
+  today or fewer than `ahead` lie beyond it, and `autocreate` is on. With enough
+  sprints it writes none: that check is one read.
+- `sprint carryover`, which runs `ensure` before it moves anything.
 
 Stop work for four months and there are no sprints for those months, because
 nothing was running to invent them. Resume, and the sprint covering that day is
@@ -1545,8 +1547,11 @@ it. The dates are the truth; renaming would clear every assignment, since
 iterations carry no id.
 
 **If `ensure` has not run, `issue move` covers for it.** Moving a story to
-`In Progress` with no active sprint creates one and says so; set
-`autocreate: false` to have it warn and leave the field empty instead.
+`In Progress` when no sprint covers today, or fewer than `ahead` lie beyond it,
+runs `ensure` and says so. That is an iteration write with every assignment
+saved and restored around it, roughly once a sprint: the first start after a
+sprint begins. Set `autocreate: false` to have it never create one, and to warn
+and leave the field empty when no sprint is active.
 
 > **Every change to the sprint configuration clears existing sprint
 > assignments** — all of them, not only the sprint you touched. This is GitHub's
@@ -1591,9 +1596,8 @@ gh agile sprint carryover 2026-10-12 --to @current   # the Monday after
 ```
 
 **It runs `sprint ensure` first**, so the sprint it moves into exists and the
-profile's `ahead` sprints lie beyond today. `issue move` creates a sprint only
-when none is active at all, so without this a board's future sprints run out
-one at a time. Creating a sprint is an iteration write, which clears every
+profile's `ahead` sprints lie beyond today, as `issue move` does when work
+starts. Creating a sprint is an iteration write, which clears every
 assignment on the board; `ensure` saves and restores them around it, and does
 nothing when the sprints already exist. `--dry-run` writes nothing, so it only
 says when `ensure` would have to run. A profile with `"autocreate": false`

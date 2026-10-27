@@ -744,8 +744,8 @@ Every `sprint` property, with its default, is in the user guide's
 | # | Requirement | How |
 |---|---|---|
 | 1 | A sprint always covers today | `ensure` places one aligned to `start_day`, snapping back so a sprint created on a Wednesday still begins Monday and covers today |
-| 2 | **Two future sprints** are stocked | `ahead: 2`. Jira's model: the backlog holds future sprints, so starting work never has to change the project's configuration |
-| 3 | Sprints are created **on demand, never on a clock** | Nothing schedules sprint creation. `ensure` runs when a person or an agent runs it, and `issue move` to `In Progress` creates the covering sprint if none is active and `autocreate` is on |
+| 2 | **Two future sprints** are stocked | `ahead: 2`. Jira's model: the backlog holds future sprints, so work can be committed to the next one before it begins |
+| 3 | Sprints are created **on demand, never on a clock** | Nothing schedules sprint creation. `ensure` runs when a person or an agent runs it, and `issue move` to `In Progress` tops the series up -- the sprint covering today, and `ahead` more -- whenever it falls short and `autocreate` is on, as does `sprint carryover` |
 | 4 | Idle time leaves **no sprints and no futures** | A consequence of 3. Stop work for four months and no sprints exist for those months, because nothing was running to make them. Resume, and `issue move` creates the one covering that day plus two ahead |
 | 5 | Gaps are **skipped, not backfilled** | `ensure` creates the sprint covering today, not the ones that would have run since. Numbering jumps — `Sprint 2` to `Sprint 5` — which is the honest record: nobody worked in 3 and 4. Jira does the same |
 | 6 | Every sprint starts on the same weekday | `aligned_start` snaps back to the most recent `start_day`. Snapping forward would drift the boundary across weekdays until no two sprints agreed |

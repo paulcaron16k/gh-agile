@@ -3593,13 +3593,24 @@ def sprint_title(config: dict, number: int, start, end) -> str:
     )
 
 
+def sprints_short(active: list[dict], ahead: int) -> bool:
+    """Whether `ensure_sprints` has work to do: no sprint covers today, or
+    fewer than `ahead` start after it. Read from the active iterations alone,
+    so asking costs the one field read `issue move` already makes."""
+    today = today_utc()
+    spans = iteration_spans(active)
+    covered = any(start <= today <= end for start, end in spans)
+    return not covered or sum(start > today for start, _end in spans) < ahead
+
+
 def ensure_sprints(login: str, project: int, config: dict, ahead: int,
                    *, quiet: bool = False) -> list[str]:
     """Guarantee a sprint covering today, plus `ahead` future ones.
 
-    Jira's model, and the reason `move` should not have to create anything: the
-    backlog always holds future sprints, so starting work never mutates the
-    project's configuration.
+    Jira's model: the backlog always holds future sprints, so work can be
+    committed to the next one before it begins. `issue move` to In Progress and
+    `sprint carryover` call this when `sprints_short` says the series has run
+    down (#288), so the write happens about once a sprint, not on every move.
 
     Gaps are **skipped, not backfilled**. After an idle month this creates the
     sprint covering today and numbering jumps -- Sprint 2 to Sprint 5 -- rather
@@ -7873,22 +7884,27 @@ def cmd_move(args) -> int:
     # refusal when no sprint is active: declining to start work because nobody
     # created a sprint would be the tool making a process decision.
     if same_status(args.status, CYCLE_START) and not container:
+        # Topped up whenever fewer than `ahead` sprints lie beyond today, not
+        # only when none is active (#288). A future sprint counts as active, so
+        # the old test let a board's future sprints run out one fortnight at a
+        # time: project 4 went from two ahead to none while its profile said 2.
+        # Still on demand, because a sprint series must be driven by work and
+        # not by a clock -- a cron would manufacture sprints through a quiet
+        # quarter nobody planned. Starting work is the trigger, and
+        # `ensure_sprints` skips a gap rather than backfilling it, so the
+        # numbering jumps and says so. It runs before the Sprint field is read
+        # or written: ensure re-mints every iteration id.
+        settings = sprint_settings(args._config)
+        active, _completed = iterations(args.owner, args.project)
+        if settings.get("autocreate") and sprints_short(active, settings["ahead"]):
+            print("  no active sprint; creating the one that covers today" if not active
+                  else f"  fewer than {settings['ahead']} sprint(s) ahead; running "
+                       f"`sprint ensure`")
+            ensure_sprints(args.owner, args.project, args._config, settings["ahead"])
+            active, _completed = iterations(args.owner, args.project)
         # From the item itself (#231): the board-wide read can leave a new item
         # out, and a missing item reads as one with no sprint.
         if not item_sprint(item["id"]):
-            active, _completed = iterations(args.owner, args.project)
-            if not active and sprint_settings(args._config).get("autocreate"):
-                # On demand, because a sprint series must be driven by work and
-                # not by a clock. A cron that tops sprints up would manufacture
-                # them through a quiet quarter, leaving a row of empty sprints
-                # nobody planned; creating one when work actually starts leaves
-                # the idle months genuinely absent, which is what the burndown
-                # should show. `ensure_sprints` skips the gap rather than
-                # backfilling it, so the numbering jumps and says so.
-                print("  no active sprint; creating the one that covers today")
-                ensure_sprints(args.owner, args.project, args._config,
-                               sprint_settings(args._config)["ahead"])
-                active, _completed = iterations(args.owner, args.project)
             if active:
                 set_field(args.owner, args.project, item["id"], "Sprint", "@current")
                 print(f"  #{args.issue} Sprint = {active[0]['title']} (current)")
