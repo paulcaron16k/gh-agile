@@ -38,7 +38,10 @@ appended a timestamped summary to `GitHub_API_changelog.md` -- the changes to wh
 selects or sends listed first (read from the queries in context, not from the words in comments, #299), beside GitHub's own dated changelog and the removals it has announced (#297) -- and rewritten the
 snapshot; review both and commit them. With no drift it still prints any announced removal touching gh-agile
 that is overdue or due within 90 days, because that warning is worth nothing once the removal lands. `make api-spec` rewrites the baseline from
-scratch. Neither runs in CI, which has no token.
+scratch. Neither runs in CI, which has no token. `.github/workflows/api-drift.yml` runs the check monthly
+with the workflow's own token -- introspection needs nothing more -- and on drift opens one pull request,
+labelled `api-drift` and assigned to the owner, carrying both files (#298). That pull request is the
+prompt: review it in a session and decide whether gh-agile must re-implement something or can add something.
 
 **Green on a branch is not green on the merge.** Two pull requests cut from the same base, each passing
 alone, left `main` red the moment both landed — and the `push: main` run that caught it told nobody, so

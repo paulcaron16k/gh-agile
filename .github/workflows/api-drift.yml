@@ -1,0 +1,100 @@
+# GitHub's GraphQL schema against GitHub_API_spec.json, monthly (#298).
+#
+# The design rested on an API fact -- an iteration write carried no id -- and
+# GitHub changed it without this tool noticing (#290). `make api-drift` finds
+# the next change, but only when someone remembers to run it. This runs it, and
+# on drift opens one pull request carrying the rewritten snapshot and
+# changelog, assigned to the repository owner: GitHub's own notification is the
+# email, so no mail secret exists. Whether a change means gh-agile must
+# re-implement something or can add something is decided by a person, in a
+# Claude session, reviewing that pull request (owner's decision on #298: the
+# pull request alone, no Claude step here).
+#
+# **Never `pull_request` or `pull_request_target`** (USER_GUIDE.md §11). This
+# job can push a branch and open a pull request; nothing a fork controls may
+# reach it. It reads no board and holds no project token: introspecting the
+# schema needs only the workflow's own GITHUB_TOKEN.
+#
+# A pull request opened with GITHUB_TOKEN starts no other workflow, so CI does
+# not run on it by itself. The change is to the two data files, and
+# tests/test_api_drift.py checks the snapshot is in order; push to the branch,
+# or close and reopen the pull request, to run CI on it.
+name: API drift
+
+on:
+  schedule:
+    - cron: '17 6 1 * *'      # 06:17 UTC on the 1st of every month
+  workflow_dispatch:
+
+permissions:
+  contents: write             # push the api-drift branch
+  pull-requests: write        # open or update its pull request
+  issues: write               # the api-drift label, and the assignee
+
+concurrency:
+  group: api-drift
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: api-drift
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Exit 0: no drift, nothing to do (announced removals that are due are
+      # printed to the log either way). 1: drift, both files rewritten. 2: the
+      # schema could not be fetched, or there is no snapshot -- a failed run.
+      - name: Compare the live schema with the snapshot
+        id: drift
+        run: |
+          set +e
+          python3 scripts/api_drift.py check --summary "$RUNNER_TEMP/entry.md"
+          code=$?
+          set -e
+          case $code in
+            0) echo "drift=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "drift=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit $code ;;
+          esac
+
+      # One branch and one pull request, rebuilt from main each time: a second
+      # month's drift before the first is merged updates the open pull request
+      # rather than opening another.
+      - name: Open or update the pull request
+        if: steps.drift.outputs.drift == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add GitHub_API_spec.json GitHub_API_changelog.md
+          git commit -q -m "GitHub API drift, $(date -u +%Y-%m-%d)" \
+            -m "Found by the monthly api-drift workflow (#298); the entry is in GitHub_API_changelog.md."
+          git push -q --force origin "$BRANCH"
+
+          gh label create api-drift --color 0E8A16 \
+            --description "GitHub's GraphQL schema changed; review what it means for gh-agile" \
+            2>/dev/null || true
+          {
+            echo "GitHub's GraphQL schema has changed since \`GitHub_API_spec.json\`."
+            echo "Review what it means for gh-agile: something to **re-implement**, or something it **can add**."
+            echo
+            cat "$RUNNER_TEMP/entry.md"
+          } > "$RUNNER_TEMP/body.md"
+
+          open=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$open" ]; then
+            gh pr edit "$open" --body-file "$RUNNER_TEMP/body.md"
+            echo "updated pull request #$open"
+          else
+            gh pr create --head "$BRANCH" --base main \
+              --title "GitHub API drift, $(date -u +%Y-%m-%d)" \
+              --body-file "$RUNNER_TEMP/body.md" \
+              --label api-drift --assignee "${{ github.repository_owner }}"
+          fi

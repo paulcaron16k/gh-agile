@@ -723,7 +723,7 @@ def cmd_snapshot(spec_path: Path = SPEC, changelog: Path = CHANGELOG) -> int:
 
 
 def cmd_check(spec_path: Path = SPEC, changelog: Path = CHANGELOG, *,
-              write: bool = True) -> int:
+              write: bool = True, summary: Path | None = None) -> int:
     if not spec_path.exists():
         print(f"no {spec_path.name} to compare against; run `make api-spec` first",
               file=sys.stderr)
@@ -754,6 +754,10 @@ def cmd_check(spec_path: Path = SPEC, changelog: Path = CHANGELOG, *,
                  "items": published_since(changelog_json, since)}
     entry = render(changes, when, used, roots, published)
     print(entry)
+    if summary is not None:
+        # The scheduled workflow's pull request body (#298): the entry alone,
+        # without the changelog around it.
+        summary.write_text(entry.rstrip("\n") + "\n")
     if write:
         append_changelog(entry, changelog)
         spec_path.write_text(dump(new))
@@ -768,10 +772,12 @@ def main(argv: list[str] | None = None) -> int:
     check = sub.add_parser("check", help="compare the live schema with the baseline")
     check.add_argument("--no-write", action="store_true",
                        help="report drift without touching either file")
+    check.add_argument("--summary", type=Path, metavar="FILE",
+                       help="on drift, also write the new entry alone to FILE")
     args = parser.parse_args(argv)
     if args.command == "snapshot":
         return cmd_snapshot()
-    return cmd_check(write=not args.no_write)
+    return cmd_check(write=not args.no_write, summary=args.summary)
 
 
 if __name__ == "__main__":
