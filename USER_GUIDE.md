@@ -1574,6 +1574,40 @@ iterations carry no id.
 > what the web UI suggests. `init` therefore converges `cadence_days` and
 > leaves `startDay` alone.
 
+### Ending a sprint: `sprint carryover`
+
+At the end of a sprint, unfinished work moves to the next one, as Jira's
+*complete sprint* does:
+
+```bash
+gh agile sprint carryover --dry-run          # what would move
+gh agile sprint carryover                    # the current sprint, into the next
+gh agile sprint carryover 2026-10-12 --to @current   # the Monday after
+```
+```
+  carried #70    In Progress  TEST-70 Story: Carry probe in progress
+  carried #71    Todo         TEST-71 Story: Carry probe todo
+  2 carried from TEST Sprint 6 to TEST Sprint 7; 2 finished stay in TEST Sprint 6
+```
+
+**It runs `sprint ensure` first**, so the sprint it moves into exists and the
+profile's `ahead` sprints lie beyond today. `issue move` creates a sprint only
+when none is active at all, so without this a board's future sprints run out
+one at a time. Creating a sprint is an iteration write, which clears every
+assignment on the board; `ensure` saves and restores them around it, and does
+nothing when the sprints already exist. `--dry-run` writes nothing, so it only
+says when `ensure` would have to run. A profile with `"autocreate": false`
+(the `none` template) skips it, and `carryover` refuses when no sprint follows.
+
+**Then it writes each unfinished item's Sprint field and nothing else.**
+
+Finished work stays in the sprint it was finished in. An issue that is closed
+but never reached `Done` is named, not moved: it is a wrap-up, and
+`issue move N Done --evidence` is how it is finished. **No `sprint:` label is
+written**: an item started in this sprint already carries its date, and gets the
+next one's when it finishes there, so the labels record the carryover without
+being told.
+
 ### Which sprint was this worked in?
 
 Not the `Sprint` field — it is live UI state and forgets, as above. The durable
@@ -3137,6 +3171,7 @@ gh agile issue move --help
 | `board list` / `board view` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint view` / `sprint create` | Show the iterations; one sprint with its items; append one |
+| `sprint carryover` | Move a sprint's unfinished work into the next sprint at its end; finished work stays |
 | `sprint ensure` / `sprint reconcile` / `sprint backfill` / `sprint unstamp` | Append sprints until one is current and enough lie ahead; set Sprint fields from the labels; add labels from history; remove labels from containers |
 | `initiative create` / `epic create` / `story create` / `bug create` / `task create` | Create work items with their parent, labels and fields; `gh issue create`'s flags, the title as `-t` |
 | `initiative list` / `epic list` / `story list` / `bug list` / `issue list` | List one level from the board, by Status; `issue list` takes every level |

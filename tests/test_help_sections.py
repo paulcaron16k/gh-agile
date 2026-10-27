@@ -84,7 +84,7 @@ class TestEveryCommandIsDeclared:
                     if parser.command_kind == tool.TARGETED}
         assert {"issue view", "issue move", "issue edit", "issue close", "issue reopen",
                 "issue reconcile", "epic view", "story view", "bug view", "initiative view",
-                "initiative reconcile", "board view", "sprint view"} == targeted
+                "initiative reconcile", "board view", "sprint view", "sprint carryover"} == targeted
 
 
 class TestDescriptionsAreGhs:
