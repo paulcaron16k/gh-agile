@@ -6773,6 +6773,11 @@ def cmd_project_edit(args) -> int:
 def cmd_key_list(args) -> int:
     """`key list`: what the profile records, key by key."""
     entries = profile_keys(args._config)
+    # **No profile is not "no keys".** Silent and exit 0 from a directory with no
+    # profile read as an empty one; `project view` in the same place says which
+    # paths it searched and the ways out, and so does this (#271).
+    if not entries and find_config(getattr(args, "config", None)) is None:
+        sys.exit(missing_project_message(getattr(args, "config", None)))
     if json_requested(args):
         return emit_json(args, [{"key": e.get("key"), "repo": e.get("repo"),
                                  "name": e.get("name")} for e in entries], KEY_FIELDS)
@@ -10699,7 +10704,16 @@ No --status, and --field Status is refused: Status changes through
     export.set_defaults(func=cmd_export)
 
     validate = sub.add_parser("validate", kind=GENERAL,
-                              help="Check the conventions in POLICY.md")
+                              help="Check the conventions in POLICY.md",
+                              epilog="""EXIT STATUS
+  0  no problems found; notes, if any, are reported and are not failures
+  1  at least one problem, listed by rule with the issues that break it; or
+     the board could not be read, which the message says instead
+  2  the command line was wrong
+
+For a schedule or CI, the exit status is the signal: a red run means a
+problem a person should look at.""",
+                              formatter_class=argparse.RawDescriptionHelpFormatter)
     validate.set_defaults(func=cmd_validate)
 
     inherit_global_flags(parser)

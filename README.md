@@ -21,6 +21,11 @@ gh auth refresh -s project        # the project scope, once
 
 Python 3.10 or later, standard library only: installing installs nothing else.
 
+**What you need on GitHub:** push on the repository, because `init` writes
+labels, and a place to create the project: your own account, or an organization
+where you can create projects. Day-to-day work needs project *write* and repo
+*push*; who needs what is in [Team Usage](#team-usage).
+
 ## Set up a project: `gh agile init`
 
 From your repository's clone:
@@ -60,6 +65,24 @@ gh agile board view sprint        # the current sprint
 gh agile board view backlog       # everything not in a sprint yet
 gh agile board list               # every board on the project
 gh agile issue status             # stand-up: yours, waiting on review, unassigned
+```
+
+```
+Sprint board
+scrum · paulcaron16k/projects/4 · 8 of 139 items
+filter: sprint:@current
+
+  key        type   pts  sprint    who         title
+  ─────────  ─────  ───  ────────  ──────────  ─────────────────────────────────
+In Progress (1)
+  AGILE-271  story    —  0007 W44  paulcaron…  AGILE-271 Beta polish: smaller
+                                               findings from the product review
+
+Done (7)
+  AGILE-267  bug      —  0007 W44  paulcaron…  AGILE-267 POLICY.md: a split
+                                               table, a dead reference, and Done
+                                               set by automation
+  …
 ```
 
 **Any unique part of a board's name is enough** — `sprint` finds *Sprint
@@ -116,7 +139,8 @@ gh agile export --grain issues,events --format csv --out-dir exports/
 
 One row per work item, and one per timeline event — status changes with who
 made them and when — described column by column in
-[`github_catalog.json`](github_catalog.json).
+[`github_catalog.json`](github_catalog.json). JSON is the default format;
+`--format csv` writes the CSV files a loader or a spreadsheet takes.
 
 ## Where next
 

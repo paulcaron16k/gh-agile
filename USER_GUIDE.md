@@ -1641,6 +1641,21 @@ A close that falls outside every sprint window is stamped with nothing and
 reported. Gaps are ordinary — sprints are created on demand — and nothing invents
 one to fill the hole.
 
+### Which repair: symptom to command
+
+Five commands repair what the iteration defect and hand edits leave behind.
+Start from what you see; each takes `--dry-run`, and none is needed on a board
+nobody has edited by hand.
+
+| You see | Run |
+|---|---|
+| Items board-wide lost their Sprint, after a sprint was renamed or re-dated | `gh agile sprint reconcile` |
+| One issue's Sprint is empty: `validate` says *In Progress but in no sprint* | `gh agile issue reconcile N` |
+| *Sprint field disagrees with the sprint: label(s)*, and the labels are right | `gh agile sprint reconcile --overwrite`; leave it if the item was re-planned on purpose |
+| *closed with no sprint: label* on issues that predate the stamping | `gh agile sprint backfill` |
+| An epic or initiative carries a `sprint:` label: *epic or initiative is in a sprint* | `gh agile sprint unstamp` |
+| A board filtered to an initiative is missing items, or shows ones that left | `gh agile initiative reconcile I` |
+
 ### Putting the field back: `sprint reconcile`
 
 Believing the labels only means something if something reconciles *toward*
