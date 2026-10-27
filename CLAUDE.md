@@ -29,7 +29,14 @@ make metrics DIR=exports/AGILE
 make merge-check   # the suite against HEAD + origin/main. Run it BEFORE merging
 make ci-status     # whether main's last CI run passed
 make hooks         # post-merge hook: a red main, and issues a merge left unfinished
+make api-drift     # LIVE, read-only: GitHub's GraphQL schema against GitHub_API_spec.json
 ```
+
+**Run `make api-drift` periodically, and before trusting a measured API fact.** GitHub changed the iteration
+input underneath this tool (#290) and nothing noticed until it was found by chance. It exits 1 on drift, having
+appended a timestamped summary to `GitHub_API_changelog.md` -- the changes to what the extension names listed
+first -- and rewritten the snapshot; review both and commit them. `make api-spec` rewrites the baseline from
+scratch. Neither runs in CI, which has no token.
 
 **Green on a branch is not green on the merge.** Two pull requests cut from the same base, each passing
 alone, left `main` red the moment both landed — and the `push: main` run that caught it told nobody, so
@@ -305,6 +312,7 @@ Some of it is code rather than prose, and none of it is guessable from a file na
 | `Makefile` | The live targets default to the sandbox and refuse any other repository without `ALLOW_LIVE=1`; every Python target refuses to run outside `.venv`, and `tests/conftest.py` refuses again from the inside. `merge-check` before merging, `hooks` so a red `main` reaches you |
 | `scripts/check_guide.py` | Every command in the guide exists, and the read-only ones run. It strips a trailing comment before appending `--dry-run`, because the shell ate the flag once and a real `sync` wrote 35 issues to a live board |
 | `templates/` | The `post-merge` hook, and the GitHub workflows that need no stored credential |
+| `GitHub_API_spec.json`, `GitHub_API_changelog.md` | The GraphQL schema as last seen, ordered so a diff is only real change, and what changed since, by date. `scripts/api_drift.py` writes both (#291) |
 
 ## Live state
 
