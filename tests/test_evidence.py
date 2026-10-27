@@ -57,6 +57,9 @@ def run(monkeypatch, tool):
     monkeypatch.setattr(tool, "set_field", lambda *a, **k: None)
     monkeypatch.setattr(tool, "sprint_assignments", lambda *a, **k: {"PVTI_7": "s"})
     monkeypatch.setattr(tool, "item_sprint", lambda *a, **k: "s")
+    monkeypatch.setattr(tool, "iterations", lambda *a, **k: ([{"title": "s"}], []))
+    # Enough sprints ahead: the top-up (#288) has its own tests.
+    monkeypatch.setattr(tool, "sprints_short", lambda *a: False)
     monkeypatch.setattr(tool, "record_sprint_label", lambda *a, **k: None)
     # Its own story (#117); stubbed so these tests stay about the evidence.
     monkeypatch.setattr(tool, "promote_parents", lambda *a, **k: None)
