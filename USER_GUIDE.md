@@ -1918,13 +1918,19 @@ Everything here was checked against the live API, not inferred. The README's
 **Safe in the web UI** — these are per-item values, and touch no shared
 configuration:
 
-- Dragging a card between columns, and setting Status, Sprint, Points, Priority
-  or assignees on an item.
+- Dragging a card to `Todo`, `Blocked` or `In Review`, and setting Sprint,
+  Points, Priority or assignees on an item.
 - Editing a board's filter, layout and visible fields.
 - Writing issue bodies and comments.
 
 **Do in the tool, not the web UI:**
 
+- Starting and finishing work — `gh agile issue move N "In Progress"` and
+  `gh agile issue move N Done --evidence "..."`. A drag sets Status alone:
+  starting also sets the sprint, the `sprint:` label and the assignee, and
+  finishing writes the evidence. `validate` reports a
+  dragged start as *In Progress but in no sprint* or *unassigned*, and a dragged
+  finish as *status Done but still open*.
 - Creating sprints — `gh agile sprint ensure`, or let `issue move` create one.
 - Renaming or re-dating a sprint. There is no safe web-UI path: it clears
   assignments board-wide. Prefer changing `name_template`, which affects only
