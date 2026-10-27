@@ -323,7 +323,13 @@ def run_safe(command: str) -> tuple[bool, str]:
     # Matched on the summary line, not on the exit code alone, because
     # `sys.exit("message")` also exits 1: a project that cannot be reached must
     # still fail here.
-    if not ok and " validate" in argv and "problem(s) across" in result.stdout:
+    #
+    # `--json`, `--jq` and `--template` print no summary line (#284). Their
+    # report is stdout with nothing on stderr; a `sys.exit("message")` is the
+    # reverse -- the message on stderr and nothing on stdout.
+    reported = ("problem(s) across" in result.stdout
+                or (result.stdout.strip() and not result.stderr.strip()))
+    if not ok and " validate" in argv and reported:
         ok = True
     return ok, note
 

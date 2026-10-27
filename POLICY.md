@@ -205,7 +205,8 @@ token and add no secret at all.
 
 **Validation fails loudly, in CI, on a schedule.** A validator nobody runs is a
 document. `gh agile validate` belongs in a scheduled workflow so a drifting
-backlog is a red tick rather than a discovery.
+backlog is a red tick rather than a discovery. Its exit status is the signal,
+and `--json` gives the findings as data for a job to post or count.
 
 ---
 
