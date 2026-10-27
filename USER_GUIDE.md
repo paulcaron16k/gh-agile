@@ -39,6 +39,24 @@ It needs no repository, no profile, no project and no network.
 
 ---
 
+## Contents
+
+- [0. Start here: gh agile init](#0-start-here-gh-agile-init)
+- [1. The project profile](#1-the-project-profile)
+- [2. Creating a project](#2-creating-a-project)
+- [3. Boards: scrum, kanban, backlog, roadmap](#3-boards-scrum-kanban-backlog-roadmap)
+- [4. Creating sprints](#4-creating-sprints)
+- [5. Creating an epic and a story](#5-creating-an-epic-and-a-story)
+- [6. Issue titles: making the key and number visible](#6-issue-titles-making-the-key-and-number-visible)
+- [7. The workflow, end to end](#7-the-workflow-end-to-end)
+- [8. For an agent working on a developer's behalf](#8-for-an-agent-working-on-a-developers-behalf)
+- [9. Exporting issues, events and pull requests](#9-exporting-issues-events-and-pull-requests)
+- [10. Who did the work](#10-who-did-the-work)
+- [11. Running it unattended: cron and Actions](#11-running-it-unattended-cron-and-actions)
+- [12. Command reference](#12-command-reference)
+
+---
+
 ## 0. Start here: `gh agile init`
 
 One command from a fresh clone to a board somebody can use:
@@ -156,6 +174,17 @@ workflows that read it.
 | `project.key` | string | no | The main repository's key; a convenience copy of the matching `keys` entry |
 | `project.issue_title_prefix` | `off` \| `key` \| `key+type` | no | Whether new issue titles carry `KEY-ID` and the type — see Issue titles. Default `off`; an unrecognised value stops every command |
 | `config_from` | string | no | `owner/repo` holding the real profile. **Carries nothing else** |
+| `boards` | list | no | The boards `init` keeps in step, one entry each. Written by `init` and by `board create --save` |
+| `boards[].name` | string | yes | The view's name on the project, and what `board view` takes |
+| `boards[].type` | `scrum` \| `kanban` \| `backlog` \| `roadmap` | yes | Sets the layout and the base filter — see §3 |
+| `boards[].filter` | string | no | Extra filter terms, ANDed with the type's own, e.g. `label:key:WIDG` for one team's scrum board |
+| `sprint.template` | `1-week` \| `2-week` \| `3-week` \| `4-week` \| `none` | yes, before work is created | The cadence, chosen deliberately: `epic create`, `story create` and `sprint ensure` refuse until it is set. `none` is a kanban project with no sprints |
+| `sprint.cadence_days` | integer | no | Sprint length, 1–30, set by the template. Default `14` |
+| `sprint.start_day` | weekday | no | Weekday new sprints begin on. Default `"monday"` |
+| `sprint.ahead` | integer | no | Future sprints `sprint ensure` keeps stocked. Default `2` |
+| `sprint.autocreate` | boolean | no | Whether `issue move` may create the covering sprint when none is active. Default `true` |
+| `sprint.name_template` | string | no | `str.format` template for a new sprint's title: `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}`. Default `"{n:04d} W{iso_week}-{year}"` — see §4 |
+| `sprint.record_label` | boolean | no | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes. Default `true` |
 
 ```json
 {
@@ -1000,13 +1029,11 @@ is not a project workflow, and it is easily confused with one: `Auto-close
 issue` above closes an issue when its *Status* becomes Done, and stays off; this
 one closes it when a pull request saying `Closes #n` *merges*, and stays on.
 
-**Turning it off while fixing the `Auto-close issue` race is the mistake to
-avoid,** and this repository made it: every auto-close setting was disabled
-during that fix, and the race was only ever the project workflow's. Off, `Closes
-#n` closes nothing. Three merges in a row left their issue open, each with
-`closingIssuesReferences` naming it, and the issue's cross-reference from the
-pull request read `willCloseTarget: false`; re-enabled, the next merge closed
-its issue itself. See `docs/lessons.md`.
+**Do not turn it off along with `Auto-close issue`.** The race is only the
+project workflow's. With this setting off, `Closes #n` closes nothing: the pull
+request still lists the issue in `closingIssuesReferences`, but its
+cross-reference reads `willCloseTarget: false`, and the issue stays open after
+the merge.
 
 **A fork has no such setting until Issues is enabled on it.** A fork starts with
 Issues off, and then neither the Issues tab nor Settings → General → Issues
@@ -1045,12 +1072,10 @@ on, differed only in `temp_clone_token`, which changes on every read. So `init`
 names it with a `[?]` and the settings link for each repository, and `validate`
 says nothing about it.
 
-**`Item closed` was recommended here until `#186`, and the reversal is worth
-reading.** Every issue in this repository is closed by a merged pull request
-saying `Closes #n`, and that automation sets the issue's state and nothing else
-— so the row sits in In Progress looking live. `#123` did it for twenty-two
-hours and `#138` repeated it on the next merge, which is a real cost and was the
-case for turning the workflow on.
+**Why `Item closed` stays off.** A merged pull request saying `Closes #n`
+closes the issue and sets nothing else, so the card sits in In Progress looking
+live until somebody finishes it. That is a real cost, and it is the case for
+turning the workflow on.
 
 What that missed is what the workflow *cannot* do. It writes one field. It
 cannot write Evidence, cannot stamp the closing `sprint:` label, and cannot
@@ -1074,8 +1099,8 @@ produces none of those three.
 ### What replaces it: the post-merge hook
 
 Leaving the workflow off only works if the person finds out at merge time rather
-than at the next `validate` run. That is the whole gap, and `#174` sat in it for
-days.
+than at the next `validate` run. That is the whole gap: without the hook, a
+closed and unfinished issue can sit in it for days.
 
 ```bash
 gh agile init
@@ -1169,11 +1194,10 @@ or — just as often — not close it at all:
       tool's to choose -- completed, or `-r "not planned"` if that is what happened.
 ```
 
-**Do not assume `Closes #n` closes the issue.** Measured across five consecutive
-pull requests on this repository: the link GitHub resolves
-(`closingIssuesReferences`) was registered for every one, and the close fired
-for some and not others — `#186`'s own merge left it open. The link is reliable;
-the close is not.
+**`Closes #n` closes the issue only while the repository's auto-close setting is
+on.** With it off, GitHub still registers the link (`closingIssuesReferences`)
+and closes nothing, so the hook reports an issue the merge left open as well as
+one it closed and nobody finished.
 
 `validate` is deliberately not taught about the second case. An open issue whose
 pull request merged is not a convention violation — the board cannot see pull
@@ -1312,28 +1336,10 @@ To do this on issue creation rather than before planning, copy
 `PROJECT_TOKEN` secret — writing to a project is outside the default
 `GITHUB_TOKEN`'s reach whatever permissions block you write, unlike labelling an
 issue, which is why `templates/auto-assign.yml` needs no token and this does. If
-you would rather hold no token, schedule `sync --adopt` as below.
+you would rather hold no token, schedule `sync --adopt` as §11 describes.
 
-**Never trigger a `gh-agile` workflow from `pull_request` or
-`pull_request_target`.** The shipped template triggers on `issues:` on purpose.
-Two separate reasons, and both matter:
-
-- **`pull_request_target` runs with your secrets and the base repository's
-  permissions.** Anything a fork can influence — and a pull request is entirely
-  fork-controlled — must not reach a job holding `PROJECT_TOKEN`. This is the
-  standard Actions privilege-escalation route, not a `gh-agile` quirk.
-- **`export` discloses the whole board.** It emits every field value, every
-  assignee and the full status history, so an export running in a
-  pull-request-triggered job writes a private board's contents into a build log
-  that any contributor who can open a pull request is able to read. Story points
-  and cycle times are an estimate-accuracy record about named people; see
-  `docs/review-2026-08.md` S9 for what a public board gives away even without
-  this.
-
-Scheduled (`on: schedule`) and issue-triggered (`on: issues`) workflows are the
-safe shapes. If you want a check *on* a pull request, have it read nothing from
-the project: `validate` and `export` both need project read, and neither belongs
-in a fork-reachable job.
+**Never trigger a `gh-agile` workflow from a pull request**; §11 says why, and
+which triggers are safe.
 
 ### How often, and what goes wrong if you do not
 
@@ -1368,86 +1374,13 @@ matters. Instead, in order of preference:
    from the board; nothing degrades in between, because nothing on the board is
    going out of date.
 
-   Daily at 07:00, from the main repository's clone:
-
-   ```cron
-   PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
-   HOME=/home/you
-   LOG=/home/you/.local/state/gh-agile/sync.log
-
-   0 7 * * *  cd /srv/projects/widgets && gh-agile sync >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
-   ```
-
-   **`cd` into the repository first, and it is not optional.** The profile is
-   found relative to the working directory — `.github/agile.json` — and it is
-   what supplies `--project` and the repositories to sync. Run from anywhere
-   else and the tool exits saying `no profile found, and no --project was
-   given`, listing the paths it searched and the directory it searched them in.
-   That is the right failure, but a daily one if the `cd` is missing.
-
-   **The copy inside gh's extension directory is not the one being read.** `gh
-   extension install` clones this repository, profile and all, and `find_config`
-   never looks there — that profile configures whichever repository was
-   installed, so reading it would aim your commands at somebody else's board.
-   The working directory decides, every time.
-
-   Three things that bite in cron and not in a shell:
-
-   - **`PATH` is minimal**, which is why the crontab sets it. `gh-agile` shells
-     out to `gh` for every call, so `gh` being unreachable fails the run as
-     surely as `gh-agile` being unreachable. Check where yours is with
-     `command -v gh` and include that directory. **On Ubuntu it is often
-     `/snap/bin/gh`** — which no default cron `PATH` contains, and which is why
-     `/snap/bin` appears above.
-   - **Authentication must be non-interactive.** `gh` reads `GH_TOKEN` from the
-     environment, or its stored credentials from `$HOME/.config/gh` — and cron
-     may not set `HOME` to what you expect. Either export `GH_TOKEN` in the
-     crontab, or set `HOME=/home/you` there.
-   - **Keep the log, somewhere you can actually write.** `/var/log` is
-     `root:syslog` and mode 755, so a *user* crontab redirecting there gets
-     `Permission denied` and the run produces nothing — the log line fails
-     before the command does. `~/.local/state/` is the XDG location for exactly
-     this, and it is yours. **Create the directory once**; cron will not:
-
-     ```bash
-     mkdir -p ~/.local/state/gh-agile
-     ```
-
-     Without redirection cron mails the output or discards it, and the one run
-     that added forty issues is the one you will want to read.
-
-   - **Truncate it, or it grows forever.** The `tail`/`mv` at the end of the
-     line keeps the last 1000 lines — a few months of daily runs. Writing to a
-     temporary file and moving it is what makes this safe: `tail -n 1000 f > f`
-     would truncate the file before `tail` read it, losing everything. `mv` over
-     the same filesystem is atomic, so a reader never sees a half-written log.
-
-     `LOG=` is a crontab variable; cron exports it and the shell running the
-     command expands `$LOG`, which keeps the line readable rather than repeating
-     the path three times.
-
-     If the log genuinely belongs in `/var/log`, that is a *system* crontab —
-     a file in `/etc/cron.d/` with a user field — not a user one. Or send it to
-     syslog and let that place it:
-     `... | logger -t gh-agile`.
-
-   Verify the line works before trusting it, in the environment cron will use:
-
-   ```bash
-   env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin \
-     sh -c 'cd /srv/projects/widgets && gh-agile sync --dry-run'
-   ```
-
-   `env -i` clears the environment, so this fails the same way cron would
-   rather than quietly succeeding on something your interactive shell
-   exports. Both failures are named: outside a repository it says so, and
-   without `gh` on `PATH` it says that too.
+   How to run it unattended is [§11](#11-running-it-unattended-cron-and-actions).
 
 3. **Run it after the events that create a backlog**: adding a repository to the
    profile, a bulk import, a migration.
 
-Issues created by `gh agile epic` and `gh agile story` are added at creation and
-never need it.
+Issues created by `gh agile epic create` and `story create` are added at creation
+and never need it.
 
 **`sync` only adds.** It never removes an item, because removing one discards
 that item's Status, Points and Sprint — the data lives on the project item, so
@@ -1556,16 +1489,8 @@ no sprint cadence is configured, and creating a story depends on it.
     …
 ```
 
-Configuration lives in the profile:
-
-| Property | Default | Description |
-|---|---|---|
-| `cadence_days` | `14` | Sprint length, 1–30. `"2-week"` is accepted and normalised |
-| `start_day` | `"monday"` | Weekday new sprints begin on |
-| `ahead` | `2` | Future sprints `ensure` keeps |
-| `autocreate` | `true` | Whether `issue move` may create one as a fallback |
-| `name_template` | `"{n:04d} W{iso_week}-{year}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
-| `record_label` | `true` | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes |
+Configuration lives in the profile's `sprint` block; every property and its
+default is in the [profile table](#properties).
 
 The template is `str.format`, not Jinja: this tool has no dependencies and
 Jinja2 would be its only one. The default produces `0004 W38-2026`; for Jira's
@@ -1884,9 +1809,9 @@ because Status is the one thing GitHub keeps a real history of. It also
 reconstructs carryover, which the field cannot: an item started in one sprint
 and finished in another gets both labels.
 
-**The field can be actively wrong as history.** On this project `#36` was
-started *and* finished on 2026-08-15, inside `AGILE Sprint 4`
-(08-03 .. 08-16) — while its `Sprint` field read `Sprint 1`, which starts
+**The field can be actively wrong as history.** Measured on a real board: an
+item started *and* finished on 2026-08-15, inside `AGILE Sprint 4`
+(08-03 .. 08-16), had a `Sprint` field reading `Sprint 1`, which starts
 08-17. The field records where an item is *planned*; the timeline records where
 it was *worked*. Backfilling from the field would have stamped an issue closed
 on the 15th as belonging to a sprint that had not begun.
@@ -2080,14 +2005,6 @@ gh agile epic create -t "Q4 migration" --start soon
 #   --start 'soon' is not a date. Use YYYY-MM-DD, in UTC -- 2026-09-29 is today.
 ```
 
-**These fields could not actually be written until `#182`.** `set_field` chose
-its `gh project item-edit` flag from the field's GraphQL `__typename`, which
-reads `ProjectV2Field` for a TEXT, a NUMBER *and* a DATE field alike, so every
-date went out as `--text` and GitHub answered *did not receive a date value to
-update a field of type date*. Nothing caught it: the flag is chosen one layer
-below every test that stubs the write, and the fields did not yet exist on the
-board the author used. It is chosen from the field's `dataType` now.
-
 ### Dates after the fact: `issue edit --start`
 
 The flags above only exist while the issue is being created, which is the one
@@ -2173,9 +2090,8 @@ is what keeps the result a plan rather than a forecast wearing a plan's clothes
 **Both dates are one decision, which is why they are written together.** Both
 are parsed before either is written, in one `issue edit`. `--field "Start date"
 --value ...` still reaches the same field, one at a time; the date flags are
-the spelling for a plan. (They were a command of their own, `plan`, until #207
-folded it into `issue edit` -- the verb `gh` has for every change to an
-existing issue.)
+the spelling for a plan, on `issue edit` because that is the verb `gh` has for
+every change to an existing issue.
 
 **Only an epic or an initiative can be planned.** A story's dates are its sprint
 — a level that spans sprints holds no `Sprint` field, which is why these two
@@ -2379,9 +2295,8 @@ AGILE-200 is an epic, not a story:
   gh agile epic view AGILE-200
 ```
 
-`gh agile epic list` was, until AGILE-202, how an epic called "list" got filed:
-`epic` took its first word as a title. A title is `-t` now, and a `gh` verb is
-never read as one.
+A title is always `-t`, and a `gh` verb is never read as one, so `gh agile epic
+list` lists epics rather than filing one called "list".
 
 ## 6. Issue titles: making the key and number visible
 
@@ -2906,6 +2821,7 @@ LOG=/home/you/.local/state/gh-agile/export.log
 0 6 * * *  cd /srv/projects/widgets && gh-agile export --grain issues,events --format csv --out-dir /srv/exports >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
 ```
 
+`PATH`, `HOME` and the log are set for the reasons in [§11](#cron).
 `CRON_TZ=UTC` because cron otherwise uses the system timezone, and a job named
 for one clock and scheduled by another is a confusion that surfaces months
 later. The watermark makes each run incremental; the first is a full export.
@@ -3057,7 +2973,94 @@ The template assigns **additively**. An existing assignee is a deliberate act,
 a reviewer or QA taking the story on, and replacing it with the author would
 destroy the very information the board is there to show.
 
-## 11. Command reference
+## 11. Running it unattended: cron and Actions
+
+`sync`, `validate` and `export` are meant to run on a schedule: `sync` so a
+newly filed issue reaches the board, `validate` so drift is a red tick rather
+than a discovery, and `export` to feed a pipeline. Both cron and GitHub Actions
+work; each has one thing that goes wrong.
+
+### cron
+
+`sync` daily at 07:00, from the main repository's clone:
+
+```cron
+PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
+HOME=/home/you
+LOG=/home/you/.local/state/gh-agile/sync.log
+
+0 7 * * *  cd /srv/projects/widgets && gh-agile sync >> $LOG 2>&1; tail -n 1000 $LOG > $LOG.tmp && mv $LOG.tmp $LOG
+```
+
+**`cd` into the repository first, and it is not optional.** The profile is
+found relative to the working directory — `.github/agile.json` — and it is
+what supplies `--project` and the repositories to sync. Run from anywhere
+else and the tool exits saying `no profile found, and no --project was
+given`, listing the paths it searched and the directory it searched them in.
+That is the right failure, but a daily one if the `cd` is missing.
+
+**The copy inside gh's extension directory is not the one being read.** `gh
+extension install` clones this repository, profile and all, and the tool
+never looks there — that profile configures whichever repository was
+installed, so reading it would aim your commands at somebody else's board.
+The working directory decides, every time.
+
+Three things that bite in cron and not in a shell:
+
+- **`PATH` is minimal**, which is why the crontab sets it. `gh-agile` shells
+  out to `gh` for every call, so `gh` being unreachable fails the run as
+  surely as `gh-agile` being unreachable. Check where yours is with
+  `command -v gh` and include that directory. **On Ubuntu it is often
+  `/snap/bin/gh`** — which no default cron `PATH` contains, and which is why
+  `/snap/bin` appears above.
+- **Authentication must be non-interactive.** `gh` reads `GH_TOKEN` from the
+  environment, or its stored credentials from `$HOME/.config/gh` — and cron
+  may not set `HOME` to what you expect. Either export `GH_TOKEN` in the
+  crontab, or set `HOME=/home/you` there.
+- **Keep the log where you can write it.** A user crontab cannot write to
+  `/var/log`; `~/.local/state/gh-agile/` is yours, and cron will not create it:
+  `mkdir -p ~/.local/state/gh-agile` once. The `tail`/`mv` at the end of the
+  line keeps the last 1000 lines; `logrotate`, or `... | logger -t gh-agile`, does
+  the same job if you prefer.
+
+Verify the line works before trusting it, in the environment cron will use:
+
+```bash
+env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin \
+  sh -c 'cd /srv/projects/widgets && gh-agile sync --dry-run'
+```
+
+`env -i` clears the environment, so this fails the same way cron would
+rather than quietly succeeding on something your interactive shell
+exports. Both failures are named: outside a repository it says so, and
+without `gh` on `PATH` it says that too.
+
+The export pipeline in [§9](#a-daily-incremental-export) is the same shape.
+
+### GitHub Actions
+
+**Never trigger a `gh-agile` workflow from `pull_request` or
+`pull_request_target`.** The shipped template triggers on `issues:` on purpose.
+Two separate reasons, and both matter:
+
+- **`pull_request_target` runs with your secrets and the base repository's
+  permissions.** Anything a fork can influence — and a pull request is entirely
+  fork-controlled — must not reach a job holding `PROJECT_TOKEN`. This is the
+  standard Actions privilege-escalation route, not a `gh-agile` quirk.
+- **`export` discloses the whole board.** It emits every field value, every
+  assignee and the full status history, so an export running in a
+  pull-request-triggered job writes a private board's contents into a build log
+  that any contributor who can open a pull request is able to read. Story points
+  and cycle times are an estimate-accuracy record about named people; the
+  README's *Before making the board public* says what a public board gives away
+  even without this.
+
+Scheduled (`on: schedule`) and issue-triggered (`on: issues`) workflows are the
+safe shapes. If you want a check *on* a pull request, have it read nothing from
+the project: `validate` and `export` both need project read, and neither belongs
+in a fork-reachable job.
+
+## 12. Command reference
 
 A group's help is laid out as `gh issue --help` lays out its own: **GENERAL
 COMMANDS** take no identifier (`create`, `list`, `status`), **TARGETED
@@ -3088,15 +3091,19 @@ gh agile issue move --help
 | `sync` | Add issues that belong on the board and are not on it |
 | `sprint list` / `sprint view` / `sprint create` | Show the iterations; one sprint with its items; append one |
 | `sprint ensure` / `sprint reconcile` / `sprint backfill` / `sprint unstamp` | Append sprints until one is current and enough lie ahead; set Sprint fields from the labels; add labels from history; remove labels from containers |
-| `initiative create` / `epic create` / `story create` / `task create` | Create work items with their parent, labels and fields; `gh issue create`'s flags, the title as `-t` |
-| `initiative` / `epic` / `story` / `issue` `list` and `view` | List one level from the board, by Status; view one item with its children, its `sprint:` labels and its checks. `issue` takes any level |
+| `initiative create` / `epic create` / `story create` / `bug create` / `task create` | Create work items with their parent, labels and fields; `gh issue create`'s flags, the title as `-t` |
+| `initiative list` / `epic list` / `story list` / `bug list` / `issue list` | List one level from the board, by Status; `issue list` takes every level |
+| `initiative view` / `epic view` / `story view` / `bug view` / `issue view` | One item with its children, its `sprint:` labels and its checks; `issue view` takes any level |
+| `task list` | Tasks in the profile's repositories, with their story -- a task is never on the board |
+| `initiative reconcile` | Put `initiative:` labels back in step with the sub-issue tree beneath it |
 | `issue edit` | Edit one or more issues: `gh issue edit`'s flags, the board's fields, an epic's dates; `-t` keeps the prefix |
 | `issue move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
 | `issue close` / `issue reopen` | Close as completed (needs Evidence) or `-r "not planned"`, setting Status to `Done`; reopen and move Status back |
 | `issue reconcile` | Repair one issue's Sprint field from its `sprint:` labels |
 | `issue status` | The current sprint at stand-up: yours by Status, what is in review, what nobody holds |
 | `validate` | Check the conventions a machine can check |
-| `export` | Issues and events, full or incremental, to stdout or timestamped files |
+| `export` | Issues, events, pull requests and the configuration, full or incremental, to stdout or timestamped files |
+| `unfinished` | Name the issues a merge closed and nobody finished; the post-merge hook runs it |
 
 **A `list` into a pipe is data**: tab-separated, one row per item, no header, as
 `gh issue list` prints it -- so `gh agile epic list | cut -f1` is the keys.

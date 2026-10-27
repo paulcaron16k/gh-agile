@@ -31,17 +31,20 @@ def table_rows(text, first_cell):
 
 
 class TestSprintDefaults:
-    """Both docs table the `sprint` profile properties with a default each."""
+    """The guide's profile table carries every `sprint` property with its
+    default; since #269 it is the only copy, and the README links to it."""
 
-    @pytest.mark.parametrize("doc", ["README.md", "USER_GUIDE.md"])
     @pytest.mark.parametrize("prop", ["cadence_days", "start_day", "ahead", "autocreate",
                                       "name_template", "record_label"])
-    def test_the_default_is_the_codes(self, tool, doc, prop):
-        rows = table_rows(USER_DOCS[doc], f"`{prop}`")
-        assert rows, f"{doc} has no row for {prop}"
+    def test_the_default_is_the_codes(self, tool, prop):
+        (row,) = table_rows(GUIDE, f"`sprint.{prop}`")
         expected = json.dumps(tool.SPRINT_DEFAULTS[prop])
-        for row in rows:
-            assert row[1] == f"`{expected}`", f"{doc}: {prop} default is {row[1]}"
+        assert row[3].endswith(f"Default `{expected}`") or f"Default `{expected}` " in row[3], \
+            f"sprint.{prop}: {row[3]}"
+
+    @pytest.mark.parametrize("doc", ["README.md", "USER_GUIDE.md"])
+    def test_there_is_no_second_copy(self, doc):
+        assert not table_rows(USER_DOCS[doc], "`name_template`")
 
 
 class TestExportColumns:
@@ -95,3 +98,31 @@ def test_the_guide_does_not_send_the_hook_to_a_retired_spelling():
     for match in re.finditer(r"validate\s+--id", GUIDE):
         nearby = GUIDE[max(0, match.start() - 200):match.end() + 200]
         assert "retired" in nearby or "is now" in nearby or "issue view" in nearby
+
+
+def test_the_command_reference_names_every_command():
+    """§12 is the one list of everything; it left out `bug`, `initiative
+    reconcile`, `task list` and `unfinished` (#269). Every leaf `--help` shows."""
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import check_guide
+
+    reference = GUIDE.split("## 12. Command reference", 1)[1]
+    named = set(re.findall(r"^\| ((?:`[^`]+`(?: / )?)+) \|", reference, re.MULTILINE))
+    commands = {name for cell in named for name in re.findall(r"`([^`]+)`", cell)}
+    leaves = {" ".join(leaf) for leaf in check_guide.parser_leaves()}
+    assert leaves <= commands, sorted(leaves - commands)
+
+
+def test_the_guide_has_a_table_of_contents():
+    toc = GUIDE.split("## Contents", 1)[1].split("\n## ", 1)[0]
+    for heading in re.findall(r"^## (\d+\. .+)$", GUIDE, re.MULTILINE):
+        assert heading.split(" ", 1)[1].split(":")[0].replace("`", "") in \
+            toc.replace("`", ""), heading
+
+
+def test_no_user_doc_cites_maintainer_files_or_history():
+    for name, text in USER_DOCS.items():
+        assert "docs/" not in text, name
+        assert "this repository made" not in text, name
+        assert not re.search(r"until (AGILE-|#|`#)\d", text), name

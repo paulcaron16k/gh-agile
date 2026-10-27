@@ -663,9 +663,9 @@ gh agile issue close 53        #53 + sprint:2026-08-24
 
 Issues that predate the stamping are recovered with `gh agile sprint backfill`,
 which maps Status transitions into the sprint containing them. Prefer it over
-`--source field`: on this project the field could recover 2 of 25 items, and for
-one of those it was wrong — `#36` finished on 2026-08-15 while its field read a
-sprint starting 08-17. The field records where an item is planned; the timeline
+`--source field`: measured on a real board, the field recovered 2 of 25 items,
+and one of those was wrong — an item finished on 2026-08-15 while its field read
+a sprint starting 08-17. The field records where an item is planned; the timeline
 records where it was worked.
 
 The export carries `sprint_starts` (every sprint the issue lived in, oldest
@@ -712,17 +712,8 @@ fortnight. Field for the board, labels for the record.
 | `sprint:YYYY-MM-DD` label | `issue move` at `In Progress` and at `Done` | The sprint's start date. On the issue, immutable, one per sprint the issue lived in |
 | Scrum board | `init`, `board create --type scrum` | `filter: sprint:@current`, which is what makes a board scrum rather than kanban |
 
-Profile settings, all under `sprint`:
-
-| Property | Default | Description |
-|---|---|---|
-| `template` | — | Chosen deliberately; `epic create`, `story create` and `sprint ensure` refuse until it is set |
-| `cadence_days` | `14` | Sprint length, 1–30. `"2-week"` is accepted and normalised |
-| `start_day` | `"monday"` | Weekday new sprints begin on |
-| `ahead` | `2` | Future sprints kept stocked |
-| `autocreate` | `true` | Whether `issue move` may create the covering sprint when none is active |
-| `name_template` | `"{n:04d} W{iso_week}-{year}"` | `{n}`, `{key}`, `{start}`, `{end}`, `{year}`, `{iso_week}` |
-| `record_label` | `true` | Stamp `sprint:YYYY-MM-DD` on the issue when work starts and finishes |
+Every `sprint` property, with its default, is in the user guide's
+[profile table](USER_GUIDE.md#properties).
 
 ### Requirements, and how each is met
 
@@ -1054,7 +1045,7 @@ plain `gh issue create`; the maintainer picks the issue up with
 guesses the `type:` label — a machine cannot tell an epic from a story from a
 bug, so `validate` reports the gap and a person decides.
 
-**Before making the board public**, read `docs/review-2026-08.md` S9. A public
+**Before making the board public**, know what it exposes. A public
 repository exposes issue titles, bodies and comments. A public *project*
 additionally exposes story points, priority, sprint assignment, and — via the
 export anyone can then reproduce — the full status history and the cycle times
@@ -1089,24 +1080,17 @@ Project → Settings → *Manage access* → add the team, with its role.
 **4. Repository push for the same people.**
 Labels need push (or triage) on the repository, and the Day-to-day tier writes
 labels. Project write alone will fail at label creation — and today it fails
-*quietly*, reporting "already exists" (see `docs/review-2026-08.md` S1).
+*quietly*, reporting "already exists".
 
 **5. Token scopes, and SSO if the org enforces SAML.**
 Each member runs `gh auth refresh -s project`. Under SAML the token must also be
 authorized for the organization, or every call fails with a resource error that
 does not mention SSO.
 
-**Status of organization support: the code path is fixed; the permission tiers
-are not verified.**
-
-`gh-agile` has only ever been run against user-owned projects, and until
-2026-08-23 an org-owned one would have failed early. `gh api graphql` exits
-non-zero when GraphQL returns an `errors` block, which is what asking
-`user(login:)` about an organization does — so `project_id` and `sprint_field`,
-which walked `user` then `organization` without catching it, died on the first
-root and reported *"Could not resolve to a User with the login of 'acme'"* for a
-login that was correct. All three callers now share `project_node`, which does
-the walk with the catch once. `docs/review-2026-08.md` S8 has the measurement.
+**Status of organization support: an org-owned project resolves; the
+permission tiers are not verified.** `gh-agile` has been run against user-owned
+projects only. An organization's project is found the same way, and that is
+tested offline, but no organization board has used it yet.
 
 What is **still** unverified is the table at the top of this section: whether
 project *Write* covers field creation, iteration configuration and view creation,
