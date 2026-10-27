@@ -139,7 +139,9 @@ the export.
 4. **Close** — the merge closes the issue, and the post-merge hook names it.
    Whoever did the work finishes it with `gh agile issue move N Done --evidence
    "..."`. `Done` is never set by automation; see §3.
-5. **Review** — export, look at the numbers in §6, write down one thing to change.
+5. **Carry over** — what did not finish moves to the next sprint with
+   `gh agile sprint carryover`; finished work stays where it was finished.
+6. **Review** — export, look at the numbers in §6, write down one thing to change.
 
 **A sprint is optional.** For a queue where everything is blocked upstream, an
 iteration field measures waiting rather than work. Adopt sprints when work

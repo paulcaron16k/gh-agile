@@ -4022,6 +4022,9 @@ def cmd_sprint(args) -> int:
     if args.sprint_command == "view":
         return cmd_sprint_view(args)
 
+    if args.sprint_command == "carryover":
+        return cmd_sprint_carryover(args)
+
     if args.sprint_command == "list":
         active, completed = iterations(args.owner, args.project)
         if json_requested(args) or not stdout_is_terminal():
@@ -4163,6 +4166,99 @@ def find_sprint(login: str, project: int, wanted: str) -> tuple[dict, str]:
     known = "\n".join(f"    {it['startDate']}  {it['title']}  ({state})"
                       for it, state in tagged) or "    none"
     sys.exit(f"no sprint starts on or is titled {wanted!r}. There is:\n{known}")
+
+
+def item_sprint_start(item: dict) -> str | None:
+    """The start date of the sprint an item's field points at: its identity.
+
+    Not the title. A board can carry the same title twice across the naming
+    seam, and a start date cannot repeat.
+    """
+    for node in item["fieldValues"]["nodes"]:
+        if (node.get("field") or {}).get("name") == "Sprint" and node.get("startDate"):
+            return node["startDate"]
+    return None
+
+
+def set_iteration(login: str, project: int, item_id: str, iteration_id: str) -> None:
+    """Point one item's Sprint at one iteration, by id rather than by title."""
+    field = fields_of(login, project).get("Sprint")
+    if not field:
+        sys.exit("no Sprint field on this project; run `gh agile init`")
+    gh(["project", "item-edit", "--id", item_id, "--project-id", project_id(login, project),
+        "--field-id", field["id"], "--iteration-id", iteration_id])
+
+
+def cmd_sprint_carryover(args) -> int:
+    """`sprint carryover [SPRINT]`: move a sprint's unfinished work to the next one.
+
+    **Jira's "complete sprint", without the part that would be destructive here.**
+    It writes each unfinished item's Sprint field and nothing else -- never the
+    iteration configuration, which re-mints every id and clears every item's
+    Sprint board-wide. So a sprint that does not exist yet is refused and
+    `sprint ensure` named, which creates it with the save-and-restore around it.
+
+    **No label is written.** `sprint:` labels record where work was *done*: an
+    item started in this sprint already carries this sprint's date, and gets the
+    next one's when it finishes there -- which is exactly how carryover is read
+    back later. An item never started was never worked here, and carrying it
+    stamps nothing.
+
+    Finished work stays where it was finished. A closed issue whose Status never
+    reached Done is not work to carry; it is a wrap-up, and it is named (#283).
+    """
+    source, _state = find_sprint(args.owner, args.project, args.sprint)
+    active, _completed = iterations(args.owner, args.project)
+    if args.to:
+        dest, dest_state = find_sprint(args.owner, args.project, args.to)
+        if dest_state == "completed":
+            sys.exit(f"{dest['title']} is completed; carry work into the current sprint or "
+                     f"a future one.")
+    else:
+        later = [it for it in active if it["startDate"] > source["startDate"]]
+        if not later:
+            sys.exit(f"no sprint starts after {source['title']}, so there is nowhere to carry "
+                     f"its work.\n  Create it first -- `gh agile sprint ensure` keeps every "
+                     f"item's assignment -- or name one with --to.")
+        dest = min(later, key=lambda it: it["startDate"])
+    if dest["startDate"] == source["startDate"]:
+        sys.exit(f"--to names {source['title']} itself; nothing would move.")
+
+    _title, items = fetch_items(args.owner, args.project)
+    carry, unfinished_closed, containers, finished = [], [], [], 0
+    for item in items:
+        content = item.get("content") or {}
+        if item.get("isArchived") or content.get("__typename") != "Issue":
+            continue
+        if item_sprint_start(item) != source["startDate"]:
+            continue
+        labels = [n["name"] for n in (content.get("labels") or {}).get("nodes") or []]
+        status = field_values(item).get("Status")
+        ref = f"#{content['number']}"
+        if container_level(labels):
+            containers.append(ref)
+        elif status_key(status or "") == status_key(CYCLE_END):
+            finished += 1
+        elif content.get("state") == "CLOSED":
+            unfinished_closed.append(ref)
+        else:
+            carry.append((item, content, status or "no Status"))
+
+    verb = "would carry" if args.dry_run else "carried"
+    for item, content, status in sorted(carry, key=lambda c: c[1]["number"]):
+        if not args.dry_run:
+            set_iteration(args.owner, args.project, item["id"], dest["id"])
+        print(f"  {verb} #{content['number']:<5} {status:<12} {content.get('title') or ''}")
+    print(f"  {len(carry)} {verb} from {source['title']} to {dest['title']}; "
+          f"{finished} finished stay in {source['title']}")
+    if unfinished_closed:
+        print(f"  closed but not {CYCLE_END}, left where they are -- finish each with "
+              f"`gh agile issue move N {CYCLE_END} --evidence \"...\"`: "
+              + ", ".join(unfinished_closed))
+    if containers:
+        print(f"  an epic or initiative is in this sprint, which none should be; "
+              f"`gh agile sprint unstamp` takes it out: {', '.join(containers)}")
+    return 0
 
 
 def cmd_sprint_view(args) -> int:
@@ -10417,6 +10513,25 @@ and the labels are the record of where work was done.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sprint_viewer.add_argument("--format", choices=["jsonl"], help="JSONL instead of text")
     add_json_flags(sprint_viewer, BOARD_FIELDS)
+    sprint_carry = sprint_sub.add_parser(
+        "carryover", kind=TARGETED, identifier="sprint",
+        help="Move a sprint's unfinished work to the next sprint; finished work stays",
+        epilog="""
+
+At the end of a sprint, as Jira's "complete sprint" does. Writes each
+unfinished item's Sprint field and nothing else: no iteration is created or
+changed, so no other item's assignment is touched, and no sprint: label is
+written -- an item started here already carries this sprint's date, and gets
+the next one's when it finishes.
+
+On the Monday after, name the sprint that just ended: its start date or its
+title. --to defaults to the sprint that starts next.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sprint_carry.add_argument("--to", metavar="SPRINT",
+                              help="the sprint to carry into: @current, a start date or a "
+                                   "title; default the next one")
+    sprint_carry.add_argument("--dry-run", action="store_true",
+                              help="list what would move, and move nothing")
     # Each help line says what the command *changes*: `ensure`, `backfill` and
     # `unstamp` keep their names, and none is plain English the way gh's verbs are.
     sprint_ensure = sprint_sub.add_parser(
