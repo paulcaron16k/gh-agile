@@ -4192,11 +4192,14 @@ def set_iteration(login: str, project: int, item_id: str, iteration_id: str) -> 
 def cmd_sprint_carryover(args) -> int:
     """`sprint carryover [SPRINT]`: move a sprint's unfinished work to the next one.
 
-    **Jira's "complete sprint", without the part that would be destructive here.**
-    It writes each unfinished item's Sprint field and nothing else -- never the
-    iteration configuration, which re-mints every id and clears every item's
-    Sprint board-wide. So a sprint that does not exist yet is refused and
-    `sprint ensure` named, which creates it with the save-and-restore around it.
+    **Jira's "complete sprint".** The move writes each unfinished item's Sprint
+    field and nothing else. The sprint it moves into is made first, by
+    `ensure_sprints` -- the one path that writes the iteration configuration
+    with the save-and-restore around it -- because the on-demand top-up in
+    `issue move` fires only when no sprint is active at all, so a board's
+    future sprints run out one fortnight at a time and the end of a sprint is
+    exactly when the next is needed. Ensure runs before anything is read: it
+    re-mints every iteration id, and an id read earlier would point nowhere.
 
     **No label is written.** `sprint:` labels record where work was *done*: an
     item started in this sprint already carries this sprint's date, and gets the
@@ -4207,8 +4210,19 @@ def cmd_sprint_carryover(args) -> int:
     Finished work stays where it was finished. A closed issue whose Status never
     reached Done is not work to carry; it is a wrap-up, and it is named (#283).
     """
+    topped_up = sprint_settings(args._config).get("autocreate") and args._config.get("sprint")
+    if topped_up and not args.dry_run:
+        ensure_sprints(args.owner, args.project, args._config,
+                       sprint_settings(args._config)["ahead"])
     source, _state = find_sprint(args.owner, args.project, args.sprint)
     active, _completed = iterations(args.owner, args.project)
+    if topped_up and args.dry_run:
+        # A dry run writes nothing, so say what ensure would have to make.
+        ahead = sprint_settings(args._config)["ahead"]
+        future = [it for it in active if it["startDate"] > today_utc().isoformat()]
+        if len(future) < ahead:
+            print(f"  would run `sprint ensure` first: {len(future)} of {ahead} sprints "
+                  f"lie ahead")
     if args.to:
         dest, dest_state = find_sprint(args.owner, args.project, args.to)
         if dest_state == "completed":
@@ -4216,6 +4230,10 @@ def cmd_sprint_carryover(args) -> int:
                      f"a future one.")
     else:
         later = [it for it in active if it["startDate"] > source["startDate"]]
+        if not later and topped_up and args.dry_run:
+            # Ensure has not run, so the sprint this would move into does not
+            # exist yet; list the work anyway.
+            later = [{"id": None, "title": "the next sprint", "startDate": "9999-12-31"}]
         if not later:
             sys.exit(f"no sprint starts after {source['title']}, so there is nowhere to carry "
                      f"its work.\n  Create it first -- `gh agile sprint ensure` keeps every "
@@ -10518,11 +10536,12 @@ and the labels are the record of where work was done.""",
         help="Move a sprint's unfinished work to the next sprint; finished work stays",
         epilog="""
 
-At the end of a sprint, as Jira's "complete sprint" does. Writes each
-unfinished item's Sprint field and nothing else: no iteration is created or
-changed, so no other item's assignment is touched, and no sprint: label is
-written -- an item started here already carries this sprint's date, and gets
-the next one's when it finishes.
+At the end of a sprint, as Jira's "complete sprint" does. Runs `sprint ensure`
+first, so the next sprint exists; ensure saves and restores every assignment
+around the iteration write, and does nothing when the sprints already exist.
+Then writes each unfinished item's Sprint field and nothing else. No sprint:
+label is written -- an item started here already carries this sprint's date,
+and gets the next one's when it finishes.
 
 On the Monday after, name the sprint that just ended: its start date or its
 title. --to defaults to the sprint that starts next.""",

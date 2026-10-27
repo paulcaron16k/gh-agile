@@ -2,8 +2,9 @@
 
 Jira's "complete sprint" moves open issues forward. Here that was `issue edit
 A B C --field Sprint --value ...`, item by item, documented nowhere. The command
-writes each unfinished item's Sprint field and nothing else: never the iteration
-configuration, which would clear every assignment on the board.
+runs `sprint ensure` first -- the board this was written on had no sprint after
+the current one, because `issue move` tops up only when none is active -- then
+writes each unfinished item's Sprint field and nothing else.
 """
 
 from __future__ import annotations
@@ -42,14 +43,17 @@ BOARD = [
 
 @pytest.fixture
 def carry(monkeypatch, tool, capsys):
-    def go(*argv, board=BOARD):
-        written = []
-        monkeypatch.setattr(tool, "iterations", lambda login, project: (ACTIVE, COMPLETED))
+    def go(*argv, board=BOARD, active=ACTIVE, config=None):
+        written, go.ensured = [], []
+        monkeypatch.setattr(tool, "iterations", lambda login, project: (active, COMPLETED))
+        monkeypatch.setattr(tool, "ensure_sprints",
+                            lambda login, project, cfg, ahead: go.ensured.append(ahead))
         monkeypatch.setattr(tool, "fetch_items", lambda login, project: ("P", board))
         monkeypatch.setattr(tool, "set_iteration",
                             lambda login, project, item_id, it: written.append((item_id, it)))
         args = tool.build_parser().parse_args(["sprint", "carryover", *argv])
-        args.owner, args.project, args._config = "o", 1, {}
+        args.owner, args.project = "o", 1
+        args._config = {"sprint": {"template": "2-week"}} if config is None else config
         code = tool.cmd_sprint(args)
         return code, written, capsys.readouterr().out
     return go
@@ -97,12 +101,41 @@ class TestWhereTo:
             carry("--to", "@current")
         assert "itself" in str(refused.value)
 
-    def test_no_next_sprint_names_ensure_rather_than_creating_one(self, carry):
-        """Creating a sprint is an iteration write; that is `ensure`'s, with its
-        save-and-restore, never this command's."""
+    def test_without_autocreate_no_next_sprint_names_ensure(self, carry):
+        """The `none` template creates no sprints, so nothing tops up."""
         with pytest.raises(SystemExit) as refused:
-            carry("Sprint 7")
-        assert "sprint ensure" in str(refused.value)
+            carry("Sprint 7", config={"sprint": {"template": "none", "autocreate": False}})
+        assert "sprint ensure" in str(refused.value) and carry.ensured == []
+
+
+class TestEnsureRunsFirst:
+    def test_with_the_profiles_ahead(self, carry):
+        carry()
+        assert carry.ensured == [2]
+
+    def test_a_dry_run_writes_no_sprint(self, carry):
+        carry("--dry-run")
+        assert carry.ensured == []
+
+    def test_a_dry_run_with_no_next_sprint_says_ensure_would_run(self, carry):
+        _code, written, out = carry("--dry-run", active=ACTIVE[:1])
+        assert written == [] and "would run `sprint ensure` first" in out
+        assert "would carry #1" in out and "to the next sprint" in out
+
+    def test_a_dry_run_says_when_fewer_than_ahead_remain(self, carry, tool, monkeypatch):
+        import datetime as dt
+
+        monkeypatch.setattr(tool, "today_utc", lambda: dt.date(2026, 10, 27))
+        _code, _written, out = carry("--dry-run")
+        assert "would run `sprint ensure` first: 1 of 2 sprints lie ahead" in out
+
+    def test_nothing_is_read_before_it(self, tool):
+        """Ensure re-mints every iteration id; an id read before it points nowhere."""
+        import inspect
+
+        source = inspect.getsource(tool.cmd_sprint_carryover)
+        assert source.index("ensure_sprints(") < source.index("iterations(args.owner")
+        assert source.index("ensure_sprints(") < source.index("find_sprint(")
 
 
 def test_dry_run_moves_nothing(carry):
@@ -111,11 +144,11 @@ def test_dry_run_moves_nothing(carry):
     assert "would carry #1" in out and "2 would carry from Sprint 6 to Sprint 7" in out
 
 
-def test_it_never_writes_the_iteration_configuration(tool):
-    """The whole design: one item's field at a time."""
+def test_only_ensure_writes_the_iteration_configuration(tool):
+    """The move itself is one item's field at a time; the save-and-restore
+    belongs to `ensure_sprints`, not repeated here."""
     import inspect
 
     source = inspect.getsource(tool.cmd_sprint_carryover)
-    for destructive in ("ensure_sprints", "updateProjectV2Field", "sprint_assignments",
-                        "restore_assignments"):
+    for destructive in ("updateProjectV2Field", "sprint_assignments", "restore_assignments"):
         assert destructive not in source

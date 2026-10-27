@@ -1590,10 +1590,16 @@ gh agile sprint carryover 2026-10-12 --to @current   # the Monday after
   2 carried from TEST Sprint 6 to TEST Sprint 7; 2 finished stay in TEST Sprint 6
 ```
 
-**It writes each unfinished item's Sprint field and nothing else.** No sprint
-is created or changed -- that is an iteration write, which clears every
-assignment on the board -- so when no sprint follows, it refuses and names
-`sprint ensure`, which creates one with every assignment saved and restored.
+**It runs `sprint ensure` first**, so the sprint it moves into exists and the
+profile's `ahead` sprints lie beyond today. `issue move` creates a sprint only
+when none is active at all, so without this a board's future sprints run out
+one at a time. Creating a sprint is an iteration write, which clears every
+assignment on the board; `ensure` saves and restores them around it, and does
+nothing when the sprints already exist. `--dry-run` writes nothing, so it only
+says when `ensure` would have to run. A profile with `"autocreate": false`
+(the `none` template) skips it, and `carryover` refuses when no sprint follows.
+
+**Then it writes each unfinished item's Sprint field and nothing else.**
 
 Finished work stays in the sprint it was finished in. An issue that is closed
 but never reached `Done` is named, not moved: it is a wrap-up, and
