@@ -2245,6 +2245,38 @@ the way in; you can write either.
 
 **Optional, always.** An epic under no initiative is ordinary, not a finding.
 
+### Moving work: `issue edit --epic` and `--initiative`
+
+Plans change, and a story filed under one epic turns out to belong to another.
+Move it rather than recreate it:
+
+```bash
+gh agile issue edit WIDG-65 --epic WIDG-64 --dry-run   # say what would change
+gh agile issue edit WIDG-65 --epic WIDG-64             # a story or bug, to another epic
+gh agile issue edit WIDG-64 --initiative large-new-feature   # an epic, by slug or reference
+gh agile issue edit WIDG-65 --epic none                # standing alone
+```
+```
+  #65 under epic #64 (was #63)
+    unlabelled paulcaron16k/agile-test#65  -initiative:rp-a-1120  (no longer in the tree)
+  initiative:rp-a-1120: changed 1, already correct 2, across 2 issue(s) in the tree
+    labelled paulcaron16k/agile-test#65  +initiative:rp-b-1120
+  initiative:rp-b-1120: changed 1, already correct 2, across 3 issue(s) in the tree
+```
+
+**The move is one write**, so the issue is never under no parent, and then the
+`initiative:` labels are reconciled for every initiative the move touched, old
+and new: moving an epic relabels its stories too. The levels are the ones
+`create` builds -- a story or bug under an epic, an epic under an initiative --
+and anything else is refused before anything is written, naming the flag that
+fits:
+
+```
+WIDG-65 is a story, and --initiative moves epics.
+  A story goes under an epic: --epic.
+  Nothing was changed.
+```
+
 ### Reading work items: `list` and `view`
 
 Each level lists and views itself, as `gh issue list` and `gh issue view` do —
@@ -3096,7 +3128,7 @@ gh agile issue move --help
 | `initiative view` / `epic view` / `story view` / `bug view` / `issue view` | One item with its children, its `sprint:` labels and its checks; `issue view` takes any level |
 | `task list` | Tasks in the profile's repositories, with their story -- a task is never on the board |
 | `initiative reconcile` | Put `initiative:` labels back in step with the sub-issue tree beneath it |
-| `issue edit` | Edit one or more issues: `gh issue edit`'s flags, the board's fields, an epic's dates; `-t` keeps the prefix |
+| `issue edit` | Edit one or more issues: `gh issue edit`'s flags, the board's fields, an epic's dates, its place in the hierarchy (`--epic`, `--initiative`); `-t` keeps the prefix |
 | `issue move` | Change status, with the evidence that status requires; claims the issue and its sprint when work starts |
 | `issue close` / `issue reopen` | Close as completed (needs Evidence) or `-r "not planned"`, setting Status to `Done`; reopen and move Status back |
 | `issue reconcile` | Repair one issue's Sprint field from its `sprint:` labels |

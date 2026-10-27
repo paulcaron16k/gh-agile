@@ -7083,6 +7083,157 @@ def edit_dates(args) -> list[tuple[str, str | None]] | None:
     return planned_dates(args.start, args.target)
 
 
+#: One issue, its labels and its parent's, in one read: what a move needs to
+#: check the levels and to know which initiative it leaves.
+ISSUE_PARENT_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      id number repository { nameWithOwner } labels(first: 50) { nodes { name } }
+      parent { id number repository { nameWithOwner } labels(first: 50) { nodes { name } } }
+    }
+  }
+}
+"""
+
+#: The level a move flag puts an issue under, and the levels that may be moved
+#: by it. A story or bug belongs to an epic and an epic to an initiative -- the
+#: hierarchy `create` builds, so a move cannot build a different one (#270).
+PARENT_FLAGS = {"epic": ("epic", ("story", "bug")),
+                "initiative": ("initiative", ("epic",))}
+
+
+def issue_with_parent(repo: str, number: int) -> dict:
+    owner, name = repo.split("/", 1)
+    node = ((graphql(ISSUE_PARENT_QUERY, owner=owner, repo=name, number=number)
+             .get("data") or {}).get("repository") or {}).get("issue")
+    if not node:
+        sys.exit(f"no issue {repo}#{number}")
+
+    def flat(issue):
+        return {"id": issue["id"], "number": issue["number"],
+                "repo": issue["repository"]["nameWithOwner"],
+                "labels": [n["name"] for n in (issue.get("labels") or {}).get("nodes") or []]}
+
+    out = flat(node)
+    out["parent"] = flat(node["parent"]) if node.get("parent") else None
+    return out
+
+
+def article(word: str) -> str:
+    """`a story`, `an epic`."""
+    return f"{'an' if word[:1] in 'aeiou' else 'a'} {word}"
+
+
+PLURALS = {"story": "stories", "bug": "bugs", "epic": "epics"}
+
+
+def level_of(labels) -> str | None:
+    return next((lb[len("type:"):] for lb in labels if lb.startswith("type:")), None)
+
+
+def initiative_slugs(labels) -> set[str]:
+    return {lb[len(INITIATIVE_LABEL):] for lb in labels if lb.startswith(INITIATIVE_LABEL)}
+
+
+def plan_reparent(args, repo: str, number: int) -> dict | None:
+    """What `--epic` or `--initiative` would do to one issue, checked, written nowhere.
+
+    **Refused before anything is written**, as every `issue edit` refusal is:
+    the wrong level on either end, a parent that is not what it claims to be.
+    `None` when neither flag was given.
+    """
+    flag = next((name for name in PARENT_FLAGS if getattr(args, name, None)), None)
+    if flag is None:
+        return None
+    parent_level, movable = PARENT_FLAGS[flag]
+    ref = getattr(args, flag)
+    issue = issue_with_parent(repo, number)
+    level = level_of(issue["labels"])
+    if level not in movable:
+        right = next((f for f, (_p, kinds) in PARENT_FLAGS.items() if level in kinds), None)
+        sys.exit(f"{repo}#{number} is {article(level) if level else 'untyped'}, and --{flag} "
+                 f"moves {' or '.join(PLURALS[kind] for kind in movable)}."
+                 + (f"\n  {article(level).capitalize()} goes under "
+                    f"{article(PARENT_FLAGS[right][0])}: --{right}." if right else "")
+                 + "\n  Nothing was changed.")
+    old = issue["parent"]
+    if ref.strip().casefold() == CLEAR_DATE:
+        new = None
+    else:
+        if flag == "initiative":
+            target = initiative_target(args._config, ref, repo)
+            new = issue_with_parent(target["repo"], target["number"])
+        else:
+            new_repo, new_number = parse_issue_ref(ref, args._config, repo)
+            new = issue_with_parent(new_repo, new_number)
+        if level_of(new["labels"]) != parent_level:
+            kind = level_of(new["labels"])
+            sys.exit(f"{new['repo']}#{new['number']} is {article(kind) if kind else 'untyped'}, "
+                     f"not {article(parent_level)}.\n  Nothing was changed.")
+    if new is None and old is not None and level_of(old["labels"]) != parent_level:
+        sys.exit(f"{repo}#{number} is under {old['repo']}#{old['number']}, which is not "
+                 f"{article(parent_level)}; --{flag} none takes it off "
+                 f"{article(parent_level)} only.")
+    # Every initiative whose labels the move can change: the one the issue is
+    # labelled into now, the one its old parent belongs to -- `story create`
+    # under an epic does not stamp the label, so the issue's own labels can be
+    # silent about it -- and the one its new parent belongs to.
+    slugs = initiative_slugs(issue["labels"])
+    for parent in (old, new):
+        if parent is not None:
+            slugs |= initiative_slugs(parent["labels"])
+    return {"flag": flag, "level": parent_level, "issue": issue, "old": old, "new": new,
+            "slugs": slugs}
+
+
+def describe_reparent(move: dict) -> str:
+    issue, old, new, level = move["issue"], move["old"], move["new"], move["level"]
+
+    def name(node):
+        return (f"#{node['number']}" if node["repo"] == issue["repo"]
+                else f"{node['repo']}#{node['number']}")
+
+    if new is None and old is None:
+        return f"#{issue['number']} is under no {level} already"
+    if new is not None and old is not None and new["id"] == old["id"]:
+        return f"#{issue['number']} is under {level} {name(new)} already"
+    if new is None:
+        return f"#{issue['number']} off {level} {name(old)}, standing alone"
+    return (f"#{issue['number']} under {level} {name(new)}"
+            + (f" (was {name(old)})" if old else ""))
+
+
+def write_reparent(args, move: dict) -> None:
+    """The edge first, then the labels the edge implies.
+
+    **One call to move**: `addSubIssue` with `replaceParent`, so there is no
+    moment with the issue under no parent. `none` is `removeSubIssue`.
+    Then `initiative reconcile` for every initiative the move touched, old and
+    new, because the label is derived from the tree and the tree just changed.
+    """
+    issue, old, new = move["issue"], move["old"], move["new"]
+    unchanged = (new is None and old is None) or (
+        new is not None and old is not None and new["id"] == old["id"])
+    if unchanged:
+        print(f"  {describe_reparent(move)}")
+        return
+    if new is None:
+        graphql("mutation($parent: ID!, $child: ID!) { removeSubIssue(input: "
+                "{issueId: $parent, subIssueId: $child}) { issue { number } } }",
+                parent=old["id"], child=issue["id"])
+    else:
+        graphql("mutation($parent: ID!, $child: ID!) { addSubIssue(input: "
+                "{issueId: $parent, subIssueId: $child, replaceParent: true}) "
+                "{ subIssue { number } } }",
+                parent=new["id"], child=issue["id"])
+    print(f"  {describe_reparent(move)}")
+    for slug in sorted(move["slugs"]):
+        found = find_initiative(args._config, slug)
+        if found:
+            reconcile_initiative(args, {"repo": found[0], "number": found[1], "slug": slug})
+
+
 def cmd_edit(args) -> int:
     """`issue edit ISSUE...`: `gh issue edit`'s flags, the board's fields, the plan.
 
@@ -7128,9 +7279,14 @@ def cmd_edit(args) -> int:
         passthrough.append(("--remove-milestone", None))
     if body is not None:
         passthrough.append(("--body", body))
-    if not (fields or dates is not None or passthrough or args.title):
+    if args.epic and args.initiative:
+        sys.exit("--epic moves a story or bug and --initiative moves an epic; an issue is "
+                 "one level,\n  so give one of them.")
+    moving = bool(args.epic or args.initiative)
+    if not (fields or dates is not None or passthrough or args.title or moving):
         sys.exit("nothing to change. Give -t, -b/-F, a label, assignee or milestone flag, "
-                 "--points,\n  --priority, --field/--value, or --start/--target/--for.")
+                 "--points,\n  --priority, --field/--value, --start/--target/--for, or "
+                 "--epic/--initiative.")
 
     plans = []
     for ref in args.issue:
@@ -7153,9 +7309,24 @@ def cmd_edit(args) -> int:
             item = board_item_for(args.owner, args.project, repo, number)
             if not item:
                 sys.exit(f"issue {repo}#{number} is not on project {args.project}")
-        plans.append((repo, number, title, item))
+        plans.append((repo, number, title, item, plan_reparent(args, repo, number)))
 
-    for repo, number, title, item in plans:
+    if args.dry_run:
+        for _repo, number, title, _item, move in plans:
+            changes = ([f"title = {title}"] if title else []) + [
+                f"{flag} {'(new body)' if flag == '--body' else value or ''}".rstrip()
+                for flag, value in passthrough] + [
+                f"{name} = {value}" for name, value in fields] + [
+                f"{name} = {value or 'cleared'}" for name, value in dates or []]
+            for change in changes:
+                print(f"  would set #{number} {change}")
+            if move:
+                print(f"  would move {describe_reparent(move)}")
+                for slug in sorted(move["slugs"]):
+                    print(f"  would reconcile {INITIATIVE_LABEL}{slug}")
+        return 0
+
+    for repo, number, title, item, move in plans:
         command = ["issue", "edit", str(number), "--repo", repo]
         if title:
             command += ["--title", title]
@@ -7175,6 +7346,8 @@ def cmd_edit(args) -> int:
             print(f"  #{number} {name} = {shown}")
         if dates is not None:
             write_dates(args, repo, number, item, list(dates))
+        if move:
+            write_reparent(args, move)
     return 0
 
 
@@ -10421,6 +10594,14 @@ No --status, and --field Status is refused: Status changes through
     editor.add_argument("--for", dest="span", metavar="SPAN",
                         help="size the span from the start instead of naming its "
                              "end: 6w, 10d, 3sprints. Calendar days, inclusive")
+    editor.add_argument("--epic", metavar="EPIC",
+                        help=f"move a story or bug under this epic: {ISSUE_REF_HELP}; "
+                             f"{CLEAR_DATE} to leave it standing alone")
+    editor.add_argument("--initiative", metavar="INITIATIVE",
+                        help=f"move an epic under this initiative: {ISSUE_REF_HELP}, or "
+                             f"its slug; {CLEAR_DATE} to take it out")
+    editor.add_argument("--dry-run", action="store_true",
+                        help="say what would change, and change nothing")
     editor.add_argument("-R", "--repo", help=TARGET_REPO_HELP)
     editor.set_defaults(func=cmd_edit, needs_repo=True)
     closer = issue_sub.add_parser(
