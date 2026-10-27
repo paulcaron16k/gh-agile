@@ -166,29 +166,42 @@ class TestTheDiff:
 
 
 class TestWhatTouchesUs:
-    USED = {"ProjectV2Iteration", "updateProjectV2Field"}
+    USED = {"ProjectV2Iteration", "ProjectV2Iteration.title", "Mutation.updateProjectV2Field",
+            "Mutation.updateProjectV2Field(input)", "Gist"}
     ROOTS = {"Query", "Mutation"}
 
-    @pytest.mark.parametrize("path,ours", [
-        ("ProjectV2Iteration.id", True),
-        ("Mutation.updateProjectV2Field", True),
-        ("Mutation.updateProjectV2Field(dryRun)", True),
-        ("Mutation.addStar", False),
-        ("Mutation", False),
-        ("Gist.stars", False),
+    @pytest.mark.parametrize("change,path,ours", [
+        ("added", "ProjectV2Iteration.id", True),          # on a type we use: adoptable
+        ("removed", "ProjectV2Iteration.id", False),       # never sent, so not ours
+        ("removed", "ProjectV2Iteration.title", True),
+        ("added", "Mutation.updateProjectV2Field", True),
+        ("added", "Mutation.updateProjectV2Field(dryRun)", True),
+        ("removed", "Mutation.updateProjectV2Field(dryRun)", False),
+        ("removed", "Mutation.updateProjectV2Field(input)", True),
+        ("removed", "Mutation.updateProjectV2Field.input", True),   # GitHub's spelling
+        ("added", "Mutation.addStar", False),              # a root field we do not call
+        ("changed", "Mutation", False),
+        ("removed", "Repository.project", False),
     ])
-    def test_by_name(self, drift, path, ours):
-        assert drift.touches_us({"path": path}, self.USED, self.ROOTS) is ours
+    def test_by_use(self, drift, change, path, ours):
+        assert drift.touches_us({"change": change, "path": path}, self.USED, self.ROOTS) is ours
 
-    def test_the_extensions_own_names_are_read(self, drift):
-        used = drift.names_used((ROOT / "gh-agile").read_text())
-        assert {"updateProjectV2Field", "addSubIssue", "ProjectV2Iteration"} <= used
+    def test_the_extensions_own_graphql_is_read(self, drift):
+        spec = json.loads((ROOT / "GitHub_API_spec.json").read_text())
+        used = drift.names_used((ROOT / "gh-agile").read_text(), spec)
+        assert {"Mutation.updateProjectV2Field", "Mutation.addSubIssue", "Query.user",
+                "Query.organization", "ProjectV2Iteration", "ProjectV2Iteration.id",
+                "ProjectV2IterationFieldConfigurationInput.iterations",
+                "ProjectV2Item.project", "AssignedEvent.assignee"} <= used
+        # The words are all over the comments; the GraphQL never selects them.
+        assert not {"Repository.project", "User.project", "Project", "Issue.timeline",
+                    "AssignedEvent.user"} & used
 
     def test_the_entry_puts_ours_first(self, drift):
         changes = [{"change": "added", "path": "Gist.forks", "what": "field", "detail": ""},
                    {"change": "added", "path": "ProjectV2Iteration.id", "what": "input field",
                     "detail": "String"}]
-        entry = drift.render(changes, "2026-10-27T17:00:00Z", self.USED, self.ROOTS)
+        entry = drift.render(changes, "2026-10-27T17:00:00Z", self.USED - {"Gist"}, self.ROOTS)
         assert entry.startswith("## 2026-10-27T17:00:00Z")
         assert "2 change(s): 2 added, 0 removed, 0 changed. 1 touch what gh-agile uses." in entry
         ours = entry.index("### Touches what gh-agile uses")
@@ -222,7 +235,7 @@ UPCOMING = {
 
 
 class TestGitHubsPublishedRecord:
-    USED = {"ProjectV2Iteration", "updateProjectV2Field", "title"}
+    USED = {"ProjectV2Iteration", "ProjectV2Iteration.title", "Mutation.updateProjectV2Field"}
     ROOTS = {"Query", "Mutation"}
 
     def test_html_becomes_markdown(self, drift):
@@ -384,7 +397,112 @@ def test_no_drift_still_warns_of_a_removal_that_is_due(drift, tmp_path, base, mo
     monkeypatch.setattr(drift, "now_utc", lambda: "2026-10-27T17:00:00Z")
     monkeypatch.setattr(drift, "fetch", lambda: copy.deepcopy(base))
     monkeypatch.setattr(drift, "fetch_published", lambda: (PUBLISHED_LOG, UPCOMING, None))
+    monkeypatch.setattr(drift, "names_used", lambda source, spec: {
+        "ProjectV2Iteration", "ProjectV2Iteration.title", "Mutation.updateProjectV2Field"})
     assert drift.cmd_check(spec, tmp_path / "log.md") == 0
     out = capsys.readouterr().out
     assert "no drift" in out and "`ProjectV2Iteration.title`" in out
     assert "updateProjectV2Field" not in out    # announced, but not due within 90 days
+
+
+#: A schema small enough to read, shaped like the parts gh-agile touches.
+def kind(name, kind_="OBJECT", fields=(), inputs=None):
+    return {"name": name, "kind": kind_, "fields": [
+        {"name": f, "type": t, "args": [{"name": a, "type": at} for a, at in args]}
+        for f, t, args in fields] if kind_ != "INPUT_OBJECT" else None,
+        "inputFields": [{"name": f, "type": t} for f, t in inputs] if inputs else None}
+
+
+SMALL = {"queryType": "Query", "mutationType": "Mutation", "subscriptionType": None, "types": [
+    kind("Query", fields=[("user", "User", [("login", "String!")]),
+                          ("organization", "Organization", [("login", "String!")]),
+                          ("repository", "Repository", [("owner", "String!"),
+                                                        ("name", "String!")])]),
+    kind("Mutation", fields=[("updateField", "Payload", [("input", "UpdateInput!")]),
+                             ("addStar", "Payload", [("input", "StarInput!")])]),
+    kind("User", fields=[("projectV2", "ProjectV2", [("number", "Int!")]),
+                         ("project", "Project", [("number", "Int!")])]),
+    kind("Organization", fields=[("projectV2", "ProjectV2", [("number", "Int!")])]),
+    kind("Repository", fields=[("project", "Project", []), ("issue", "Issue", [])]),
+    kind("ProjectV2", fields=[("items", "ItemConnection!", [("first", "Int")]),
+                              ("title", "String!", [])]),
+    kind("ItemConnection", fields=[("nodes", "[Item]", [])]),
+    kind("Item", fields=[("id", "ID!", []), ("project", "ProjectV2!", []),
+                         ("content", "Content", [])]),
+    kind("Content", "UNION"),
+    kind("Issue", fields=[("number", "Int!", []), ("title", "String!", [])]),
+    kind("Project", fields=[("name", "String!", [])]),
+    kind("Payload", fields=[("ok", "Boolean", [])]),
+    kind("UpdateInput", "INPUT_OBJECT", inputs=[("fieldId", "ID!"), ("config", "ConfigInput")]),
+    kind("ConfigInput", "INPUT_OBJECT", inputs=[("duration", "Int"),
+                                                ("iterations", "[EntryInput!]")]),
+    kind("EntryInput", "INPUT_OBJECT", inputs=[("id", "String"), ("title", "String!")]),
+    kind("StarInput", "INPUT_OBJECT", inputs=[("starrableId", "ID!")]),
+]}
+
+SOURCE = '''
+"""A docstring that talks about Repository.project and addStar."""
+# A comment: the user's project and addStar.
+
+ITEMS_QUERY_SHELL = """
+query($login: String!, $number: Int!) {
+  %(root)s(login: $login) { projectV2(number: $number) {
+    title
+    items(first: 100) { nodes { %(nodes)s } } } }
+}"""
+
+ITEM_SELECTION = """
+id
+proj: project { title }
+content { ... on Issue { number title } }
+"""
+
+
+def read(root):
+    for root in ("user", "organization"):
+        graphql(ITEMS_QUERY_SHELL % {"root": root, "nodes": ITEM_SELECTION})
+
+
+def write(entries):
+    graphql(
+        "mutation($f: ID!) { updateField(input: {fieldId: $f, config: {duration: 14, "
+        "iterations: [%s]}}) { ok } }" % ", ".join(entries))
+'''
+
+
+class TestTheReader:
+    @pytest.fixture
+    def used(self, drift):
+        return drift.names_used(SOURCE, SMALL)
+
+    def test_only_graphql_is_read(self, drift):
+        texts, _words = drift.graphql_texts(SOURCE)
+        assert texts and not any("docstring" in t or "comment" in t for t in texts)
+
+    def test_an_interpolated_root_is_each_one_word_constant_that_fits(self, used):
+        assert {"Query.user", "Query.organization", "Query.user(login)"} <= used
+        assert "Query.repository" not in used
+
+    def test_a_name_is_looked_up_on_the_type_it_is_selected_on(self, used):
+        """`project` is selected on an item: not `User.project`, nor
+        `Repository.project`, nor the classic `Project` type."""
+        assert {"User.projectV2", "ProjectV2.items", "Item.project", "Item.id"} <= used
+        assert not {"User.project", "Repository.project", "Project"} & used
+
+    def test_an_alias_is_the_field_it_names(self, used):
+        assert "Item.project" in used and "Item.proj" not in used
+
+    def test_a_bare_selection_is_read_where_it_is_inserted(self, used):
+        assert {"Item.content", "Content", "Issue", "Issue.number"} <= used
+
+    def test_an_input_object_is_walked_through_its_fields(self, used):
+        assert {"Mutation.updateField", "Mutation.updateField(input)", "UpdateInput",
+                "UpdateInput.fieldId", "UpdateInput.config", "ConfigInput.duration",
+                "ConfigInput.iterations", "EntryInput"} <= used
+
+    def test_entries_built_elsewhere_count_every_input_field(self, used):
+        """`iterations: [%s]`: `iteration_entry` builds each one whole."""
+        assert {"EntryInput.id", "EntryInput.title"} <= used
+
+    def test_a_root_field_never_called_is_not_used(self, used):
+        assert "Mutation.addStar" not in used and "StarInput" not in used

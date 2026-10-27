@@ -30,6 +30,7 @@ tested offline from fixture schemas.
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import html
 import json
@@ -243,24 +244,325 @@ def diff(old: dict, new: dict) -> list[dict]:
     return changes
 
 
-def names_used(source: str) -> set[str]:
-    """Every identifier in the extension's source: its queries, mutations,
-    selections and the comments that explain them."""
-    return set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", source))
+#: A module-level constant holding GraphQL is named for it.
+GRAPHQL_CONSTANT = re.compile(r"_(QUERY|SELECTION|SHELL|MUTATION|FRAGMENT)(_|$)")
+#: The calls that send GraphQL, and which positional argument carries it.
+GRAPHQL_CALLS = {"graphql": 0, "project_node": 2, "paged_project_items": 2}
+PLACEHOLDER = "%s"
+TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|%\(\w+\)s|%s|\$\w+|\.\.\.|[A-Za-z_]\w*'
+                   r'|-?\d+(?:\.\d+)?|[{}()\[\]:!=,@]')
+
+
+def _text_of(node: ast.AST) -> str | None:
+    """A string literal, with every f-string hole written as `%s`."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) else PLACEHOLDER
+                       for v in node.values)
+    return None
+
+
+def _texts(node: ast.AST) -> list[str]:
+    out, inside = [], set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.JoinedStr):
+            inside.update(id(v) for v in n.values)
+    for n in ast.walk(node):
+        if id(n) not in inside and (text := _text_of(n)) is not None:
+            out.append(text)
+    return out
+
+
+def graphql_texts(source: str) -> tuple[list[str], set[str]]:
+    """The GraphQL the extension sends, and its one-word string constants.
+
+    **Read from the code, not the prose (#299).** Every identifier in the file
+    counted before, comments and docstrings included, so the classic `Project`
+    API and `Issue.timeline` read as used because the words "project" and
+    "timeline" are all over the explanations. Now: the strings assigned to a
+    constant named `*_QUERY`, `*_SELECTION`, `*_SHELL`, `*_MUTATION` or
+    `*_FRAGMENT`, and the query or selection argument of every `graphql`,
+    `project_node` and `paged_project_items` call. Docstrings and comments are
+    neither.
+
+    The one-word constants are returned apart: a root is sometimes interpolated
+    -- `for root in ("user", "organization")` -- and never appears in a query.
+    """
+    tree = ast.parse(source)
+    texts, words = [], set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and GRAPHQL_CONSTANT.search(t.id) for t in node.targets):
+            texts += _texts(node.value)
+        elif isinstance(node, ast.Call):
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            index = GRAPHQL_CALLS.get(name)
+            if index is not None and len(node.args) > index:
+                texts += _texts(node.args[index])
+        elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+              and re.fullmatch(r"[a-z][A-Za-z0-9]*", node.value)):
+            words.add(node.value)
+    return texts, words
+
+
+def _base(type_string: str | None) -> str | None:
+    return re.sub(r"[\[\]!]", "", type_string) if type_string else None
+
+
+class _Reader:
+    """Walk GraphQL text against the schema, recording what it uses.
+
+    Records `Type` for every type a selection or input reaches, `Type.field` for
+    every field selected or input field given, and `Type.field(arg)` for every
+    argument passed. A name is only ever looked up on the type it is selected
+    on, which is the whole difference from matching words: `project` selected
+    on a `ProjectV2Item` says nothing about `Repository.project`.
+
+    The extension builds queries from pieces, so two kinds of hole are
+    resolved rather than skipped. A hole where a field name goes -- `%s(login:
+    $login)` -- is each one-word string constant that names a field of that
+    type taking those arguments (`user`, `organization`). A hole where a
+    selection goes -- `nodes { %(nodes)s }` -- records its type as somewhere a
+    bare selection constant can be read.
+    """
+
+    def __init__(self, spec: dict, words: set[str]):
+        self.types = {t["name"]: t for t in spec["types"]}
+        self.words = words
+        self.used: set[str] = set()
+        self.holes: set[str] = set()
+
+    def _members(self, type_name: str) -> dict[str, dict]:
+        kind = self.types.get(type_name) or {}
+        return {m["name"]: m for m in (kind.get("fields") or []) + (kind.get("inputFields") or [])}
+
+    def _use_type(self, type_name: str | None) -> None:
+        if type_name in self.types:
+            self.used.add(type_name)
+
+    def read(self, text: str, context: set[str] | None = None) -> None:
+        self.tokens = TOKEN.findall(text)
+        self.i = 0
+        while self.i < len(self.tokens):
+            token = self.tokens[self.i]
+            if token in ("query", "mutation", "subscription"):
+                root = self.root_for(token)
+                self.i += 1
+                while self.i < len(self.tokens) and self.tokens[self.i] != "{":
+                    self._skip_balanced("(", ")") if self.tokens[self.i] == "(" else self._next()
+                self._use_type(root)
+                self.selection({root} if root else set())
+            elif token == "fragment":
+                self.i += 3                              # fragment Name on
+                on = self._next()
+                self._use_type(on)
+                self.selection({on})
+            elif token == "{":
+                self.selection(context or set())
+            elif context:
+                self.selection(context, bare=True)
+            else:
+                self.i += 1
+
+    def root_for(self, operation: str) -> str | None:
+        return {"query": "Query", "mutation": "Mutation",
+                "subscription": "Subscription"}[operation]
+
+    def _next(self) -> str:
+        token = self.tokens[self.i] if self.i < len(self.tokens) else ""
+        self.i += 1
+        return token
+
+    def _peek(self) -> str:
+        return self.tokens[self.i] if self.i < len(self.tokens) else ""
+
+    def _skip_balanced(self, open_: str, close: str) -> None:
+        depth = 0
+        while self.i < len(self.tokens):
+            token = self._next()
+            depth += (token == open_) - (token == close)
+            if depth == 0:
+                return
+
+    def selection(self, owners: set[str], *, bare: bool = False) -> None:
+        if not bare:
+            self._next()                                 # {
+        while self.i < len(self.tokens):
+            token = self._next()
+            if token == "}":
+                return
+            if token == "...":
+                if self._peek() == "on":
+                    self._next()
+                    on = self._next()
+                    self._use_type(on)
+                    if self._peek() == "{":
+                        self.selection({on})
+                continue
+            if token.startswith("%"):
+                self.holes.update(owners)
+                if self._peek() == "(":
+                    self.field_hole(owners)
+                continue
+            if not re.fullmatch(r"[A-Za-z_]\w*", token):
+                continue
+            if self._peek() == ":":                      # alias: name
+                self._next()
+                token = self._next()
+            self.field(owners, token)
+
+    def field(self, owners: set[str], name: str) -> None:
+        found = []
+        for owner in owners:
+            member = self._members(owner).get(name)
+            if member is not None:
+                self.used.add(f"{owner}.{name}")
+                found.append((owner, member))
+        if self._peek() == "(":
+            self.arguments(found)
+        targets = {_base(m.get("type")) for _o, m in found} - {None}
+        for target in targets:
+            self._use_type(target)
+        if self._peek() == "{":
+            self.selection(targets)
+
+    def field_hole(self, owners: set[str]) -> None:
+        """`%s(login: $login) { ... }`: each one-word constant naming a field
+        of the owner that takes these arguments."""
+        start = self.i
+        self._skip_balanced("(", ")")
+        given = {t for j, t in enumerate(self.tokens[start:self.i])
+                 if j + 1 < self.i - start and self.tokens[start + j + 1] == ":"}
+        found = []
+        for owner in owners:
+            for name, member in self._members(owner).items():
+                accepts = {a["name"] for a in member.get("args") or []}
+                if name in self.words and given <= accepts:
+                    self.used.add(f"{owner}.{name}")
+                    self.used.update(f"{owner}.{name}({a})" for a in given)
+                    found.append(member)
+        targets = {_base(m.get("type")) for m in found} - {None}
+        for target in targets:
+            self._use_type(target)
+        if self._peek() == "{":
+            self.selection(targets)
+
+    def arguments(self, found: list[tuple[str, dict]]) -> None:
+        self._next()                                     # (
+        while self.i < len(self.tokens):
+            token = self._next()
+            if token == ")":
+                return
+            if self._peek() == ":":
+                self._next()
+                types = set()
+                for owner, member in found:
+                    arg = next((a for a in member.get("args") or [] if a["name"] == token), None)
+                    if arg is not None:
+                        self.used.add(f"{owner}.{member['name']}({token})")
+                        types.add(_base(arg["type"]))
+                self.value(types - {None})
+
+    def value(self, input_types: set[str]) -> None:
+        token = self._peek()
+        if token == "{":
+            self._next()
+            for input_type in input_types:
+                self._use_type(input_type)
+            while self.i < len(self.tokens):
+                key = self._next()
+                if key == "}":
+                    return
+                if self._peek() == ":":
+                    self._next()
+                    inner = set()
+                    for input_type in input_types:
+                        member = self._members(input_type).get(key)
+                        if member is not None:
+                            self.used.add(f"{input_type}.{key}")
+                            inner.add(_base(member["type"]))
+                    self.value(inner - {None})
+        elif token == "[":
+            self._next()
+            while self.i < len(self.tokens) and self._peek() != "]":
+                if self._peek() == ",":
+                    self._next()
+                    continue
+                if self._peek().startswith("%"):
+                    # `iterations: [%s]`: each entry is built elsewhere --
+                    # `iteration_entry` -- as a whole input object, so every
+                    # input field of the type is the extension's to send.
+                    self._next()
+                    for input_type in input_types:
+                        self._use_type(input_type)
+                        self.used.update(f"{input_type}.{name}"
+                                         for name in self._members(input_type))
+                    continue
+                self.value(input_types)
+            self._next()                                 # ]
+        else:
+            self._next()
+
+
+def names_used(source: str, spec: dict) -> set[str]:
+    """What the extension's GraphQL uses: `Type`, `Type.field` and
+    `Type.field(arg)`, read in context by `_Reader`.
+
+    Operations and fragments are read first, which also finds every place a
+    selection is inserted; then each bare selection constant is read on every
+    type it could be inserted into whose fields it actually selects.
+    """
+    texts, words = graphql_texts(source)
+    reader = _Reader(spec, words)
+    bare = []
+    for text in texts:
+        head = TOKEN.findall(text)[:1]
+        if head and head[0] in ("query", "mutation", "subscription", "fragment"):
+            reader.read(text)
+        elif head and re.fullmatch(r"[A-Za-z_]\w*|\.\.\.", head[0]):
+            bare.append(text)
+    for text in bare:
+        first = next((t for t in TOKEN.findall(text) if re.fullmatch(r"[A-Za-z_]\w*", t)), None)
+        owners = {hole for hole in reader.holes if first in reader._members(hole)
+                  or first == "on"} if first else set()
+        if TOKEN.findall(text)[0] == "...":
+            owners = set(reader.holes)
+        if owners:
+            reader.read(text, owners)
+    return reader.used
+
+
+def _parts(path: str) -> tuple[str, str, str]:
+    """`Type.field(arg)` -- or GitHub's `Type.field.arg` -- as its three parts."""
+    if "(" in path:
+        head, _, arg = path.partition("(")
+        arg = arg.rstrip(")")
+    else:
+        head, arg = path, ""
+    type_name, _, rest = head.partition(".")
+    member, _, dotted = rest.partition(".")
+    return type_name, member, arg or dotted
 
 
 def touches_us(change: dict, used: set[str], roots: set[str]) -> bool:
-    """Whether a change is to something gh-agile names.
+    """Whether a change is to something gh-agile's GraphQL uses.
 
-    A type counts when its name appears in the source -- `ProjectV2Iteration`,
-    `AddSubIssueInput`. On the root types every field is an entry point, so a
-    `Query` or `Mutation` field counts by its own name -- `updateProjectV2Field`
-    -- rather than because the source says `mutation`.
+    `used` is `names_used`: `Type`, `Type.field` and `Type.field(arg)`. A member
+    removed or changed touches us only if we select or send that member on
+    that type, and an argument only if we pass it. An addition touches us when
+    its type is one we use -- a new field there is something we could adopt --
+    except on a root, where every field is a separate entry point and only the
+    ones we call count.
     """
-    head = change["path"].split("(")[0]
-    type_name, _, member = head.partition(".")
-    if type_name in roots:
-        return bool(member) and member in used
+    type_name, member, arg = _parts(change["path"])
+    if not member:
+        return type_name in used and type_name not in roots
+    if type_name in roots or change.get("change") != "added":
+        field_used = f"{type_name}.{member}" in used
+        if arg and change.get("change") != "added":
+            return field_used and f"{type_name}.{member}({arg})" in used
+        return field_used
     return type_name in used
 
 
@@ -317,14 +619,10 @@ def upcoming_for_us(upcoming: dict | None, used: set[str], roots: set[str],
     if not upcoming:
         return []
     soon = (today + dt.timedelta(days=DUE_SOON_DAYS)).isoformat()
-    # A removal touches us only if we use what is removed: the type *and* each
-    # member named after it. `touches_us` asks only for the type, which is right
-    # for an addition -- a new field on a type we use is something we can adopt
-    # -- and wrong here: `Organization.auditLog` going is nothing to us.
+    # A removal: it touches us only if we use exactly what is removed.
     items = [{**item, "due": item["date"] <= soon}
              for group in upcoming.values() for item in group
-             if touches_us({"path": item["location"]}, used, roots)
-             and all(name in used for name in item["location"].split(".")[1:])]
+             if touches_us({"change": "removed", "path": item["location"]}, used, roots)]
     return sorted(items, key=lambda item: (not item["due"], item["date"], item["location"]))
 
 
@@ -394,8 +692,10 @@ CHANGELOG_HEADER = """# GitHub API changelog
 Changes to GitHub's GraphQL schema, found by `make api-drift`, which compares the
 live schema against `GitHub_API_spec.json`. Each entry is when the drift was
 seen, not when GitHub made the change. *Touches what gh-agile uses* lists the
-changes to a type, or a root query or mutation, that the extension names; a
-change marked *not in GitHub's changelog* was not announced. *GitHub's changelog
+changes to what the extension's own GraphQL selects or sends -- a removed or
+changed field only if it is used on that type, an addition to a type it uses --
+read from the queries, not the comments; a change marked *not in GitHub's
+changelog* was not announced. *GitHub's changelog
 since* quotes GitHub's own dated record (`github/docs`, `changelog.json`), and
 *Announced removals touching gh-agile* lists what GitHub has said it will remove
 from what the extension uses (`upcoming-changes.json`), overdue and due within
@@ -431,7 +731,7 @@ def cmd_check(spec_path: Path = SPEC, changelog: Path = CHANGELOG, *,
     old = json.loads(spec_path.read_text())
     new = fetch()
     changes = diff(old, new)
-    used = names_used(TOOL.read_text())
+    used = names_used(TOOL.read_text(), new)
     roots = {r for r in (new.get("queryType"), new.get("mutationType"),
                          new.get("subscriptionType")) if r}
     changelog_json, upcoming, error = fetch_published()
