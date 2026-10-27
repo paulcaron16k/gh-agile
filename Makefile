@@ -39,7 +39,7 @@ PY    := $(VENV)/bin/python
 #     make venv PYTHON=python3.10
 PYTHON ?= python3.12
 
-.PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help merge-check ci-status hooks
+.PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help merge-check ci-status hooks api-spec api-drift
 
 # Every Python target runs through $(PY) and checks the venv exists first.
 # Nothing here may fall back to the system interpreter: a suite that silently
@@ -125,6 +125,8 @@ help:
 	@echo "make merge-check         run the suite against HEAD + origin/main -- BEFORE merging"
 	@echo "make ci-status           whether main's last CI run passed"
 	@echo "make hooks               post-merge hook: a red main, and issues a merge left unfinished"
+	@echo "make api-drift           compare GitHub's live GraphQL schema with GitHub_API_spec.json"
+	@echo "make api-spec            fetch the schema and write GitHub_API_spec.json, the baseline"
 	@echo
 	@echo "OWNER=$(OWNER)  REPO=$(REPO)"
 	@echo
@@ -221,6 +223,19 @@ teardown:
 check-guide:
 	$(require_venv)
 	$(PY) scripts/check_guide.py
+
+# GitHub's GraphQL schema, against the snapshot committed here (#291). The
+# design rested on an API fact -- an iteration write carried no id -- and GitHub
+# changed it unnoticed (#290). Read-only and live: one `gh api graphql` call, so
+# not in CI. `api-drift` exits 1 on drift, having appended a timestamped summary
+# to GitHub_API_changelog.md and updated the snapshot: review, then commit both.
+api-spec:
+	$(require_venv)
+	$(PY) scripts/api_drift.py snapshot
+
+api-drift:
+	$(require_venv)
+	$(PY) scripts/api_drift.py check
 
 # Needs uv: the analytics script declares duckdb with PEP 723 inline metadata,
 # because `gh extension install` installs no dependencies and the extension
