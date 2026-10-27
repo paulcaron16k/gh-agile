@@ -79,6 +79,7 @@ column by hand, that is a bug in the tooling.
 | Create the project and its fields | **Machine** | `gh agile init`, idempotent -- creates missing fields and adds missing options |
 | Create an epic, story or bug with its labels, parent and fields | **Machine** | `gh agile epic create`, `story create`, `bug create` — one call, no multi-step dance |
 | Attach a story to its epic | **Machine** | Part of creation. Doing it after the fact is how orphans happen |
+| Move a story to another epic, or an epic to another initiative | **Machine** | `gh agile issue edit N --epic E` or `--initiative I`: one write for the edge, and the `initiative:` labels reconciled in the same call |
 | Start work | **Machine** | `gh agile issue move N "In Progress"` sets Status, the current sprint, the `sprint:` label and the assignee in one call. Dragging the card sets Status alone; `validate` then reports it as *In Progress but in no sprint* or *unassigned* |
 | Move an item to `Todo`, `Blocked` or `In Review` | Person | The board is the interface; dragging is fine |
 | Close the issue when its pull request merges | **Machine** | `Closes #N` in the pull request, with the repository's *Auto-close issues with merged linked pull requests* left on |
