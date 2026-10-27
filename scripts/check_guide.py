@@ -204,8 +204,8 @@ def parser_leaves(parser=None) -> set[tuple[str, ...]]:
     `positional arguments:`, which matched an option's choices the same way
     (`sync all`), then matched nothing at all once the commands took a
     `<command>` metavar and `--help` grew `gh`'s sections (#203, #204). A
-    command with no `help=` is hidden from `--help` -- `self-test`,
-    `unfinished` -- and so is not one the guide owes a reader.
+    command with no `help=` is hidden from `--help` -- `self-test` -- and so
+    is not one the guide owes a reader.
 
     Leaves, because a guide showing `board list` and never `board view` has not
     documented `board view`. Reporting the parent as covered would be the false

@@ -138,11 +138,14 @@ class TestTheExemptions:
         leaves = guard.parser_leaves()
         assert set(guard.UNDOCUMENTED_OK) <= leaves
 
-    @pytest.mark.parametrize("hidden", ["self-test", "unfinished"])
-    def test_a_hidden_command_is_owed_no_documentation(self, guard, hidden):
+    def test_a_hidden_command_is_owed_no_documentation(self, guard):
         """Hidden from `--help` (#203), so not part of what a reader is shown:
-        `self-test` is a maintainer target and `unfinished` is called by a hook."""
-        assert (hidden,) not in guard.parser_leaves()
+        `self-test` is a maintainer target."""
+        assert ("self-test",) not in guard.parser_leaves()
+
+    def test_unfinished_is_owed_documentation(self, guard):
+        """Shown in `--help` since #268, so the guide must invoke it."""
+        assert ("unfinished",) in guard.parser_leaves()
 
     def test_task_is_exempt_deliberately_not_accidentally(self, guard):
         """Filing tasks as issues is not promoted: POLICY.md §2 still

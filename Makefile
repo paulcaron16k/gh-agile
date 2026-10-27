@@ -161,7 +161,7 @@ coverage:
 # Creates everything it needs and deletes it again, including after a failure.
 self-test:
 	$(require_sandbox)
-	./gh-agile --owner $(OWNER) self-test --repo $(REPO)
+	GH_AGILE_SELF_TEST=1 ./gh-agile --owner $(OWNER) self-test --repo $(REPO)
 
 # Same setup, left standing. For when the self-test fails and you need to look
 # at the board rather than at its assertions. Prints the number to tear down.

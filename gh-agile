@@ -1170,6 +1170,16 @@ def current_repo() -> str | None:
 #: so the help cannot fall behind it in one place and not another (#201).
 ISSUE_REF_HELP = "an issue number, a KEY-NUMBER reference, or an issue URL"
 
+#: `-R` and `--key`, said once each (#268). `-R` means three things and each is
+#: one string: where a new issue is filed, where a targeted one lives, and -- on
+#: a list -- which repositories to read, which stays written beside the list.
+#: A targeted command said "only needed for a bare number outside its
+#: repository" on some verbs and "if the item's repository cannot be read back"
+#: on others, for the same fallback.
+CREATE_REPO_HELP = "the repository, owner/name, to file the issue in; defaults to the current clone"
+TARGET_REPO_HELP = "only needed for a bare number outside its repository"
+KEY_HELP = "which key to label the issue with; defaults to the first for this repo"
+
 
 def issue_url(text: str) -> tuple[str, int] | None:
     """`https://github.com/o/r/issues/34` -> (`o/r`, 34); anything else -> None.
@@ -8891,6 +8901,12 @@ def cmd_validate(args) -> int:
     return 1
 
 
+#: Set by `make self-test`. Without it `self-test` refuses: it creates a project
+#: and throwaway issues in whatever repository `-R` names, and a newcomer who
+#: met it in an error message could point it at their own (#268).
+SELF_TEST_ENV = "GH_AGILE_SELF_TEST"
+
+
 def cmd_self_test(args) -> int:
     """Stand up a scratch project, exercise every command, tear it down.
 
@@ -8902,8 +8918,13 @@ def cmd_self_test(args) -> int:
     Everything created here is deleted in a `finally`, including after a failed
     assertion -- an aborted run must not leave a scratch project behind.
     """
+    import os
     import time
 
+    if os.environ.get(SELF_TEST_ENV) != "1":
+        sys.exit("self-test creates a project and throwaway issues in the repository "
+                 "it is given.\n  It is a maintainer command: run it as `make self-test`, "
+                 "which aims it at the sandbox.")
     project: int | None = None
     issues: list[int] = []
     stamp = args.stamp or "self-test"
@@ -9021,18 +9042,30 @@ def add_title(parser: argparse.ArgumentParser, what: str) -> None:
 
 
 def add_list(group, item_type: str | None, what: str) -> None:
-    """`list`, with `gh issue list`'s flags for the same things."""
-    lister = group.add_parser("list", kind=GENERAL,
-                              help=f"List {what} on the board, by Status")
+    """`list`, with `gh issue list`'s flags for the same things.
+
+    **A task is never on the board** (`task --help`), so its list is a search of
+    the profile's repositories, and says so: it read "on the board, by Status",
+    with `-S` as board-filter terms, and printed neither (#268).
+    """
+    tasks = item_type == TASK_TYPE
+    lister = group.add_parser(
+        "list", kind=GENERAL,
+        help=("List tasks in the profile's repositories, with their story" if tasks
+              else f"List {what} on the board, by Status"))
     lister.add_argument("-s", "--state", choices=list(STATE_FILTERS), default="open",
                         help="which issues, by state")
     lister.add_argument("-L", "--limit", type=int, default=30,
-                        help="at most this many (default %(default)s)")
+                        help="at most this many")
     lister.add_argument("-S", "--search", metavar="TERMS",
-                        help="extra filter terms, ANDed on, as `board view --filter`")
+                        help=("extra GitHub search terms, ANDed on, as `gh issue list "
+                              "--search`" if tasks else
+                              "extra filter terms, ANDed on, as `board view --filter`"))
     lister.add_argument("--format", choices=["jsonl"],
                         help="one JSON object per line instead of the text table")
-    lister.add_argument("-w", "--web", action="store_true", help="open the board instead")
+    lister.add_argument("-w", "--web", action="store_true",
+                        help="open the search in the browser instead" if tasks
+                        else "open the board instead")
     add_json_flags(lister, TASK_FIELDS if item_type == TASK_TYPE else ROW_FIELDS)
     # `gh issue list`'s filters, with its letters and meanings (#220): ANDed with
     # the list's own filter, with each other, and with -S.
@@ -9057,8 +9090,7 @@ def add_view(group, item_type: str | None, what: str) -> None:
     viewer = group.add_parser("view", kind=TARGETED,
                               identifier="initiative" if item_type == "initiative" else "issue",
                               help=f"View {what}, its children and its checks")
-    viewer.add_argument("-R", "--repo", help="only needed for a bare number outside "
-                                             "its repository")
+    viewer.add_argument("-R", "--repo", help=TARGET_REPO_HELP)
     add_json_flags(viewer, VIEW_FIELDS)
     viewer.add_argument("-w", "--web", action="store_true", help="open it in the browser")
     viewer.set_defaults(func=cmd_view, item_type=item_type, needs_repo=True)
@@ -9216,8 +9248,7 @@ IDENTIFIERS = {
     "initiative": f"{ISSUE_REF_HELP}, or the initiative's slug",
     "board": "the board's number as `board list` prints it, or its name; a unique "
              "prefix or substring is enough",
-    "sprint": "@current (the default), a start date YYYY-MM-DD -- its identity -- or "
-              "a title",
+    "sprint": "@current, a start date YYYY-MM-DD -- its identity -- or a title",
 }
 
 #: Targeted commands whose identifier may be left out, and the **one** target
@@ -9229,11 +9260,13 @@ DEFAULT_TARGETS = {"sprint": "@current"}
 IDENTIFIER_DESTS = {"initiative": "issue", "board": "name"}
 
 #: The top level, grouped as `gh --help` groups its own: the work-item groups,
-#: then the board's configuration, then the commands that are not a group.
+#: then what is set up once, then the board, then the rest. `key` and `project`
+#: were under BOARD, beside nothing they belong with (#268).
 TOP_LEVEL_SECTIONS = (
     ("WORK ITEM COMMANDS", ("initiative", "epic", "story", "bug", "task", "issue")),
-    ("BOARD COMMANDS", ("board", "sprint", "project", "key")),
-    ("GENERAL COMMANDS", ("init", "sync", "validate", "export")),
+    ("SETUP COMMANDS", ("init", "project", "key")),
+    ("BOARD COMMANDS", ("board", "sprint", "sync")),
+    ("GENERAL COMMANDS", ("validate", "export", "unfinished")),
 )
 
 
@@ -9307,7 +9340,17 @@ class AgileParser(argparse.ArgumentParser):
         Usage first, as argparse prints it, so the flags this command takes are
         on screen; then the error, naming the command; then the pointer to its
         help, because a usage line shows flags without what they mean.
+
+        **An unknown command lists only the commands `--help` shows.** argparse
+        lists every choice, so `self-test` -- hidden from help -- was offered in
+        every typo's error (#268).
         """
+        if "invalid choice:" in message and "(choose from " in message:
+            action = next((a for a in self._actions
+                           if isinstance(a, argparse._SubParsersAction)), None)
+            if action is not None:
+                shown = ", ".join(repr(c.dest) for c in action._choices_actions)
+                message = message[:message.index("(choose from ")] + f"(choose from {shown})"
         self.print_usage(sys.stderr)
         self.exit(2, f"{self.prog}: {message}\n"
                      f"  Run `{self.prog} --help` for what it takes.\n")
@@ -9321,7 +9364,12 @@ class AgileParser(argparse.ArgumentParser):
         """
         positionals = [a for a in self._actions if not a.option_strings]
         own = [a for a in self._actions
-               if a.option_strings and not set(a.option_strings) & set(INHERITED)]
+               if a.option_strings and not set(a.option_strings) & set(INHERITED)
+               and not isinstance(a, RefusedFlag)]
+        # `gh` flags this tool refuses on purpose. Listed apart, with the reason,
+        # rather than among the flags a command takes: a FLAGS row beginning
+        # "Refused:" reads as a flag you can pass (#268).
+        refused = [a for a in self._actions if isinstance(a, RefusedFlag)]
         inherited = sorted((a for a in self._actions
                             if set(a.option_strings) & set(INHERITED)),
                            key=lambda a: a.option_strings[-1])
@@ -9335,6 +9383,12 @@ class AgileParser(argparse.ArgumentParser):
                ""]
         if own:
             out += ["FLAGS", *flag_rows(own), ""]
+        if refused:
+            pairs = [(flag_label(a)[0], a.why) for a in refused]
+            width = max(len(left) for left, _ in pairs) + 3
+            out += ["GH FLAGS NOT SUPPORTED",
+                    *(f"  {left:<{width}}{why[:1].upper()}{why[1:]}" for left, why in pairs),
+                    ""]
         out += ["INHERITED FLAGS", *flag_rows(inherited), ""]
         if positionals:
             out.append("ARGUMENTS")
@@ -9875,8 +9929,8 @@ default chosen for you.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(initiative_new, "initiative")
     initiative_new.add_argument("--slug", help="override the slug derived from the title")
-    initiative_new.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue in; defaults to the current clone")
-    initiative_new.add_argument("--key", help="which key to label the issue with")
+    initiative_new.add_argument("-R", "--repo", help=CREATE_REPO_HELP)
+    initiative_new.add_argument("--key", help=KEY_HELP)
     initiative_new.add_argument("--start", metavar="YYYY-MM-DD",
                                 help="planned start; the DATE field GitHub's "
                                      "roadmap draws from")
@@ -9898,8 +9952,7 @@ default chosen for you.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     initiative_fix.add_argument("--dry-run", action="store_true",
                                 help="list what would change and change nothing")
-    initiative_fix.add_argument("-R", "--repo", help="only needed for a bare number "
-                                                      "outside its repository")
+    initiative_fix.add_argument("-R", "--repo", help=TARGET_REPO_HELP)
     initiative.set_defaults(func=cmd_initiative, needs_repo=True)
 
     epic_group = sub.add_parser("epic", help="Epics: a body of work, under an initiative or none")
@@ -9908,8 +9961,8 @@ default chosen for you.""",
 
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(epic, "epic")
-    epic.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue in; defaults to the current clone")
-    epic.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
+    epic.add_argument("-R", "--repo", help=CREATE_REPO_HELP)
+    epic.add_argument("--key", help=KEY_HELP)
     epic.add_argument("--initiative",
                       help="attach to an initiative: its number (35), a keyed reference "
                            "(TEST-35), its URL, or its slug (large-new-feature)")
@@ -9934,8 +9987,8 @@ default chosen for you.""",
 
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(story, "story")
-    story.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue in; defaults to the current clone")
-    story.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
+    story.add_argument("-R", "--repo", help=CREATE_REPO_HELP)
+    story.add_argument("--key", help=KEY_HELP)
     # Still required, and `none` is how you say it deliberately. A bare omission
     # keeps refusing: an orphan story is usually an accident, and `story has no
     # epic` has caught real ones. Not `type=int`, so `none` reaches the command.
@@ -9963,8 +10016,8 @@ default chosen for you.""",
   Starting and finishing a bug is `issue move`, as for any work item.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_title(bug, "bug")
-    bug.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue in; defaults to the current clone")
-    bug.add_argument("--key", help="which key to label the issue with; defaults to the first for this repo")
+    bug.add_argument("-R", "--repo", help=CREATE_REPO_HELP)
+    bug.add_argument("--key", help=KEY_HELP)
     bug.add_argument("--epic", help=f"the epic it belongs to, if any: {ISSUE_REF_HELP}")
     bug.add_argument("--points", type=float, help="Story Points, as `issue edit --points` "
                                                   "writes them")
@@ -10000,17 +10053,18 @@ default chosen for you.""",
     add_title(task, "task")
     task.add_argument("--story", required=True,
                       help=f"the story this task belongs to: {ISSUE_REF_HELP}")
-    task.add_argument("-R", "--repo", help="the repository, owner/name, to file the issue "
-                                           "in; defaults to the current clone")
-    task.add_argument("--key", help="which key to label the issue with")
+    task.add_argument("-R", "--repo", help=CREATE_REPO_HELP)
+    task.add_argument("--key", help=KEY_HELP)
     task.add_argument("--intent", help="the ## Intent section; _TBD_ if omitted")
     task.add_argument("--acceptance", help="the ## Acceptance section; _TBD_ if omitted")
     add_create_flags(task)
     task.set_defaults(func=cmd_task, needs_repo=True, projectless=True)
     add_list(task_sub, TASK_TYPE, "tasks")
 
-    # Hidden from `--help`: a development command `make self-test` runs, and
-    # `gh` ships none in its help. No `help=` is what hides it.
+    # Hidden from `--help`, and from the choices an unknown command lists: a
+    # development command `make self-test` runs, and `gh` ships none in its help.
+    # No `help=` is what hides it; `SELF_TEST_ENV` is what stops it running for
+    # anyone who finds it anyway (#268).
     self_test = sub.add_parser(
         "self-test", kind=GENERAL, description="stand up a scratch project, exercise everything, "
                                  "tear it down")
@@ -10324,7 +10378,7 @@ why this exists:
     move.add_argument("--add-assignee", metavar="LOGIN", default=None,
                       help='who to assign; "@me" for you. Moving to In Progress claims '
                            "an unassigned issue without it")
-    move.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
+    move.add_argument("-R", "--repo", help=TARGET_REPO_HELP)
     move.set_defaults(func=cmd_move, needs_repo=True)
 
     editor = issue_sub.add_parser(
@@ -10367,8 +10421,7 @@ No --status, and --field Status is refused: Status changes through
     editor.add_argument("--for", dest="span", metavar="SPAN",
                         help="size the span from the start instead of naming its "
                              "end: 6w, 10d, 3sprints. Calendar days, inclusive")
-    editor.add_argument("-R", "--repo", help="only needed for a bare number outside "
-                                             "its repository")
+    editor.add_argument("-R", "--repo", help=TARGET_REPO_HELP)
     editor.set_defaults(func=cmd_edit, needs_repo=True)
     closer = issue_sub.add_parser(
         "close", kind=TARGETED, identifier="issue",
@@ -10376,24 +10429,22 @@ No --status, and --field Status is refused: Status changes through
 
         formatter_class=argparse.RawDescriptionHelpFormatter)
     closer.add_argument("-r", "--reason", choices=list(CLOSE_REASONS), default="completed",
-                        help="completed (the default) needs Evidence, as Done does; "
+                        help="completed needs Evidence, as Done does; "
                              "not planned needs none")
     closer.add_argument("-c", "--comment", help="leave a closing comment")
     closer.add_argument("--evidence", help="section text, or - for stdin")
     closer.add_argument("--evidence-file", help="file of ## Heading sections, or - for stdin")
-    closer.add_argument("-R", "--repo", help="only needed if the item's repository "
-                                             "cannot be read back")
+    closer.add_argument("-R", "--repo", help=TARGET_REPO_HELP)
     closer.set_defaults(func=cmd_close, needs_repo=True)
 
     reopener = issue_sub.add_parser(
         "reopen", kind=TARGETED, identifier="issue",
         help="Reopen an issue, as gh issue reopen does, and move Status back")
     reopener.add_argument("--status", default="Todo",
-                          help="where it goes back to (default %(default)s); In Progress "
+                          help="where it goes back to; In Progress "
                                "claims it and its sprint")
     reopener.add_argument("-c", "--comment", help="leave a comment")
-    reopener.add_argument("-R", "--repo", help="only needed if the item's repository "
-                                               "cannot be read back")
+    reopener.add_argument("-R", "--repo", help=TARGET_REPO_HELP)
     reopener.set_defaults(func=cmd_reopen, needs_repo=True)
 
     fix = issue_sub.add_parser(
@@ -10405,7 +10456,7 @@ No --status, and --field Status is refused: Status changes through
                           "decision")
     fix.add_argument("--dry-run", action="store_true",
                      help="say what would change and change nothing")
-    fix.add_argument("-R", "--repo", help="only needed if the item's repository cannot be read back")
+    fix.add_argument("-R", "--repo", help=TARGET_REPO_HELP)
     fix.set_defaults(func=cmd_fix, needs_repo=True)
 
     # Hidden: a machine calls it -- the post-merge hook -- and it keeps its name
@@ -10413,9 +10464,11 @@ No --status, and --field Status is refused: Status changes through
     # every clone's hook silently, which is worse than a usage error.
     unfinished = sub.add_parser(
         "unfinished", kind=GENERAL,
-        description="issues a merged range closed and nobody finished; for a git hook")
+        help="Name the issues a merge closed and nobody finished",
+        description="Name the issues a merge closed and nobody finished; the post-merge "
+                    "hook runs it")
     unfinished.add_argument("--range", default="ORIG_HEAD..HEAD",
-                            help="the revision range just merged (default: %(default)s)")
+                            help="the revision range just merged")
     unfinished.add_argument("--quiet", action="store_true",
                             help="print nothing when there is nothing to finish")
     unfinished.set_defaults(func=cmd_unfinished)
@@ -10425,26 +10478,20 @@ No --status, and --field Status is refused: Status changes through
                             help="Export items, field values and status history")
     # `--format`, as `gh project` spells machine output. It was `--csv`.
     export.add_argument("--format", choices=["json", "csv"], default="json",
-                        help="json (the default) or csv")
+                        help="the output format")
     # A comma list, as `gh` writes `--json a,b`. `both` was ambiguous among four.
     export.add_argument("--grain", default="issues", type=grain_list,
                         metavar=",".join(EXPORT_GRAINS),
-                        help="comma-separated, or all. "
-                             "issues is one row per work item; events one row per timeline "
-                             "event, from the same queries, plus a pull request's opened, "
-                             "reviewed, commented and merged; prs is one row per pull "
-                             "request with its size, review round-trips and the issues it "
-                             "closes; master is the configuration -- project, boards and "
-                             "sprints -- always a full refresh (default: %(default)s)")
+                        help="comma-separated, or all: issues, one row per work item; "
+                             "events, one per timeline event; prs, one per pull request; "
+                             "master, the project, boards and sprints, always in full")
     export.add_argument("--since", help="ISO8601 lower bound on updated_at; overrides the state file")
     # `--state-file`: `--state` is open/closed/all everywhere else, as in `gh`.
-    export.add_argument(
-        "--state-file",
-        default=".gh_agile_export.json",
-        help="watermark file, keyed by owner/project. JSON rather than YAML: there is no "
-        "YAML parser in the standard library, and a partial one that reads only what this "
-        "tool writes is a trap the first time someone edits it by hand",
-    )
+    # JSON rather than YAML: there is no YAML parser in the standard library, and
+    # a partial one that reads only what this tool writes is a trap the first time
+    # someone edits it by hand. Said here, not in `--help` (#268).
+    export.add_argument("--state-file", default=".gh_agile_export.json",
+                        help="watermark file, keyed by owner/project")
     export.add_argument("--no-state", dest="state_file", action="store_const", const=None,
                         help="do not read or write a watermark; always a full export")
     # Named for what the loop below writes (#256). It said `agile_issues_*` for
@@ -10454,7 +10501,7 @@ No --status, and --field Status is refused: Status changes through
                                           "here, under a directory named for the project key, "
                                           "instead of stdout")
     export.add_argument("--overlap-seconds", type=int, default=DEFAULT_OVERLAP_SECONDS,
-                        help="how far back the next run re-reads (default %(default)s)")
+                        help="how far back the next run re-reads, in seconds")
     export.add_argument(
         "--no-history",
         action="store_true",

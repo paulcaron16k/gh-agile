@@ -85,6 +85,9 @@ class TestEachFlagOnceWithText:
         for name, parser, text in commands:
             rows = section(text, "FLAGS") if "FLAGS" in text.splitlines() else []
             rows += section(text, "INHERITED FLAGS")
+            # `gh` flags refused on purpose have their own section (#268).
+            if "GH FLAGS NOT SUPPORTED" in text.splitlines():
+                rows += section(text, "GH FLAGS NOT SUPPORTED")
             for action in parser._actions:
                 if not action.option_strings:
                     continue
