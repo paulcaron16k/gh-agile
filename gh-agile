@@ -11088,8 +11088,8 @@ RETIRED_TABLE = (
      ["sync", "--query", "label:x"], "gh agile sync --search label:x"),
 )
 
-#: Spellings retired **after** v0.4.0, for the next release's note
-#: (`docs/release-next.md`), in `RETIRED_TABLE`'s shape and tested the same way.
+#: Spellings retired **after** v0.4.0, released in v0.5.0 (`docs/release-v0.5.0.md`),
+#: in `RETIRED_TABLE`'s shape and tested the same way.
 RETIRED_NEXT = (
     ("`--format json` on a list, view or status", "`--json [fields]`, with `-q/--jq` and "
      "`-t/--template`", ["issue", "view", "12", "--format", "json"],
