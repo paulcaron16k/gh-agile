@@ -861,60 +861,6 @@ def seconds_between(start: str | None, end: str | None) -> int | None:
 #: than a month stops being a sprint.
 MAX_SPRINT_DAYS = 30
 
-#: Points kept in reserve beyond the restore itself -- the mutation, the re-read
-#: and a little room for the caller to finish and report.
-BUDGET_MARGIN = 25
-
-
-def graphql_remaining() -> int | None:
-    """Remaining GraphQL points, or None if it cannot be determined.
-
-    Read over REST, which has a separate budget, so asking costs nothing from
-    the pool being measured.
-    """
-    result = subprocess.run(
-        ["gh", "api", "rate_limit", "-q", ".resources.graphql.remaining"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        return None
-    try:
-        return int(result.stdout.strip())
-    except ValueError:
-        return None
-
-
-def require_graphql_budget(assignments: int, doing: str) -> None:
-    """Refuse a destructive iteration write the restore could not finish.
-
-    Any write to the iteration configuration clears **every** item's sprint,
-    and the repair is one API call per assigned item with no transaction around
-    it. Running out of budget halfway leaves assignments destroyed and
-    unrestorable until the limit resets -- measured, not theorised: it happened
-    during development and an assignment was lost.
-
-    Refusing before the destructive write costs nothing. Proceeding without the
-    budget to repair costs history that cannot be recovered, because the ids the
-    old values pointed at no longer exist.
-    """
-    if not assignments:
-        return
-    remaining = graphql_remaining()
-    if remaining is None:
-        return  # cannot tell; not a reason to block the user
-    needed = assignments + BUDGET_MARGIN
-    if remaining < needed:
-        sys.exit(
-            f"{doing} would clear {assignments} sprint assignment(s) and there is not "
-            f"enough GraphQL budget to put them back: {remaining} point(s) left, "
-            f"{needed} needed.\n"
-            f"  This is refused rather than half-done -- a restore that stops partway "
-            f"loses assignments permanently,\n  because the iteration ids they pointed "
-            f"at no longer exist.\n"
-            f"  Wait for the hourly reset (`gh api rate_limit`), then run it again."
-        )
-
-
 #: How far back to re-read on an incremental run, in seconds.
 #:
 #: Not caution -- arithmetic. A status change takes time to reach the timeline
@@ -3497,9 +3443,8 @@ def sprint_assignments(login: str, project: int) -> dict[str, str]:
 #:
 #: A save-and-restore has one job -- put back exactly what was there -- and it
 #: runs either side of the most destructive operation in this tool, with no
-#: transaction and a budget check in between. A pair that silently restores less
-#: than it saved cannot be reasoned about when a run dies half way, which is the
-#: failure `require_graphql_budget` exists for.
+#: transaction in between. A pair that silently restores less than it saved
+#: cannot be reasoned about when a run dies half way.
 #:
 #: And it would repair by side effect: a person running `sprint create` would
 #: find an epic's field quietly gone, with nothing having said so. Clearing a
@@ -3553,7 +3498,7 @@ def iteration_entry(iteration: dict) -> str:
 
 
 def write_iterations(login: str, project: int, field_id: str, start: str, duration: int,
-                     iterations_out: list[dict], *, doing: str) -> int:
+                     iterations_out: list[dict], *, doing: str = "") -> int:
     """Replace the Sprint field's iterations with `iterations_out`, keeping
     every assignment. The one writer of the iteration configuration.
 
@@ -3568,7 +3513,13 @@ def write_iterations(login: str, project: int, field_id: str, start: str, durati
     many assignments were re-applied: 0 when the ids held.
     """
     saved = sprint_assignments(login, project)
-    require_graphql_budget(len(saved), doing)
+    # No budget check before the write (#292). `require_graphql_budget` refused
+    # it when the GraphQL budget could not cover restoring every assignment,
+    # because a write without ids cleared the board and a restore that ran out
+    # halfway lost the rest. With the ids sent the restore is only a fallback,
+    # and measured on project 4 (133 assignments, 2026-10-27) it was not needed;
+    # if it ever is and runs short, the heal below and `sprint reconcile`
+    # rebuild the field from the labels.
     graphql(
         "mutation($f: ID!) { updateProjectV2Field(input: {fieldId: $f, "
         'iterationConfiguration: {startDate: "%s", duration: %d, iterations: [%s]}}) '
@@ -4151,11 +4102,10 @@ def cmd_sprint(args) -> int:
             f"place it."
         )
 
-    # After every refusal -- the date, the overlap, the budget -- so a dry run
-    # that passes is one the real run would not refuse (#201).
+    # After every refusal -- the date, the overlap -- so a dry run that passes
+    # is one the real run would not refuse (#201).
     if getattr(args, "dry_run", False):
         saved = sprint_assignments(args.owner, args.project)
-        require_graphql_budget(len(saved), "creating a sprint")
         print(f"  would append {title}: {start}, {duration} day(s)")
         print(f"  every existing sprint is sent with its id, so its {len(saved)} "
               f"assignment(s) are kept")
@@ -5030,9 +4980,9 @@ def adopt_issue(args, repo: str, issue: dict, item_id: str) -> None:
 #: additive and a rename is not.
 #:
 #: Ten, so that adopting a handful never asks and a repository-wide sweep always
-#: does. The tool already refuses before less consequential acts --
-#: `require_graphql_budget` before an iteration write, the Makefile's title check
-#: before a teardown -- and this was the loudest thing with no gate at all.
+#: does. The tool already refuses before less consequential acts -- the
+#: Makefile's title check before a teardown -- and this was the loudest thing
+#: with no gate at all.
 ADOPT_CONFIRM_ABOVE = 10
 
 

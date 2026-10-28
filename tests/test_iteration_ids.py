@@ -36,7 +36,6 @@ def write(monkeypatch, tool, capsys):
     def go(after_ids):
         calls = go.calls = {"queries": [], "restored": [], "healed": 0}
         monkeypatch.setattr(tool, "sprint_assignments", lambda *a: {"PVTI_1": "S1"})
-        monkeypatch.setattr(tool, "require_graphql_budget", lambda *a: None)
         monkeypatch.setattr(tool, "graphql",
                             lambda query, **v: calls["queries"].append(query) or {})
         monkeypatch.setattr(tool, "sprint_field", lambda *a: {"configuration": {

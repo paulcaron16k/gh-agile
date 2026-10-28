@@ -5,9 +5,8 @@ the board: a `key:` label on each, and a rename when a title prefix is
 configured. With `--state open --limit 200` and no confirmation it has already
 swept a whole live repository once, which is in docs/lessons.md.
 
-The tool refuses before less consequential acts -- `require_graphql_budget`
-before an iteration write, the Makefile's title check before a teardown -- so
-this was the loudest thing with no gate. Plain `sync` is deliberately still
+The tool refuses before less consequential acts -- the Makefile's title check
+before a teardown -- so this was the loudest thing with no gate. Plain `sync` is deliberately still
 ungated: adding an item to a board writes nothing to the issue.
 """
 
