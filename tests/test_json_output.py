@@ -219,14 +219,17 @@ class TestTemplate:
 
 
 class TestFormatJson:
-    def test_it_is_retired_with_a_hint(self, tool):
-        assert "--json" in tool.retired_spelling(["issue", "view", "12", "--format", "json"])
+    def test_it_is_retired(self, tool):
+        """Its hint went in #307; the spelling still fails at parsing."""
+        with pytest.raises(SystemExit):
+            tool.build_parser().parse_args(["issue", "view", "12", "--format", "json"])
 
     def test_export_keeps_it(self, tool):
-        assert tool.retired_spelling(["export", "--format", "json"]) is None
+        assert tool.build_parser().parse_args(["export", "--format", "json"]).format == "json"
 
     def test_jsonl_stays(self, tool):
-        assert tool.retired_spelling(["story", "list", "--format", "jsonl"]) is None
+        assert tool.build_parser().parse_args(
+            ["story", "list", "--format", "jsonl"]).format == "jsonl"
 
     def test_format_and_json_together_are_refused(self, tool, run):
         with pytest.raises(SystemExit):

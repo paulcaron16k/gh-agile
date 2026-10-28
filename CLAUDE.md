@@ -253,8 +253,10 @@ or kept, as a choice rather than a constraint.
   fails on anything undeclared. Descriptions are capitalised with no full stop. No flag means two things, none is
   accepted abbreviated, and a `list` into a pipe prints tab-separated rows with no header. A rename follows
   README's *Deprecation policy*, stated there and not here; a deprecated spelling runs exactly what it ran,
-  and a retired one goes in `RETIRED_TABLE` with a runnable example and fails at parsing — never
-  reinterpreted as something else.
+  and a retired one fails at parsing — never reinterpreted as something else — with a hint naming its
+  replacement for its retired builds. No spelling is retired today: the last hints, and the code that printed
+  them, went in #307, so the next rename brings a hint back. When a hint goes, its old command line joins
+  `REMOVED` in `tests/test_retired_spellings.py`, which proves every one still exits 2.
 - **Every duration is an integer count of seconds, and no column name carries a unit suffix.** No `_days`, no
   `_hours`, no exceptions. In days, cycle times reported `0.0` and a median of `0.0` was published as a
   measurement; the same work reads 165, 181, 17, 76, 561 seconds. `cadence_days` is the profile's hand-authored
