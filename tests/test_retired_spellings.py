@@ -239,7 +239,7 @@ class TestEveryRowOfTheTable:
 
 
 class TestTheNextReleasesRows:
-    """Spellings retired after v0.4.0, recorded for the next note (#219)."""
+    """Spellings retired after v0.4.0, released in v0.5.0 (#219, #305)."""
 
     @pytest.mark.parametrize("row", __import__("conftest")._load().RETIRED_NEXT,
                              ids=lambda row: row[0])
@@ -251,7 +251,7 @@ class TestTheNextReleasesRows:
     def test_the_next_note_carries_the_same_table(self, tool):
         import pathlib
         note = (pathlib.Path(__file__).resolve().parent.parent
-                / "docs" / "release-next.md").read_text()
+                / "docs" / "release-v0.5.0.md").read_text()
         rows = [line for line in note.splitlines()
                 if line.startswith("| ") and not line.startswith("| Was ")]
         # The *Stage* column is the README's deprecation policy (AGILE-264):
