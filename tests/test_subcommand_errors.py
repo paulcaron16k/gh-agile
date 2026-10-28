@@ -73,10 +73,7 @@ class TestTheOtherCases:
         _code, err = failure(tool, capsys, ["--bogus", "validate"])
         assert "gh agile validate: unknown flag: --bogus" in err
 
-    def test_a_retired_spelling_still_takes_precedence(self, tool, monkeypatch, capsys):
-        import sys as _sys
-        monkeypatch.setattr(tool, "require_interpreter", lambda: None)
-        monkeypatch.setattr(_sys, "argv", ["gh-agile", "export", "--csv"])
-        assert tool.main() == 2
-        err = capsys.readouterr().err
-        assert "--format csv" in err and "unknown flag" not in err
+    def test_a_retired_flag_is_an_unknown_flag_like_any_other(self, tool, capsys):
+        """Its hint went in #307; it is reported against its command."""
+        _code, err = failure(tool, capsys, ["export", "--csv"])
+        assert "gh agile export: unknown flag: --csv" in err

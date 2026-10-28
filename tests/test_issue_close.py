@@ -182,26 +182,6 @@ class TestEveryOtherDoorIsShut:
         assert board["status"] == ["Todo"]
 
 
-class TestTheRetiredSpellings:
-    @pytest.mark.parametrize("argv,suggested", [
-        (["move", "185", "--status", "Done", "--not-planned", "--close"],
-         "gh agile issue close 185 -r 'not planned'"),
-        (["move", "WIDG-34", "--status", "Done", "--close", "--evidence-file", "e.md"],
-         "gh agile issue close WIDG-34 --evidence-file e.md"),
-        (["story", "create", "-t", "S", "--epic", "none", "--status", "In Progress"],
-         "gh agile issue move <number> 'In Progress'"),
-        (["story", "S", "--epic", "none", "--status=Blocked"],
-         "gh agile story create -t S --epic none"),
-    ])
-    def test_each_names_its_replacement(self, tool, argv, suggested):
-        assert suggested in tool.retired_spelling(argv)
-
-    def test_a_todo_status_needs_no_second_command(self, tool):
-        hint = tool.retired_spelling(["story", "create", "-t", "S", "--epic", "none",
-                                      "--status", "Todo"])
-        assert "issue move" not in hint
-
-
 class TestAnIssueAlreadyClosed:
     """A merge closes the issue first; `issue close` then finishes it (#285).
 

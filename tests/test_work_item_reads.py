@@ -248,11 +248,6 @@ class TestValidateIdMoved:
         with pytest.raises(SystemExit):
             tool.build_parser().parse_args(["validate", "--id", "24"])
 
-    @pytest.mark.parametrize("argv", [["validate", "--id", "AGILE-24"],
-                                      ["validate", "--id=AGILE-24"]])
-    def test_it_names_issue_view(self, tool, argv):
-        assert "gh agile issue view AGILE-24" in tool.retired_spelling(argv)
-
     def test_issue_checks_asks_validate_for_one_issue(self, tool, monkeypatch):
         seen = {}
         monkeypatch.setattr(tool, "cmd_validate",

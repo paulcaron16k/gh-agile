@@ -71,7 +71,6 @@ def test_every_command_it_names_exists(tool):
     assert commands
     for command in commands:
         words = shlex.split(command)
-        assert tool.retired_spelling(words) is None, command
         parser, depth = tool.build_parser(), 0
         while subcommands(parser):
             assert depth < len(words), f"{command}: names a group, not a command"

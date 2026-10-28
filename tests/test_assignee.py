@@ -201,11 +201,9 @@ class TestTheFlagIsParsed:
         assert args.add_assignee == want
 
     def test_a_bare_flag_is_a_usage_error(self, tool, monkeypatch, capsys):
-        """Exit 2 before anything is parsed, naming `@me` -- the spelling #201
-        retired the bare flag in favour of (#206)."""
+        """Exit 2 before anything runs. #201 made the flag take a login, `@me`
+        written out; the hint naming that went in #307."""
         monkeypatch.setattr(tool, "cmd_move", lambda args: pytest.fail("ran"))
-        assert tool.retired_spelling(["issue", "move", "7", "In Progress",
-                                      "--add-assignee"]) is not None
         with pytest.raises(SystemExit):
             tool.build_parser().parse_args(["issue", "move", "7", "In Progress",
                                             "--add-assignee"])
