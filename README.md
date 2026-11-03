@@ -237,7 +237,10 @@ the reason is not obvious: a board filter cannot traverse the hierarchy. GitHub'
 view filters reach one level at most, and this tool evaluates a filter one item
 at a time — so seeing an initiative's whole tree on a board needs a label every
 item in it carries. The edge is the truth and rolls up; the label is what a
-filter can see. `initiative reconcile` keeps them in step, in both directions.
+filter can see. Creation and `issue edit` keep the label in step, `sync` adds any
+that is missing, `validate` reports drift either way, and `initiative reconcile`
+repairs it in both directions. Anything that can read the tree — `validate`, and
+`export`'s `initiative_slug` — reads the tree, not the label.
 
 **A task is nameable, not encouraged.** `type:task` exists so a team that files
 them as issues is not punished by `validate` — before it, every unlabelled task
