@@ -1262,6 +1262,21 @@ reports `across 1 repo(s)` is filling half a board.
 both more explicit than the clone you happen to be standing in, which is why
 neither is guessed for this command.
 
+**It also adds any `initiative:` label the sub-issue tree says is missing**, on
+the board's issues in the repositories it covers:
+
+```
+  labelled paulcaron16k/other-repo#24  +initiative:hyperscaler-readiness
+  labelled 1 issue(s) with the initiative their tree puts them in; a stale label is `initiative reconcile`'s to remove
+```
+
+That covers issues created before stories inherited the label, and parents set
+in GitHub's web UI, which nothing else would label until someone ran `initiative
+reconcile`. It is **additive only**, like the rest of `sync`: a label the tree no
+longer supports is reported by `validate` and removed by `initiative reconcile`.
+Nothing is printed when nothing is missing, and `--dry-run` says *would label*.
+Tasks are skipped, being off the board.
+
 ### `--adopt`: upgrading an issue created outside the tool
 
 Being on the board is not the same as following the convention. An issue opened
@@ -2251,8 +2266,10 @@ gh agile initiative reconcile large-new-feature
 ```
 
 **The label is derived, never authored.** It is a copy of something the hierarchy
-already records, and a copy drifts — so nothing but this writes it, re-running is
-idempotent, and a second run reports `changed 0`.
+already records, and a copy drifts — so only the tree decides it, re-running is
+idempotent, and a second run reports `changed 0`. `sync` adds labels the tree
+says are missing; only this removes one. `validate` reports drift either way, and
+so does the post-merge hook for an issue the merge closed.
 
 **Both directions, and the removal is the half that is easy to forget.** Detach an
 epic from an initiative and it keeps the label unless something takes it away —
@@ -2267,7 +2284,9 @@ board shows work that is no longer part of the initiative, and it looks correct.
 The hierarchy is the authority and the label follows it. The search that finds
 what has fallen out covers **every repository in the profile**, not just the ones
 the tree still reaches — a detached subtree may sit somewhere the tree no longer
-goes.
+goes. Neither side has a cap: the tree is paged past 100 children at a level, and
+the search past any number of labelled issues. The tree reaches initiative, epics
+and stories; a task is off the board, so its label is not maintained.
 
 #### Seeing one initiative on a board
 

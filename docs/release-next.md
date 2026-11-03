@@ -31,3 +31,15 @@ chain leaves the board before it can tell. It used to be blank wherever the labe
 had drifted. CSV writes both as empty; `github_catalog.json` states the type.
 `board view --filter initiative:` still reads the label, so it agrees with the
 saved board GitHub evaluates.
+
+**`sync` adds missing `initiative:` labels** (AGILE-309) to the board's issues in
+the repositories it covers, from the sub-issue tree. Additive only; silent when
+nothing is missing; `--dry-run` reports them. A stale label is still
+`initiative reconcile`'s to remove.
+
+**`initiative reconcile` has no caps** (AGILE-309): the tree is paged past 100
+children at a level, and the search for labelled issues past 200.
+
+**The post-merge hook names `initiative reconcile`** for an issue the merge closed
+whose label disagrees with its tree, on a report of its own, instead of folding it
+into *the board has not caught up* with `issue close` as the fix. Still read-only.

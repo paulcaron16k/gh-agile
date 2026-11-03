@@ -111,6 +111,7 @@ class TestTheSweep:
 
             monkeypatch.setattr(tool, "gh", fake_gh)
             monkeypatch.setattr(tool, "board_items", lambda *a, **k: [])
+            monkeypatch.setattr(tool, "fetch_items", lambda *a, **k: ("t", []))
             args = argparse.Namespace(
                 owner="o", project=4, repo=repo, state="open", search=None,
                 limit=200, dry_run=True, adopt=False, _config=config or PROFILE)
