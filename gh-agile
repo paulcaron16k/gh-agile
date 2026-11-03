@@ -2819,7 +2819,8 @@ why this exists:
   board shows work that is no longer part of the initiative, and it looks
   correct. The hierarchy is the authority; the label follows it.
 
-  Idempotent: a second run changes nothing."""
+  Idempotent: a second run changes nothing. `sync` adds missing labels
+  board-wide; only this removes one. `validate` reports drift either way."""
 
 
 def initiative_slug(title: str) -> str:
@@ -10756,7 +10757,14 @@ why this is needed:
   Sprint *per item*, so an issue it does not hold has nowhere to put them.
   GitHub's built-in `Auto-add to project` workflow is UI-only -- the API can
   delete a workflow but cannot create or configure one -- covers one repository
-  per workflow, and is forward-only, so it never backfills. Hence sync.""",
+  per workflow, and is forward-only, so it never backfills. Hence sync.
+
+it also adds initiative: labels:
+  Every board issue in the repositories it covers gets the initiative: label
+  its sub-issue tree says is missing -- issues created before stories
+  inherited it, or given a parent in the web UI. Additive only: a label the
+  tree no longer supports is `initiative reconcile`'s to remove, and
+  `validate` reports it. Silent when nothing is missing; --dry-run reports.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sync.add_argument("-R", "--repo", help="one repository; every repository in the "

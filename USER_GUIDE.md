@@ -1706,7 +1706,8 @@ nobody has edited by hand.
 | *Sprint field disagrees with the sprint: label(s)*, and the labels are right | `gh agile sprint reconcile --overwrite`; leave it if the item was re-planned on purpose |
 | *closed with no sprint: label* on issues that predate the stamping | `gh agile sprint backfill` |
 | An epic or initiative carries a `sprint:` label: *epic or initiative is in a sprint* | `gh agile sprint unstamp` |
-| A board filtered to an initiative is missing items, or shows ones that left | `gh agile initiative reconcile I` |
+| *in the tree of initiative:X but not labelled*, or a board filtered to an initiative is missing items | `gh agile sync` adds them board-wide; `gh agile initiative reconcile X` for one initiative |
+| *labelled initiative:X but not in its tree*, or a board filtered to an initiative shows items that left | `gh agile initiative reconcile X` — the only command that removes the label |
 
 ### Putting the field back: `sprint reconcile`
 
@@ -2251,10 +2252,13 @@ initiative slug 'large-new-feature' is already taken by paulcaron16k/gh-agile#91
 
 #### Carrying the label down the tree: `initiative reconcile`
 
-`--initiative` labels the epic it attaches. It cannot label that epic's **stories**
-— they may not exist yet, and they arrive through `story --epic`, which knows
-nothing about initiatives. So the label is carried down separately, and
-re-derived whenever the tree changes:
+The label reaches most of the tree on its own. `epic create --initiative` labels
+the epic it attaches; `story create` and `bug create` copy the epic's label; `issue
+edit --epic` or `--initiative` reconciles every initiative a move touches; and
+`sync` adds any label the tree says is missing, which covers issues created before
+stories inherited it and parents set in GitHub's web UI. `validate` reports
+whatever is still out of step, in both directions. This command is the full
+repair — and the only thing that **removes** a label:
 
 ```bash
 gh agile initiative reconcile large-new-feature --dry-run
