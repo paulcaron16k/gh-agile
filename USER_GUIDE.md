@@ -1962,12 +1962,23 @@ initiative's tally is *epics closed*, not stories — a number you can reconcile
 with the board rather than one that claims to reach the whole tree.
 
 **An epic with no initiative is not a finding**, because initiatives are optional
-and most epics will never belong to one. What *is* reported is a slug two
-initiatives both claim, and an `initiative:` label naming no initiative the board
-knows about — a detached subtree whose label was never cleaned up. Both point at
-`initiative reconcile`, which is the authoritative drift check: it compares the
-labels against the hierarchy in both directions and `--dry-run` reports without
-changing anything.
+and most epics will never belong to one. What *is* reported is the `initiative:`
+label disagreeing with the sub-issue tree, read from the board with no extra call:
+
+- *in the tree of `initiative:<slug>` but not labelled* — an issue under the
+  initiative the label never reached: created before stories inherited it, or
+  given its parent in GitHub's web UI;
+- *labelled `initiative:<slug>` but not in its tree* — a label left behind when
+  the issue moved, which puts it on a board it has left;
+- a slug two initiatives both claim, and a label naming no initiative the board
+  knows about.
+
+Each points at `initiative reconcile`. Where the parent chain leaves the board
+before reaching an initiative, the board cannot tell, so a label there is a *note*
+that it cannot be checked rather than a finding. `initiative reconcile` reads the
+tree from GitHub itself and is the authority; `--dry-run` reports without changing
+anything. Tasks are not checked: they are not on the board, and the label exists
+for board filters.
 
 One issue's findings are in its `view`, for when you already have a suspect:
 
@@ -2284,7 +2295,9 @@ costs none.
 It works **because** `initiative reconcile` puts the label on every issue in the
 tree. A filter cannot traverse the hierarchy — it judges one item at a time, and
 GitHub's own view filters reach at most one level — so the label is the only thing
-an evaluator can see. Negation works, and an unknown slug renders an empty board
+an evaluator can see. `board view` reads the label too, though it could walk the
+tree, so that it always agrees with the web UI; `validate` is what tells you the
+label has drifted. Negation works, and an unknown slug renders an empty board
 rather than failing, the same as an unmatched label.
 
 **A saved board is written as `label:initiative:<slug>`.** GitHub knows `label:`
