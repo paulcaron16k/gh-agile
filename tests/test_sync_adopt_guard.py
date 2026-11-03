@@ -44,6 +44,7 @@ def board(monkeypatch, tool):
     fake_gh.listing = []
     monkeypatch.setattr(tool, "gh", fake_gh)
     monkeypatch.setattr(tool, "board_items", lambda *a, **k: [])
+    monkeypatch.setattr(tool, "fetch_items", lambda *a, **k: ("t", []))
     monkeypatch.setattr(tool, "adopt_issue",
                         lambda args, repo, issue, item_id: adopted.append(issue["number"]))
     return argparse.Namespace(gh=fake_gh, added=added, adopted=adopted)

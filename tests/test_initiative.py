@@ -70,6 +70,11 @@ def calls(monkeypatch, tool):
             repo = args[args.index("--repo") + 1]
             label = args[args.index("--label") + 1] if "--label" in args else ""
             return json.dumps(state["listed"].get((repo, label), []))
+        if args[0] == "api" and "--paginate" in args:
+            # `issues_labelled`: the REST search, one number per line.
+            repo = next(a for a in args if a.startswith("repos/"))[len("repos/"):-len("/issues")]
+            label = next(a for a in args if a.startswith("labels="))[len("labels="):]
+            return "".join(f"{i['number']}\n" for i in state["listed"].get((repo, label), []))
         if args[:2] == ["issue", "view"]:
             return json.dumps(state["view"])
         if args[:2] == ["issue", "create"]:
@@ -385,5 +390,6 @@ class TestReconcile:
         """A detached subtree may sit in a repository the tree no longer reaches,
         so the search cannot be scoped to the tree's own repositories."""
         calls, _ = reconcile(node(1))
-        searched = [c[c.index("--repo") + 1] for c in calls if c[:2] == ["issue", "list"]]
-        assert sorted(searched) == ["o/one", "o/two"]
+        searched = [next(a for a in c if a.startswith("repos/")) for c in calls
+                    if c[0] == "api"]
+        assert sorted(searched) == ["repos/o/one/issues", "repos/o/two/issues"]

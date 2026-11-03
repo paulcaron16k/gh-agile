@@ -247,3 +247,58 @@ class TestBoardFiltersStayOnTheLabel:
         terms = tool.parse_filter("initiative:big")
         assert not tool.item_matches(unlabelled, terms, current_sprint=None)
         assert tool.item_matches(stale, terms, current_sprint=None)
+
+
+class TestThePostMergeHook:
+    """`unfinished` -- what the post-merge hook runs -- reports drift on an issue
+    a merge closed, with the command that fixes it, and fixes nothing itself.
+
+    Before this the drift came through `validate --id` under *the board has not
+    caught up -- `issue close``, which is the wrong command for a label that
+    follows the tree.
+    """
+
+    @pytest.fixture
+    def outstanding(self, monkeypatch, tool):
+        def go(*board, validate_says=0):
+            seen = []
+
+            def validate(args):
+                seen.append(args)
+                return validate_says
+            monkeypatch.setattr(tool, "cmd_validate", validate)
+            monkeypatch.setattr(tool, "gh", lambda *a, **k: pytest.fail("the hook wrote"))
+            args = argparse.Namespace(owner="o", project=1, _config={}, quiet=True)
+            return tool.outstanding(args, list(board), "o/r", 3), seen
+        return go
+
+    def closed(self, number, labels, slug):
+        return {**row(number, labels, slug), "state": "CLOSED"}
+
+    def test_drift_alone_names_reconcile_not_issue_close(self, outstanding):
+        text, _seen = outstanding(row(1, INITIATIVE, "big"),
+                                  self.closed(3, ["type:story"], "big"))
+        assert "initiative: label disagrees with its tree" in text
+        assert "gh agile initiative reconcile big" in text
+        assert "issue close" not in text
+
+    def test_validate_is_asked_without_the_drift(self, outstanding):
+        """Otherwise drift alone would come back as *not finished*."""
+        _text, seen = outstanding(row(1, INITIATIVE, "big"),
+                                  self.closed(3, ["type:story"], "big"))
+        assert seen[0]._initiative is False
+
+    def test_both_at_once_are_two_reports(self, outstanding):
+        text, _seen = outstanding(row(1, INITIATIVE, "big"),
+                                  self.closed(3, ["type:story"], "big"), validate_says=1)
+        assert "gh agile issue close 3" in text and "initiative reconcile big" in text
+
+    def test_in_step_is_nothing(self, outstanding):
+        text, _seen = outstanding(row(1, INITIATIVE, "big"),
+                                  self.closed(3, ["type:story", "initiative:big"], "big"))
+        assert text is None
+
+    def test_unchecked_is_not_a_merge_finding(self, outstanding):
+        text, _seen = outstanding(row(1, INITIATIVE, "big"),
+                                  self.closed(3, ["type:story", "initiative:big"], None))
+        assert text is None

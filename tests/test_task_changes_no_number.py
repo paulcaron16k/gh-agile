@@ -143,6 +143,7 @@ class TestSyncLeavesTasksOffTheBoard:
     def sync(self, monkeypatch, tool, capsys):
         def go(issues, *, query=None):
             monkeypatch.setattr(tool, "board_items", lambda *a, **k: [])
+            monkeypatch.setattr(tool, "fetch_items", lambda *a, **k: ("t", []))
             monkeypatch.setattr(tool, "profile_keys",
                                 lambda cfg: [{"key": "AGILE", "repo": "o/r"}])
             monkeypatch.setattr(tool, "gh", lambda a, **k: json.dumps(issues))
