@@ -1243,6 +1243,69 @@ def parent_columns(parent: dict | None, keys: dict) -> dict:
     }
 
 
+def initiative_chains(items: list[dict]) -> dict[tuple[str, int], str | None]:
+    """The initiative each issue on the board belongs to, read from the hierarchy.
+
+    `(repository, number)` -> the slug of the nearest `type:initiative` ancestor,
+    the issue itself included; `""` when the chain ends with no initiative in it;
+    `None` when it cannot be told -- the chain leaves the board before reaching
+    one, or reaches an initiative carrying no slug.
+
+    **The hierarchy is the authority and the `initiative:` label is a copy (#309).**
+    The copy drifted: on one board 29 of 36 issues in a tree were unlabelled while
+    `validate` reported nothing, because everything downstream read the label. So
+    `export` reads the hierarchy, and `validate` compares the two. Board filters
+    stay on the label: GitHub's view cannot traverse the tree, and `board view`
+    must agree with it about what a board contains.
+
+    **Costs no call.** Every item already carries its parent's repository, number
+    and labels, so the walk runs over the board just read -- and reaches one level
+    past it: a parent that is off the board but *is* an initiative still names the
+    slug. Beyond that the parent's own parent is unknown, and `None` says so rather
+    than guessing `""`, which would read as *no initiative* and is a claim.
+    """
+    labels_of: dict[tuple[str, int], list[str]] = {}
+    parent_of: dict[tuple[str, int], tuple[str, int] | None] = {}
+    for item in items:
+        content = item.get("content") or {}
+        if content.get("__typename") != "Issue" or content.get("number") is None:
+            continue
+        key = ((content.get("repository") or {}).get("nameWithOwner"), content["number"])
+        labels_of[key] = [n["name"] for n in (content.get("labels") or {}).get("nodes") or []]
+        parent = content.get("parent")
+        if not parent:
+            parent_of[key] = None
+            continue
+        up = ((parent.get("repository") or {}).get("nameWithOwner"), parent["number"])
+        parent_of[key] = up
+        # Off the board: known by its labels and nothing else. Never overwrites
+        # an on-board issue's own labels, which are read with the issue.
+        labels_of.setdefault(up, [n["name"] for n in
+                                  (parent.get("labels") or {}).get("nodes") or []])
+
+    found: dict[tuple[str, int], str | None] = {}
+
+    def resolve(key, seen):
+        if key in found:
+            return found[key]
+        labels = labels_of.get(key, [])
+        if "type:initiative" in labels:
+            return next((lb[len(INITIATIVE_LABEL):] for lb in labels
+                         if lb.startswith(INITIATIVE_LABEL)), None)
+        if key not in parent_of:
+            return None  # off the board, and its parent is not known
+        up = parent_of[key]
+        if up is None:
+            return ""
+        if up in seen:
+            return None  # a cycle GitHub should refuse; not this walk's to settle
+        return resolve(up, seen | {key})
+
+    for key in parent_of:
+        found[key] = resolve(key, frozenset())
+    return found
+
+
 def rows(login: str, number: int, *, with_history: bool, since: str | None = None,
          events: list[dict] | None = None) -> list[dict]:
     config = read_config()
@@ -1251,6 +1314,9 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
     for entry in profile_keys(config):
         keys.setdefault(entry.get("repo"), entry.get("key"))
     _title, items = fetch_items(login, number)
+    # Over every item, before `since` discards any: an ancestor nobody touched
+    # since the watermark still decides which initiative its subtree is in.
+    chains = initiative_chains(items)
     out = []
     for item in items:
         content = item.get("content") or {}
@@ -1283,14 +1349,14 @@ def rows(login: str, number: int, *, with_history: bool, since: str | None = Non
             # string, which a loader cannot turn into a DDL type -- and CSV is
             # unchanged either way, since `csv.DictWriter` writes both as empty.
             **parent_columns(content.get("parent"), keys),
-            # The initiative this issue belongs to, read from its own
-            # `initiative:` label rather than by walking up the tree -- which is
-            # what that label is for, and what `initiative reconcile` maintains.
-            # Join it to the `github_issues` row whose `type:` is initiative and
-            # whose slug matches.
-            "initiative_slug": next(
-                (lb[len(INITIATIVE_LABEL):] for lb in labels
-                 if lb.startswith(INITIATIVE_LABEL)), ""),
+            # The initiative this issue belongs to, from the hierarchy -- not
+            # from its own `initiative:` label, which is a copy and was blank
+            # wherever the copy had drifted (#309). `None` when the chain leaves
+            # the board before it can tell, which is not the same as `""`, no
+            # initiative; `validate` reads the difference. Join it to the
+            # `github_issues` row whose `type:` is initiative and whose slug
+            # matches.
+            "initiative_slug": chains.get((repo, content["number"])),
             "sub_issues_total": (content.get("subIssuesSummary") or {}).get("total") or 0,
             "sub_issues_done": (content.get("subIssuesSummary") or {}).get("completed") or 0,
             # GitHub's `author` is who opened the issue and cannot be changed
@@ -4625,6 +4691,13 @@ def matches_one(key, wanted, content, labels, status, sprint, current_sprint,
         # It works at all only because `initiative reconcile` puts the label
         # on every issue in the tree: a filter cannot traverse the hierarchy,
         # so the label is the only thing an item-at-a-time evaluator can see.
+        #
+        # **Still the label, though this evaluator could walk the tree (#309).**
+        # A saved board is `label:initiative:<slug>`, which GitHub evaluates;
+        # following the hierarchy here would make `board view` and the web UI
+        # disagree about what one board contains -- previewing `--filter
+        # initiative:x` would show one set and the saved board another. Drift is
+        # `validate`'s to report, from `initiative_chains`, not this term's to hide.
         hit = f"{INITIATIVE_LABEL}{wanted}" in labels
     elif key == "level":
         # **A shorthand for a set of `type:` labels**, following
@@ -9223,7 +9296,49 @@ def cmd_validate(args) -> int:
         for line in automation_notes(args.owner, args.project):
             notes["project automation that needs a decision"].append(line)
 
-    # Sprint overlap is a property of the iteration series, not of any issue, so
+    # **The `initiative:` label against the hierarchy, per issue (#309).** Until
+    # this, only the set was checked -- a slug two initiatives claim, a label
+    # naming none -- so an issue in a tree without its label passed: one board
+    # reported nothing with 29 of 36 issues in a tree unlabelled. The tree is
+    # read from `initiative_slug`, which `rows` derives from the hierarchy.
+    # Per issue, so it runs under `--id`; the slugs it may judge come from the
+    # whole board, so a label naming no initiative stays the set's finding below
+    # rather than being reported twice.
+    on_board_slugs = {slug for row in board
+                      if "type:initiative" in (row.get("labels") or "").split(";")
+                      for slug in initiative_slugs((row.get("labels") or "").split(";"))}
+    for row in data:
+        # A row from somewhere that did not derive it says nothing either way.
+        if "initiative_slug" not in row:
+            continue
+        labels = (row.get("labels") or "").split(";")
+        # Tasks are off the board by design and the label exists for board
+        # filters, so a task's label is out of scope (#309).
+        if "type:task" in labels:
+            continue
+        tree, wearing = row["initiative_slug"], initiative_slugs(labels)
+        ident = f"#{row['number']} {row['title'][:48]}"
+        if tree is None:
+            # Never *missing*: the chain left the board before it could tell, so
+            # a label here is unverifiable rather than wrong, and no label is not
+            # a gap anyone can see. Said only where there is a claim to check,
+            # and not for a slug the board knows no initiative by, which the
+            # set's finding below already reports.
+            for slug in sorted(wearing & on_board_slugs):
+                notes[f"{INITIATIVE_LABEL}{slug} cannot be checked from this board: the "
+                      f"parent chain leaves it -- `initiative reconcile {slug}` checks "
+                      f"against GitHub"].append(ident)
+            continue
+        if tree and tree not in wearing:
+            problems[f"in the tree of {INITIATIVE_LABEL}{tree} but not labelled -- "
+                     f"run `initiative reconcile {tree}`"].append(ident)
+        for slug in sorted(wearing - {tree}):
+            if slug in on_board_slugs:
+                # Worse than a missing label: the initiative's board shows work
+                # that has left it, and looks correct.
+                problems[f"labelled {INITIATIVE_LABEL}{slug} but not in its tree -- "
+                         f"run `initiative reconcile {slug}`"].append(ident)
+
     # Board-wide, so skipped under `--id` for the same reason as the sprint
     # overlap below: these are properties of the set rather than of any issue.
     if only is None:

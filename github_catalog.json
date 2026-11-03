@@ -181,8 +181,11 @@
             ]
           },
           "initiative_slug": {
-            "type": "string",
-            "description": "The initiative this issue belongs to, from its own initiative: label, which `initiative reconcile` maintains down the whole tree. Join to the github_issues row whose type is initiative and whose slug matches."
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The initiative this issue belongs to: the slug of its nearest type:initiative ancestor in the sub-issue hierarchy, the issue itself included. Read from the hierarchy, NOT from the issue's own initiative: label, which is a copy for board filters and can drift. Empty when the chain reaches no initiative; null when it cannot be told -- the chain leaves the board before reaching one. CSV writes both as empty; JSON keeps the difference. Join to the github_issues row whose type is initiative and whose slug matches."
           },
           "sub_issues_total": {
             "type": "integer",
