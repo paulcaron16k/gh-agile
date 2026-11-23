@@ -17,6 +17,14 @@ when the base moves -- is not available here:
 So this is the backstop: a check cheap enough to run from a git hook after every
 pull, which is the moment somebody is already looking at the terminal.
 
+**It reads the CI workflow and nothing else** (#322). It used to take the newest
+finished run of any workflow on the branch, which was the same thing while CI
+was the only one there. It stopped being so: a hand-run Publish -- the TestPyPI
+rehearsal, refused with `invalid-publisher` -- made this report `main` as RED
+while CI on `main` was green, and the scheduled API-drift job fails on drift by
+design. Neither says whether the branch builds. `--workflow` names the one
+that does, and defaults to the `name:` in `.github/workflows/ci.yml`.
+
 Read-only. It calls `gh run list` and nothing else, and it never writes.
 """
 
@@ -28,19 +36,24 @@ import shutil
 import subprocess
 import sys
 
+#: The workflow whose verdict *is* the branch's: `name:` in .github/workflows/ci.yml.
+#: tests/test_ci_status.py holds the two together.
+CI_WORKFLOW = "CI"
+
 #: Runs still in flight say nothing about the branch yet, and a cancelled one
 #: says only that somebody stopped it.
 DECIDED = ("success", "failure", "startup_failure", "timed_out", "action_required")
 
 
-def runs(branch: str, limit: int) -> list[dict]:
-    """The newest workflow runs on `branch`, newest first."""
+def runs(branch: str, limit: int, workflow: str) -> list[dict]:
+    """The newest runs of `workflow` on `branch`, newest first."""
     if not shutil.which("gh"):
         # The same failure mode `gh-agile` documents: PATH is minimal in a hook
         # and in cron, and a traceback is a poor way to learn it.
         raise SystemExit("the `gh` CLI is not on PATH; this check shells out to it")
     result = subprocess.run(
-        ["gh", "run", "list", "--branch", branch, "--limit", str(limit),
+        ["gh", "run", "list", "--branch", branch, "--workflow", workflow,
+         "--limit", str(limit),
          "--json", "conclusion,status,headSha,displayTitle,workflowName,url,createdAt"],
         capture_output=True, text=True,
     )
@@ -59,16 +72,18 @@ def main() -> int:
         prog="ci_status", description=__doc__.splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--branch", default="main")
+    parser.add_argument("--workflow", default=CI_WORKFLOW,
+                        help="the workflow whose last verdict is the branch's")
     parser.add_argument("--limit", type=int, default=10,
                         help="runs to look back through for one that has a verdict")
     parser.add_argument("--quiet", action="store_true",
                         help="print nothing when the branch is green; for a git hook")
     args = parser.parse_args()
 
-    run = newest_decided(runs(args.branch, args.limit))
+    run = newest_decided(runs(args.branch, args.limit, args.workflow))
     if run is None:
         if not args.quiet:
-            print(f"  no finished CI run on {args.branch} yet")
+            print(f"  no finished {args.workflow} run on {args.branch} yet")
         return 0
     if run["conclusion"] == "success":
         if not args.quiet:

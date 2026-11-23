@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 
 import pytest
 
@@ -65,7 +66,7 @@ class TestTheVerdict:
     @pytest.fixture
     def verdict(self, ci, monkeypatch, capsys):
         def go(*entries, argv=()):
-            monkeypatch.setattr(ci, "runs", lambda branch, limit: list(entries))
+            monkeypatch.setattr(ci, "runs", lambda branch, limit, workflow: list(entries))
             monkeypatch.setattr(ci.sys, "argv", ["ci_status", *argv])
             code = ci.main()
             return code, capsys.readouterr()
@@ -102,3 +103,40 @@ class TestTheVerdict:
         """A branch nothing has built yet is not a broken branch."""
         code, _ = verdict(run(None, status="queued"))
         assert code == 0
+
+
+class TestOnlyCICounts:
+    """#322: a failed hand-run Publish on `main` read as `main` being RED."""
+
+    def test_it_asks_gh_for_the_ci_workflow_only(self, ci, monkeypatch):
+        asked = []
+
+        class Done:
+            returncode, stdout, stderr = 0, "[]", ""
+
+        def run(command, **kwargs):
+            asked.append(command)
+            return Done()
+        monkeypatch.setattr(ci.shutil, "which", lambda name: "/usr/bin/gh")
+        monkeypatch.setattr(ci.subprocess, "run", run)
+        ci.runs("main", 10, ci.CI_WORKFLOW)
+        (command,) = asked
+        assert command[command.index("--workflow") + 1] == "CI"
+
+    def test_the_default_is_the_name_ci_yml_declares(self, ci):
+        """Rename the workflow and this fails, rather than `ci-status` quietly
+        finding no runs and calling that green."""
+        workflow = (pathlib.Path(__file__).resolve().parent.parent
+                    / ".github" / "workflows" / "ci.yml").read_text()
+        (declared,) = re.findall(r"^name:\s*(.+)$", workflow, re.MULTILINE)
+        assert declared.strip() == ci.CI_WORKFLOW
+
+    def test_the_flag_names_another(self, ci, monkeypatch):
+        seen = {}
+
+        def runs(branch, limit, workflow):
+            seen["workflow"] = workflow
+            return []
+        monkeypatch.setattr(ci, "runs", runs)
+        monkeypatch.setattr(ci.sys, "argv", ["ci_status", "--workflow", "Publish", "--quiet"])
+        assert ci.main() == 0 and seen["workflow"] == "Publish"
