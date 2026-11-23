@@ -44,5 +44,5 @@ def test_no_tracked_text_names_it(name):
 
 def test_the_docs_point_at_its_new_home():
     url = "github.com/paulcaron16k/agile-reports/blob/main/GOLD_MODEL.md"
-    for doc in ("README.md", "USER_GUIDE.md"):
+    for doc in ("REFERENCE.md", "USER_GUIDE.md"):
         assert url in (ROOT / doc).read_text(), doc

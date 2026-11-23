@@ -13,7 +13,7 @@ default branch: `gh extension install paulcaron16k/gh-agile` clones `main`,
 is nothing to pin and nothing to choose — you are on `main`, and a fix reaches
 you on your next upgrade. Tags are cut so a build can be *named* in a report,
 never installed from. The promise that makes this safe, and what a tag does and
-does not mean, are in the README under *Versions, and what installing gets you*.
+does not mean, are in [REFERENCE.md](REFERENCE.md) under *Versions, and what installing gets you*.
 
 To say what you are running — and the first thing to paste into a bug report:
 

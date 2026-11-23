@@ -384,7 +384,7 @@ query($id: ID!) {
 #: Which Gold `event_category` each timeline event belongs to. Status changes are
 #: the only true state_change GitHub emits for a project field; everything else
 #: is activity. `data_change` stays empty because GitHub emits no event when a
-#: project custom field other than Status is set -- see README.md, *Mapping to
+#: project custom field other than Status is set -- see REFERENCE.md, *Mapping to
 #: the Gold Agile data model*.
 EVENT_CATEGORY = {
     "ProjectV2ItemStatusChangedEvent": "state_change",

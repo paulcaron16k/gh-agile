@@ -252,7 +252,7 @@ or kept, as a choice rather than a constraint.
   *and* gives it the identifier as its first positional, and `tests/test_help_sections.py` walks the parser and
   fails on anything undeclared. Descriptions are capitalised with no full stop. No flag means two things, none is
   accepted abbreviated, and a `list` into a pipe prints tab-separated rows with no header. A rename follows
-  README's *Deprecation policy*, stated there and not here; a deprecated spelling runs exactly what it ran,
+  REFERENCE.md's *Deprecation policy*, stated there and not here; a deprecated spelling runs exactly what it ran,
   and a retired one fails at parsing — never reinterpreted as something else — with a hint naming its
   replacement for its retired builds. No spelling is retired today: the last hints, and the code that printed
   them, went in #307, so the next rename brings a hint back. When a hint goes, its old command line joins
@@ -310,7 +310,8 @@ or kept, as a choice rather than a constraint.
 | `POLICY.md` | The conventions `validate` enforces |
 | `agile-reports`' `GOLD_MODEL.md` | The Gold model the export feeds, in the sibling repository — not here, and nothing here writes it |
 | `USER_GUIDE.md` | The published guide; `make check-guide` keeps it honest |
-| `README.md` | **The release policy lives there**, under *Versions, and what installing gets you*: `main` is the release, tags name builds and nothing installs from one, and consumers are told not to pin. Stated where a consumer reads rather than here (#197) |
+| `README.md` | **The PyPI front page**, so it stays short, links absolutely (PyPI breaks relative links) and carries no Mermaid (PyPI shows the source). Its sample output is generated, not typed -- see `scripts/readme_samples.py` below. Reference material goes in `REFERENCE.md` (#315) |
+| `REFERENCE.md` | How it works and why -- the README's old reference half. **The release policy lives there**, under *Versions, and what installing gets you*: `main` is the release, tags name builds and nothing installs from one, and consumers are told not to pin. Stated where a consumer reads rather than here (#197) |
 
 Some of it is code rather than prose, and none of it is guessable from a file name:
 
@@ -319,7 +320,8 @@ Some of it is code rather than prose, and none of it is guessable from a file na
 | `ruff.toml` | The rule set is **pinned**, because the same code passed one ruff version and reported thirty findings with the next. `target-version` is the floor, and `tests/test_version_floor.py` fails if it drifts from `RUNTIME_FLOOR` or the CI matrix |
 | `.github/workflows/ci.yml` | Every supported interpreter, **including the floor and with no gaps** — a floor no job tests is a promise nothing keeps. Same test holds the matrix to it |
 | `Makefile` | The live targets default to the sandbox and refuse any other repository without `ALLOW_LIVE=1`; every Python target refuses to run outside `.venv`, and `tests/conftest.py` refuses again from the inside. `merge-check` before merging, `hooks` so a red `main` reaches you |
-| `scripts/check_guide.py` | Every command in the guide exists, and the read-only ones run. It strips a trailing comment before appending `--dry-run`, because the shell ate the flag once and a real `sync` wrote 35 issues to a live board |
+| `scripts/readme_samples.py` | The README's board, stand-up and initiative samples, rendered by the real commands against a fictional Widgets project with only GitHub's answers faked. `--write` refreshes them; `tests/test_readme_samples.py` fails when a renderer change leaves the README showing output the tool no longer prints |
+| `scripts/check_guide.py` | Every command in the guide, the README and REFERENCE.md exists, and the read-only ones run. It strips a trailing comment before appending `--dry-run`, because the shell ate the flag once and a real `sync` wrote 35 issues to a live board |
 | `templates/` | The `post-merge` hook, and the GitHub workflows that need no stored credential |
 | `GitHub_API_spec.json`, `GitHub_API_changelog.md` | The GraphQL schema as last seen, ordered so a diff is only real change, and what changed since, by date. `scripts/api_drift.py` writes both (#291) |
 

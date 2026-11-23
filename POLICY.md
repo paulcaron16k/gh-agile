@@ -4,7 +4,7 @@ What is tracked, where, by whom, and which parts a machine does. Written because
 the alternative — conventions held in one person's head and applied by hand — is
 how a backlog quietly stops meaning anything.
 
-How the tool carries these rules out is in [README.md](README.md) and
+How the tool carries these rules out is in [REFERENCE.md](REFERENCE.md) and
 [USER_GUIDE.md](USER_GUIDE.md). This document is the *rules*.
 
 ---

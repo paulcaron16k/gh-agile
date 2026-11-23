@@ -17,6 +17,10 @@ level fails here until the README mentions it.
 Orientation, not reference: the detail belongs in `USER_GUIDE.md`, and the
 README linking rather than restating is what stops the two disagreeing -- the
 mechanism that produced #161.
+
+The hierarchy section moved to `REFERENCE.md` with the rest of the reference
+half when the README became the PyPI front page (#315); the README links to it.
+These tests followed it, and the fixture keeps its old name.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 @pytest.fixture(scope="module")
 def readme():
-    return (ROOT / "README.md").read_text()
+    return (ROOT / "REFERENCE.md").read_text()
 
 
 @pytest.fixture(scope="module")

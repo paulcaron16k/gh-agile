@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that USER_GUIDE.md's and README.md's commands are real, and that the safe ones run.
+"""Check that the user docs' commands are real, and that the safe ones run.
 
 Three defects reached the published guide before this existed, every one of
 them found by hand-running a command that had already been written down: a raw
@@ -35,6 +35,9 @@ GUIDE = ROOT / "USER_GUIDE.md"
 #: is -- every command exists, and the safe ones run -- but the coverage rule,
 #: that every command is documented somewhere, is the guide's alone.
 README = ROOT / "README.md"
+#: The README's reference half, moved out so the front page fits on PyPI (#315).
+#: Checked the same way, for the same reason.
+REFERENCE = ROOT / "REFERENCE.md"
 TOOL = ROOT / "gh-agile"
 
 #: Executed for real. Everything else is checked for existence only.
@@ -358,12 +361,15 @@ def main() -> int:
         sys.exit("no commands found in USER_GUIDE.md; the extraction stopped matching")
 
     readme = documented_commands(README)
-    if not readme:
-        sys.exit("no commands found in README.md; the extraction stopped matching")
+    reference = documented_commands(REFERENCE)
+    for doc, found in ((README, readme), (REFERENCE, reference)):
+        if not found:
+            sys.exit(f"no commands found in {doc.name}; the extraction stopped matching")
 
     problems, ran, skipped = coverage_problems(commands), 0, {}
     every = ([(GUIDE.name, line, command) for line, command in commands]
-             + [(README.name, line, command) for line, command in readme])
+             + [(README.name, line, command) for line, command in readme]
+             + [(REFERENCE.name, line, command) for line, command in reference])
     for doc, line, command in every:
         issues = check(command)
         for issue in issues:
@@ -388,7 +394,8 @@ def main() -> int:
             problems.append(f"{doc}:{line}: {command[:60]} -> {note}")
 
     covered = len(parser_leaves()) - len(UNDOCUMENTED_OK)
-    print(f"\n  {len(every)} documented command(s), {len(readme)} of them in README.md: "
+    print(f"\n  {len(every)} documented command(s), {len(readme)} in README.md, "
+          f"{len(reference)} in REFERENCE.md: "
           f"{ran} executed in a cron-like "
           f"environment, {sum(len(v) for v in skipped.values())} checked but not run")
     print(f"  {covered} command(s) require documenting; "

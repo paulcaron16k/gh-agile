@@ -20,7 +20,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 README = (ROOT / "README.md").read_text()
 GUIDE = (ROOT / "USER_GUIDE.md").read_text()
 POLICY = (ROOT / "POLICY.md").read_text()
-USER_DOCS = {"README.md": README, "USER_GUIDE.md": GUIDE, "POLICY.md": POLICY}
+REFERENCE = (ROOT / "REFERENCE.md").read_text()
+USER_DOCS = {"README.md": README, "REFERENCE.md": REFERENCE, "USER_GUIDE.md": GUIDE,
+             "POLICY.md": POLICY}
 
 
 def table_rows(text, first_cell):

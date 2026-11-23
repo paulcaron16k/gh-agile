@@ -10,6 +10,10 @@ stability claim in the repository was one line of `CLAUDE.md`, which is guidance
 for working *on* the tool rather than documentation *of* it.
 
 Offline: three files on disk.
+
+The policy moved from the README to `REFERENCE.md` with the rest of the
+reference half, when the README became the PyPI front page (#315). The badge
+stayed on the front page, so the stability claim is checked in both.
 """
 
 from __future__ import annotations
@@ -23,7 +27,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 @pytest.fixture(scope="module")
 def readme():
-    return (ROOT / "README.md").read_text()
+    """Where the policy is written: the reference, linked from the README."""
+    return (ROOT / "REFERENCE.md").read_text()
 
 
 class TestTheDecisionIsWhereAConsumerReads:
@@ -52,9 +57,10 @@ class TestTheDecisionIsWhereAConsumerReads:
     def test_it_states_the_stability(self, readme):
         """The claim that used to live only in CLAUDE.md, where a consumer
         never looks. Beta since AGILE-264, and the badge says the same."""
+        front = (ROOT / "README.md").read_text()
         assert "**Status: beta.**" in readme
-        assert "status-beta-" in readme
-        assert "alpha" not in readme.lower()
+        assert "status-beta-" in front
+        assert "alpha" not in readme.lower() and "alpha" not in front.lower()
 
     def test_it_states_how_a_spelling_is_retired(self, readme):
         """Beta's one promise (AGILE-264): a rename warns before it breaks."""
