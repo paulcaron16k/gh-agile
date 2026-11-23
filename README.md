@@ -46,12 +46,24 @@ comes back out as CSV to analyse the way you would a Jira export.
 
 ## Install
 
+As a `gh` extension, tracking `main`:
+
 ```bash
 gh extension install paulcaron16k/gh-agile
 gh auth refresh -s project        # the project scope, once
 ```
 
+Or from PyPI, as a tagged release that also runs standalone as `gh-agile`:
+
+```bash
+pipx install gh-agile
+gh-agile install                  # link it into gh, so `gh agile` runs it too
+gh auth refresh -s project
+```
+
 Python 3.10 or later, standard library only: installing installs nothing else.
+The two routes run the same file and differ only in when a fix reaches you —
+[Versions, and what installing gets you](https://github.com/paulcaron16k/gh-agile/blob/main/REFERENCE.md#versions-and-what-installing-gets-you).
 
 **What you need on GitHub:** push on the repository, because `init` writes
 labels, and a place to create the project: your own account, or an organization
@@ -391,6 +403,7 @@ number, a key such as `WIDG-42`, or its URL.
 | Command | What it does |
 |---|---|
 | `init` | From a fresh clone to a working board, in one command; safe to re-run |
+| `install` | Link a copy installed from PyPI into `gh`, so `gh agile` runs it |
 | `board list` / `view` | Every board on the project; one board as text or JSONL |
 | `board create` | Create a board, or converge the one with exactly this name |
 | `project view` / `edit` | The project's owner, number, keys, cadence and title prefix; change the cadence or the prefix |

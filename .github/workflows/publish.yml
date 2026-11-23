@@ -1,0 +1,116 @@
+# Build gh-agile's wheel and publish it to PyPI (#316).
+#
+# **A tag is the publication.** Pushing `vX.Y.Z` builds from that tag and
+# uploads to PyPI, which never re-issues a version number: what is tagged is on
+# other people's disks within minutes. So the release checklist in
+# docs/releasing.md -- the security review first -- comes before the tag, never
+# after it.
+#
+# **No stored token.** PyPI's trusted publishing exchanges this workflow's OIDC
+# identity for a short-lived upload token, so no secret exists to leak or rotate.
+# `id-token: write` is granted to the two publish jobs only, each behind its own
+# environment (`pypi`, `testpypi`), which is what PyPI's trusted publisher is
+# registered against. The build job, which runs the build backend, gets neither.
+#
+# Run by hand (workflow_dispatch) it builds whatever ref it is given and uploads
+# to **TestPyPI** only: a dev version, to check the page renders and the wheel
+# installs before a real tag is cut.
+#
+# Actions are pinned to commit SHAs, unlike ci.yml's tags: this is the one
+# workflow holding a credential that publishes, and a moved tag would run
+# someone else's code with it.
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # The whole history, tags included: hatch-vcs derives the version from
+      # the nearest tag, and a shallow clone has none.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check --strict dist/*
+
+      # The wheel is one script and its metadata. Anything else in it is
+      # something nobody reviewed being published.
+      - name: The wheel carries only the script
+        run: |
+          python - <<'EOF'
+          import pathlib, sys, zipfile
+          (wheel,) = pathlib.Path("dist").glob("*.whl")
+          names = zipfile.ZipFile(wheel).namelist()
+          extra = [n for n in names if ".dist-info/" not in n and not n.endswith(".data/scripts/gh-agile")]
+          if extra or not any(n.endswith(".data/scripts/gh-agile") for n in names):
+              sys.exit(f"unexpected wheel contents: {names}")
+          print(f"{wheel.name}: {len(names)} files, script only")
+          EOF
+
+      # On a tag, the version must be the tag. hatch-vcs gives a dev version
+      # for any commit the tag does not point at, and a dev upload to PyPI is a
+      # release nobody meant.
+      - name: The version is the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls dist/*.whl | grep -F "gh_agile-${TAG#v}-py3-none-any.whl"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/gh-agile
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # A rerun of the same commit builds the same dev version.
+          skip-existing: true
+
+  pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/gh-agile
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3

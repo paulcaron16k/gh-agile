@@ -164,7 +164,7 @@ class TestWhatMustStillWork:
 
         exempt = {path[0] for path, parser in walk(tool.build_parser())
                   if parser.get_default("projectless")}
-        assert exempt == {"project", "key", "self-test", "task", "init"}
+        assert exempt == {"project", "key", "self-test", "task", "init", "install"}
 
 
 class TestItCostsNoNetworkCall:

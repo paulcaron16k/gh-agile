@@ -1,6 +1,10 @@
 pytest>=8
 pytest-cov>=5
 ruff>=0.6
+# `make dist`: the PyPI build, rehearsed locally (#316). Not the extension's --
+# it installs nothing -- and not the package's, which has no dependencies.
+build>=1.2
+twine>=5
 # scripts/agile_analytics.py, for tests/test_agile_analytics.py only -- the
 # extension itself stays standard library. The same bounds the script declares,
 # so CI tests what `uv run` installs for a user, newest release first (#272).
