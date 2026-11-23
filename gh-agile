@@ -970,7 +970,13 @@ def read_config(path: str | None = None) -> dict:
     link.
     """
     found = find_config(path)
-    if found is None:
+    # An explicit `--config` naming a file that is not there yet is a profile
+    # still to be written, not an error: `key add --config PATH` and `init
+    # --config PATH` are how one is started, and reading it first raised a bare
+    # `FileNotFoundError` before the command that would create it ran (#313).
+    # Commands that need a project still refuse, and `missing_project_message`
+    # names the path.
+    if found is None or not found.exists():
         return {}
     try:
         config = json.loads(found.read_text())
@@ -11382,6 +11388,14 @@ def missing_project_message(explicit: str | None) -> str:
     missing, and the ways out.
     """
     found = find_config(explicit)
+    if found is not None and not found.exists():
+        return (
+            f"no profile at {found}, and no --project was given, so there is no board "
+            f"to act on.\n"
+            f"  Check the --config path, or create the profile there:\n\n"
+            f"    gh agile init --config {found} --key KEY -t \"Your board\" "
+            f"--sprint-template 2-week"
+        )
     if found is not None:
         return (
             f"{found} names no project.number, and no --project was given.\n"
@@ -11475,8 +11489,15 @@ def apply_defaults(args) -> None:
     # one* from inside one, which reads like the caller's mistake.
     # `tests/test_plan_command.py` walks the parser for commands that take an
     # issue and lack the declaration.
+    #
+    # `--key` is looked up for every such command but two. `key add` and `init`
+    # *declare* a key rather than name one already recorded, so on a fresh clone
+    # the profile cannot know it yet, and the lookup refused the very command
+    # that would write it: `init --key WIDG` failed with "no repository for key"
+    # in the one place it exists for (#313). For them the repository is the
+    # clone, the same as with no `--key` at all.
     if repo is None and getattr(args, "needs_repo", False):
-        if key and args.command not in ("key",):
+        if key and args.command not in ("key", "init"):
             repo = repo_for_key(config, key)
             if not repo:
                 sys.exit(f"no repository for key {key!r} in the profile")
