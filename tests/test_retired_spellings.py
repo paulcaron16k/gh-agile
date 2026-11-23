@@ -6,7 +6,7 @@ title became `-t`, as `gh issue create -t` takes it (#202), and v0.4.0 and
 v0.5.0 retired the old spellings with a hint naming each replacement.
 
 **The hints are gone (#307)**, as both release notes said they would be: an old
-spelling now fails like any other typo -- stage 3 of the README's deprecation
+spelling now fails like any other typo -- stage 3 of REFERENCE.md's deprecation
 policy. What stays is the promise that mattered more: **nothing retired is
 reinterpreted as something else.** Every old command line below is still run
 through `main`, and must exit 2 before anything is parsed into a command.

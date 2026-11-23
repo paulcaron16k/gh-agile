@@ -16,7 +16,7 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-DOCS = ["README.md", "USER_GUIDE.md"]
+DOCS = ["REFERENCE.md", "USER_GUIDE.md"]
 
 
 def blocks():
@@ -47,5 +47,11 @@ def test_no_label_carries_a_quote_once_github_decodes_it(doc, line, body):
 
 
 def test_the_sprint_diagram_names_its_field_without_quotes():
-    readme = (ROOT / "README.md").read_text()
-    assert 'class SprintField["ProjectV2IterationField (Sprint)"]' in readme
+    reference = (ROOT / "REFERENCE.md").read_text()
+    assert 'class SprintField["ProjectV2IterationField (Sprint)"]' in reference
+
+
+def test_the_readme_carries_no_diagram():
+    """PyPI renders the README and does not render Mermaid: a diagram there is a
+    code block of `classDiagram` source on the package's front page (#315)."""
+    assert "```mermaid" not in (ROOT / "README.md").read_text()

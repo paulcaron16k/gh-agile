@@ -27,7 +27,7 @@ the tag names the build.
 streams one object per line, and `export --format json|csv` stays: `gh` has no
 flag for either. The old spelling fails at argument parsing and, for one
 release, names `--json`. *Stage* is the README's
-[deprecation policy](../README.md#deprecation-policy); this rename predates it.
+[deprecation policy](../REFERENCE.md#deprecation-policy); this rename predates it.
 
 **The hints for v0.4.0's retired spellings stay in this build.** v0.4.0's note
 said the release after it would remove them; it does not. The deprecation policy

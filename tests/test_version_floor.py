@@ -115,7 +115,9 @@ def readme_badge_versions() -> list[tuple[int, int]]:
     """The versions the README's Python badge names: `python-3.10%20%7C%203.11...`."""
     for line in (ROOT / "README.md").read_text().splitlines():
         if line.startswith("[![Python]("):
-            label = line.split("/badge/python-", 1)[1].rsplit("-", 1)[0]
+            # Up to `.svg` first: the badge's link is an absolute URL now (#315),
+            # and `gh-agile` in it would otherwise be taken for the colour's hyphen.
+            label = line.split("/badge/python-", 1)[1].split(".svg", 1)[0].rsplit("-", 1)[0]
             out = []
             for part in label.split("%20%7C%20"):
                 major, minor = part.split(".")

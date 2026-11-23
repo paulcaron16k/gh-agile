@@ -23,7 +23,7 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-DOCS = ["README.md", "USER_GUIDE.md", "POLICY.md"]
+DOCS = ["README.md", "REFERENCE.md", "USER_GUIDE.md", "POLICY.md"]
 
 #: A block is a profile if it carries one of these. `keys` alone is too loose --
 #: the export catalog talks about keys too.
@@ -106,10 +106,11 @@ class TestTheShapeThatUsedToCrash:
         assert tool.profile_keys({}) == []
 
 
-class TestTheReadmeSpecifically:
+class TestTheReferenceSpecifically:
+    """The profile example moved with the reference half of the README (#315)."""
     @staticmethod
     def readme_profiles():
-        return [p for name, _line, p in profiles() if name == "README.md"]
+        return [p for name, _line, p in profiles() if name == "REFERENCE.md"]
 
     def test_the_readme_has_a_profile_example(self):
         assert self.readme_profiles()
