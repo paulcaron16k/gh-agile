@@ -86,10 +86,8 @@ referring back to, so a bug report, a changelog entry or a `git describe` can sa
 *which* build rather than quoting a commit. `gh agile --version` says which you
 have — a describe for the extension, a version for the package:
 
-```
-gh-agile v0.6.0-7-g440d984  (main)
-gh-agile 0.6.0  (package)
-```
+> `gh-agile v0.6.0-7-g440d984  (main)`
+> `gh-agile 0.6.0  (package)`
 
 The leading `0.` says the command line may still change before 1.0; how it
 changes is the [deprecation policy](#deprecation-policy).
