@@ -15,6 +15,19 @@ you on your next upgrade. Tags are cut so a build can be *named* in a report,
 never installed from. The promise that makes this safe, and what a tag does and
 does not mean, are in [REFERENCE.md](REFERENCE.md) under *Versions, and what installing gets you*.
 
+**Or the package from PyPI**, which is a tagged release rather than `main`, and
+the same single file:
+
+```bash
+pipx install gh-agile
+gh-agile install          # link it into gh, so `gh agile` runs it as well
+```
+
+`gh` runs only what is in its own extensions directory, so a copy on PATH answers
+to `gh-agile` and not yet to `gh agile`; `install` links it in. It refuses to
+replace an `agile` extension `gh` already has -- `gh extension remove agile`
+first -- and `gh extension remove agile` is also how to undo it.
+
 To say what you are running — and the first thing to paste into a bug report:
 
 ```bash
@@ -24,6 +37,9 @@ gh agile --version
 > `gh-agile v0.4.0-48-gc903b28  (main)`
 > `python 3.13.2  (floor 3.10+), /usr/local/bin/python3`
 > `profile: .github/agile.json`
+
+A copy installed from PyPI names its version and says so: `gh-agile 0.6.0
+(package)`.
 
 Three facts, and each has cost somebody an afternoon. The **build**, derived from
 the checkout rather than declared in the file, so it cannot drift. The
@@ -3236,6 +3252,7 @@ gh agile issue move --help
 | Command | Does |
 |---|---|
 | `init` | Create or adopt the project, record it, converge its fields, labels and boards, install the post-merge hook; run again to converge |
+| `install` | Link a copy installed from PyPI (`pipx install gh-agile`) into `gh` as the `agile` extension; refused for a git checkout, and for an `agile` `gh` already has |
 | `key list` / `key add` / `key delete` | The keys in the profile; record one for a repository; remove one no issue carries |
 | `project view` / `project edit` | The profile's project -- owner, number, keys, cadence, prefix; change the sprint cadence or the issue-title form, optionally backfilling it |
 | `board list` / `board view` / `board create` | Scrum, kanban, backlog and roadmap boards over one project; render one as text or JSONL |

@@ -10,3 +10,6 @@ exports/
 
 # `make coverage` writes its data file here on every run.
 .coverage
+
+# `make dist` and the publish workflow build the PyPI wheel and sdist here.
+dist/

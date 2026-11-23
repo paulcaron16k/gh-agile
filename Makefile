@@ -39,7 +39,7 @@ PY    := $(VENV)/bin/python
 #     make venv PYTHON=python3.10
 PYTHON ?= python3.12
 
-.PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help merge-check ci-status hooks api-spec api-drift
+.PHONY: venv test test-watch coverage self-test scratch teardown lint check-guide metrics help merge-check ci-status hooks api-spec api-drift dist
 
 # Every Python target runs through $(PY) and checks the venv exists first.
 # Nothing here may fall back to the system interpreter: a suite that silently
@@ -127,6 +127,7 @@ help:
 	@echo "make hooks               post-merge hook: a red main, and issues a merge left unfinished"
 	@echo "make api-drift           compare GitHub's live GraphQL schema with GitHub_API_spec.json"
 	@echo "make api-spec            fetch the schema and write GitHub_API_spec.json, the baseline"
+	@echo "make dist                build the PyPI wheel and sdist into dist/, and check them"
 	@echo
 	@echo "OWNER=$(OWNER)  REPO=$(REPO)"
 	@echo
@@ -280,6 +281,16 @@ merge-check:
 	@cd $(MERGE_CHECK_DIR) && $(CURDIR)/$(PY) -m pytest tests/ -q 		&& $(CURDIR)/$(VENV)/bin/ruff check gh-agile tests/ scripts/ 		|| { cd $(CURDIR); git worktree remove --force $(MERGE_CHECK_DIR); exit 1; }
 	@git worktree remove --force $(MERGE_CHECK_DIR)
 	@echo "  the merge is green"
+
+# The PyPI wheel and sdist, built and checked as .github/workflows/publish.yml
+# builds them (#316), so a release is rehearsed before its tag. Nothing is
+# uploaded: the tag does that, from CI, with no stored token.
+dist:
+	$(require_venv)
+	@rm -rf dist
+	$(PY) -m build --outdir dist .
+	$(PY) -m twine check --strict dist/*
+	@$(PY) -c "import zipfile, glob; (w,) = glob.glob('dist/*.whl'); print('  ' + w); [print('    ' + n) for n in zipfile.ZipFile(w).namelist()]"
 
 # Whether the last finished CI run on main passed. Read-only; calls `gh run list`.
 ci-status:

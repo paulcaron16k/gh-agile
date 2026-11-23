@@ -39,9 +39,10 @@ class TestTheTopLevel:
                    if isinstance(a, argparse._SubParsersAction))
         return {a.dest for a in top._choices_actions}
 
-    def test_five_commands_besides_the_groups(self, tool):
-        """`unfinished` is shown since #268: the hook runs it, and so may you."""
-        assert self.shown(tool) - GROUPS == {"init", "sync", "validate", "export",
+    def test_six_commands_besides_the_groups(self, tool):
+        """`unfinished` is shown since #268: the hook runs it, and so may you.
+        `install` since #316: it is how a copy from PyPI reaches `gh agile`."""
+        assert self.shown(tool) - GROUPS == {"init", "install", "sync", "validate", "export",
                                              "unfinished"}
 
     def test_the_hidden_command_still_parses(self, tool):

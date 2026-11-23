@@ -114,13 +114,12 @@ The rules are in POLICY.md, the walkthrough in USER_GUIDE.md, and the data
 mapping onto a generic Agile metrics model in agile-reports' GOLD_MODEL.md.
 """
 
-from __future__ import annotations
-
 import argparse
 import contextlib
 import csv
 import io
 import json
+import os
 import pathlib
 import platform
 import shutil
@@ -9028,6 +9027,98 @@ def install_hook() -> str:
             f"{every}")
 
 
+def data_home() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("XDG_DATA_HOME")
+                        or pathlib.Path.home() / ".local" / "share")
+
+
+def extension_link_dir() -> pathlib.Path:
+    """Where `install` keeps the link `gh` follows. A directory of its own, named
+    `gh-agile` because a local extension takes its name from its directory, and
+    holding nothing but a symlink to the installed script."""
+    return data_home() / "gh-agile-package" / PACKAGE
+
+
+def gh_extension_entry() -> pathlib.Path:
+    """`gh`'s own entry for `agile`: `GH_DATA_DIR`, else `$XDG_DATA_HOME/gh`, as
+    `gh` resolves its data directory. For a local install it is a symlink to the
+    directory that was installed."""
+    base = os.environ.get("GH_DATA_DIR") or data_home() / "gh"
+    return pathlib.Path(base) / "extensions" / PACKAGE
+
+
+def installed_extension() -> str | None:
+    """How `gh` has `agile` installed: its source repository, `""` for a local
+    link, or None when it has no `agile` at all. Read from `gh extension list`,
+    whose rows are `gh agile<TAB>owner/repo<TAB>version` -- the repository
+    column empty for a local install."""
+    listed = subprocess.run(["gh", "extension", "list"], capture_output=True, text=True)
+    if listed.returncode != 0:
+        sys.exit(f"`gh extension list` failed: {listed.stderr.strip() or listed.returncode}")
+    for row in listed.stdout.splitlines():
+        cells = row.split("\t")
+        if cells[0].strip() == "gh agile":
+            return cells[1].strip() if len(cells) > 1 else ""
+    return None
+
+
+def cmd_install(args) -> int:
+    """`gh-agile install`: make a copy installed from PyPI answer to `gh agile`.
+
+    `pip` and `pipx` put `gh-agile` on PATH, and `gh` does not look there: it
+    runs only what is in its own extensions directory. So this links the
+    installed script in as a *local* extension, the mechanism `gh extension
+    install .` uses for a checkout -- a directory named `gh-agile` holding an
+    executable of the same name, here a symlink to this file. Upgrading the
+    package rewrites the file the link points at, so `gh agile` follows without
+    running this again.
+
+    A git checkout is refused, because `gh` installs one itself and tracks its
+    branch, and so is an `agile` extension `gh` already has from a repository:
+    replacing somebody's install is `gh extension remove agile` first, by them.
+    Measured with `gh` 2.86 against an empty `XDG_DATA_HOME`: the local install
+    needs no git repository, and `gh extension list` shows it with an empty
+    repository column.
+    """
+    if os.name == "nt":
+        sys.exit("`gh-agile install` links a script, which needs a POSIX system.\n"
+                 "  On Windows:  gh extension install paulcaron16k/gh-agile")
+    if is_checkout():
+        sys.exit(f"this copy is a git checkout ({TOOL_DIR}), and gh installs those itself:\n"
+                 f"  gh extension install paulcaron16k/gh-agile   # tracks main\n"
+                 f"  gh extension install .                       # from this checkout")
+    script = pathlib.Path(__file__).resolve()
+    folder = extension_link_dir()
+    source = installed_extension()
+    entry = gh_extension_entry()
+    ours = entry.is_symlink() and entry.resolve() == folder.resolve()
+    if source is not None and not ours:
+        # A clone (`source` names its repository) or somebody's own local link
+        # -- a developer's `gh extension install .` -- and either way not ours
+        # to replace.
+        where = f"installed from {source}" if source else f"linked to {entry.resolve()}"
+        sys.exit(f"gh already has `agile`, {where}.\n"
+                 f"  To use this package instead:  gh extension remove agile && gh-agile install")
+
+    folder.mkdir(parents=True, exist_ok=True)
+    link = folder / PACKAGE
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(script)
+    if ours:
+        # Already installed by this command; the link now points at this copy.
+        print(f"  gh agile -> {script}  (already installed; link refreshed)")
+        return 0
+    done = subprocess.run(["gh", "extension", "install", "."], cwd=folder,
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        sys.exit(f"`gh extension install` failed: {done.stderr.strip() or done.returncode}")
+    print(f"  gh agile -> {script}\n"
+          f"  `gh agile` and `gh-agile` now run the same copy. "
+          f"To undo: gh extension remove agile")
+    return 0
+
+
 def cmd_unfinished(args) -> int:
     """What a merge closed and nobody finished. For a git hook, at the terminal.
 
@@ -9842,6 +9933,58 @@ def checkout_version(directory: pathlib.Path = TOOL_DIR) -> tuple[str, str]:
         ask("rev-parse", "--abbrev-ref", "HEAD")
 
 
+#: The distribution name on PyPI, and the extension's executable name.
+PACKAGE = "gh-agile"
+
+
+def is_checkout(directory: pathlib.Path = TOOL_DIR) -> bool:
+    """Whether this copy runs from its own git checkout: a `gh extension
+    install` clone, or a developer's working tree.
+
+    `.git` beside the file, and not merely *a* repository somewhere above it. A
+    copy installed from PyPI into a project's `.venv` sits inside that project's
+    repository, and `git describe` there would report the project's version as
+    this tool's (#316). A worktree's `.git` is a file, hence `exists`.
+    """
+    return (directory / ".git").exists()
+
+
+def installed_version() -> str | None:
+    """The version of the installed package whose script *is this file*, or None.
+
+    Read from the package's metadata -- `importlib.metadata`, standard library --
+    which the build took from the git tag, so nothing is declared here either.
+    The match on the script's path is what makes it this copy's version: the
+    interpreter may see some other install of the package, and a version that
+    belongs to a different file is the wrong answer stated confidently.
+    """
+    import importlib.metadata
+
+    try:
+        dist = importlib.metadata.distribution(PACKAGE)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    here = pathlib.Path(__file__).resolve()
+    for entry in dist.files or []:
+        if entry.name == PACKAGE and pathlib.Path(dist.locate_file(entry)).resolve() == here:
+            return dist.version
+    return None
+
+
+def running_version() -> tuple[str, str]:
+    """`(version, origin)` for the copy that is running: its checkout, or its package.
+
+    A checkout answers with `git describe`, as it always has. Anything else is
+    an installed package, which answers from its metadata; one that cannot
+    is `unknown` -- never the `git describe` of whatever repository happens to
+    contain it.
+    """
+    if is_checkout():
+        return checkout_version()
+    installed = installed_version()
+    return (installed, "package") if installed else ("unknown", "")
+
+
 def version_lines() -> list[str]:
     """What `--version` prints: the build, the interpreter, and the profile.
 
@@ -9862,7 +10005,7 @@ def version_lines() -> list[str]:
     following it is an API call, and nothing in `--version` may need a network, a
     token or a board.
     """
-    version, branch = checkout_version()
+    version, branch = running_version()
     out = [f"  gh-agile {version}" + (f"  ({branch})" if branch else "")]
     out.append(f"  python {platform.python_version()}  (floor "
                f"{'.'.join(str(n) for n in RUNTIME_FLOOR)}+), {sys.executable}")
@@ -9934,7 +10077,7 @@ IDENTIFIER_DESTS = {"initiative": "issue", "board": "name"}
 #: were under BOARD, beside nothing they belong with (#268).
 TOP_LEVEL_SECTIONS = (
     ("WORK ITEM COMMANDS", ("initiative", "epic", "story", "bug", "task", "issue")),
-    ("SETUP COMMANDS", ("init", "project", "key")),
+    ("SETUP COMMANDS", ("init", "install", "project", "key")),
     ("BOARD COMMANDS", ("board", "sprint", "sync")),
     ("GENERAL COMMANDS", ("validate", "export", "unfinished")),
 )
@@ -9993,7 +10136,7 @@ class AgileParser(argparse.ArgumentParser):
             self.leaf_for(parsed).error(what)
         return parsed
 
-    def leaf_for(self, parsed) -> AgileParser:
+    def leaf_for(self, parsed) -> "AgileParser":
         """The subcommand parser a parsed line ended in: `issue close` for
         `issue close 1`, this parser itself when the line named none."""
         for action in self._actions:
@@ -11180,6 +11323,13 @@ No --status, and --field Status is refused: Status changes through
     # Hidden: a machine calls it -- the post-merge hook -- and it keeps its name
     # and flags because installed hooks call it by them. Renaming it would break
     # every clone's hook silently, which is worse than a usage error.
+    installer = sub.add_parser(
+        "install", kind=GENERAL,
+        help="Make a copy installed from PyPI answer to gh agile",
+        description="Link this copy, installed with pip or pipx, into gh as the `agile` "
+                    "extension, so `gh agile` and `gh-agile` run the same file")
+    installer.set_defaults(func=cmd_install, projectless=True)
+
     unfinished = sub.add_parser(
         "unfinished", kind=GENERAL,
         help="Name the issues a merge closed and nobody finished",

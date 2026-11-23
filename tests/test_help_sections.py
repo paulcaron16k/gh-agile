@@ -141,7 +141,7 @@ class TestTheSections:
         setup, rest = rest.split("BOARD COMMANDS")
         board, general = rest.split("GENERAL COMMANDS")
         assert "WORK ITEM COMMANDS" in work and "  epic:" in work and "  issue:" in work
-        for part, names in ((setup, ("init", "project", "key")),
+        for part, names in ((setup, ("init", "install", "project", "key")),
                             (board, ("board", "sprint", "sync")),
                             (general, ("validate", "export", "unfinished"))):
             assert sorted(line.split(":")[0].strip() for line in part.strip().splitlines()) \

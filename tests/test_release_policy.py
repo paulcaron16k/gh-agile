@@ -35,8 +35,12 @@ class TestTheDecisionIsWhereAConsumerReads:
     def test_the_readme_has_the_section(self, readme):
         assert "## Versions, and what installing gets you" in readme
 
-    def test_it_says_main_is_the_release(self, readme):
-        assert "`main` is the release" in readme
+    def test_it_says_what_each_route_tracks(self, readme):
+        """Two routes since #316: the extension is a clone of `main`, the
+        package a tagged release. A reader choosing needs both said."""
+        assert "**The extension tracks `main`.**" in readme
+        assert "**The package is a release.**" in readme
+        assert "differ in timing, never in behaviour" in readme
 
     def test_it_says_what_makes_that_safe(self, readme):
         """A promise about `main` rather than an absence of process -- and the
@@ -44,15 +48,23 @@ class TestTheDecisionIsWhereAConsumerReads:
         for enforcement in ("merge-check", "3.10 through 3.13", "sandbox"):
             assert enforcement in readme
 
-    def test_it_tells_consumers_not_to_pin(self, readme):
+    def test_it_tells_consumers_not_to_pin_the_extension(self, readme):
         """The cost is measured, not theoretical: a pinned clone stops receiving
         fixes silently, which is how an extension ends up older than the git
-        hook that calls it -- #192."""
-        assert "Do not pin" in readme
-        assert "older than the git" in readme
+        hook that calls it -- #192. A pinned *package* is ordinary, and said so."""
+        flowing = " ".join(readme.split())
+        assert "**Do not pin the extension.**" in flowing
+        assert "older than the git hook that calls it" in flowing
+        assert "gh-agile==" in flowing
 
     def test_it_says_what_a_tag_is_for(self, readme):
-        assert "nothing installs from one" in readme
+        assert "**Tags name builds, and PyPI publishes them.**" in readme
+        assert "PyPI publishes the tagged builds, and only those" in readme
+
+    def test_it_says_how_a_package_reaches_gh(self, readme):
+        """`gh` does not look on PATH; without this a pip user has `gh-agile`
+        and no `gh agile`, and no idea why."""
+        assert "gh-agile install" in readme
 
     def test_it_states_the_stability(self, readme):
         """The claim that used to live only in CLAUDE.md, where a consumer

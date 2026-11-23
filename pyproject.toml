@@ -1,0 +1,68 @@
+# gh-agile on PyPI (#316). The package is the one `gh-agile` file, shipped as a
+# script: no module, no import path, no dependencies -- the same file
+# `gh extension install` clones. Only the build needs anything, and nothing here
+# is installed at run time.
+#
+# The version is the git tag, read at build time by hatch-vcs, and read back at
+# run time from the installed package's metadata (`importlib.metadata`, standard
+# library). Derived, never declared: there is no version constant to keep in step.
+
+[build-system]
+requires = ["hatchling>=1.24", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gh-agile"
+dynamic = ["version"]
+description = "Jira-style Agile on GitHub Issues and Projects: initiatives, epics, stories, sprints and boards, from the terminal. A gh extension that also runs standalone."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Paul Caron" }]
+# The floor is the user's `python3`, not ours to choose: see RUNTIME_FLOOR in
+# gh-agile, which tests/test_version_floor.py holds this to.
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["gh", "gh-extension", "github", "agile", "scrum", "kanban", "sprint", "jira"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Bug Tracking",
+]
+
+[project.urls]
+Homepage = "https://github.com/paulcaron16k/gh-agile"
+Documentation = "https://github.com/paulcaron16k/gh-agile/blob/main/USER_GUIDE.md"
+Reference = "https://github.com/paulcaron16k/gh-agile/blob/main/REFERENCE.md"
+Issues = "https://github.com/paulcaron16k/gh-agile/issues"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# Tags are `v0.5.0`. A build between tags is a dev version, which PyPI would
+# refuse for its local part -- the publish workflow runs on tags only.
+local_scheme = "no-local-version"
+
+# The wheel carries the script and nothing else. `shared-scripts` installs it
+# into the environment's bin directory, with its shebang pointed at that
+# environment's interpreter.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.shared-scripts]
+"gh-agile" = "gh-agile"
+
+# The sdist is what a wheel is rebuilt from, so it carries what the wheel needs
+# and what the README links to -- not the tests, scripts or exports.
+[tool.hatch.build.targets.sdist]
+include = ["gh-agile", "README.md", "LICENSE", "NOTICE", "pyproject.toml"]

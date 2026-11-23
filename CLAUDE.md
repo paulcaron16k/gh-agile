@@ -261,6 +261,11 @@ or kept, as a choice rather than a constraint.
   `_hours`, no exceptions. In days, cycle times reported `0.0` and a median of `0.0` was published as a
   measurement; the same work reads 165, 181, 17, 76, 561 seconds. `cadence_days` is the profile's hand-authored
   spelling — a person writes 14 — and the suffix stops at the file's edge.
+- **No `from __future__` import in `gh-agile`** (#316). When an interpreter's path is too long for a
+  shebang, pip and uv install the script behind a `/bin/sh` trampoline -- a line of Python before the
+  first line -- and a `__future__` import that is no longer first is a SyntaxError on every run.
+  Measured on a 3.10 venv with a long path. Annotations are evaluated at definition, so a forward
+  reference is quoted; `tests/test_install.py` compiles the file behind a trampoline.
 - **Dates are UTC.** `today_utc()`, never `date.today()`. Sprint windows are UTC dates and `@current` is decided
   in UTC; a local date puts the tool a day out of step around midnight.
 - **The extension runs under the user's `python3`, not the venv's.** `gh extension install` clones a file; it
@@ -307,17 +312,20 @@ or kept, as a choice rather than a constraint.
 |---|---|
 | `docs/tasks.md` | The work breakdown for what is left, cross-referenced to board ids, **and the live state** — repositories, projects, keys, checkouts. **The board is the source of truth for status; that file carries method** — the order, and the gotcha that costs an afternoon |
 | `docs/lessons.md` | Findings that cost something to learn, with the measurement. Read before repeating an experiment |
+| `docs/releasing.md` | Cutting a tag, which **is** the PyPI publication: trusted-publishing setup, the TestPyPI rehearsal, and the security review (§3a) that comes before every tag, with its result written into the release note |
 | `POLICY.md` | The conventions `validate` enforces |
 | `agile-reports`' `GOLD_MODEL.md` | The Gold model the export feeds, in the sibling repository — not here, and nothing here writes it |
 | `USER_GUIDE.md` | The published guide; `make check-guide` keeps it honest |
 | `README.md` | **The PyPI front page**, so it stays short, links absolutely (PyPI breaks relative links) and carries no Mermaid (PyPI shows the source). Its sample output is generated, not typed -- see `scripts/readme_samples.py` below. Reference material goes in `REFERENCE.md` (#315) |
-| `REFERENCE.md` | How it works and why -- the README's old reference half. **The release policy lives there**, under *Versions, and what installing gets you*: `main` is the release, tags name builds and nothing installs from one, and consumers are told not to pin. Stated where a consumer reads rather than here (#197) |
+| `REFERENCE.md` | How it works and why -- the README's old reference half. **The release policy lives there**, under *Versions, and what installing gets you*: the extension tracks `main`, the PyPI package is a tagged release of the same file (#316), and consumers are told not to pin the extension. Stated where a consumer reads rather than here (#197) |
 
 Some of it is code rather than prose, and none of it is guessable from a file name:
 
 | File | The practice, and what enforces it |
 |---|---|
 | `ruff.toml` | The rule set is **pinned**, because the same code passed one ruff version and reported thirty findings with the next. `target-version` is the floor, and `tests/test_version_floor.py` fails if it drifts from `RUNTIME_FLOOR` or the CI matrix |
+| `.github/workflows/publish.yml` | Builds the wheel on a `v*` tag and publishes it to PyPI through OIDC trusted publishing -- no stored token; by hand, to TestPyPI only. Actions pinned to SHAs, `id-token` on the publish jobs only: `tests/test_publish_workflow.py` |
+| `pyproject.toml` | The package is the one `gh-agile` file as a script (hatchling `shared-scripts`), no dependencies, version from the tag (hatch-vcs). `make dist` rehearses the build |
 | `.github/workflows/ci.yml` | Every supported interpreter, **including the floor and with no gaps** — a floor no job tests is a promise nothing keeps. Same test holds the matrix to it |
 | `Makefile` | The live targets default to the sandbox and refuse any other repository without `ALLOW_LIVE=1`; every Python target refuses to run outside `.venv`, and `tests/conftest.py` refuses again from the inside. `merge-check` before merging, `hooks` so a red `main` reaches you |
 | `scripts/readme_samples.py` | The README's board, stand-up and initiative samples, rendered by the real commands against a fictional Widgets project with only GitHub's answers faked. `--write` refreshes them; `tests/test_readme_samples.py` fails when a renderer change leaves the README showing output the tool no longer prints |

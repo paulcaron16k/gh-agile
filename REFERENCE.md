@@ -45,18 +45,33 @@ walkthrough of every command, and [POLICY.md](POLICY.md) holds the conventions
 
 ## Versions, and what installing gets you
 
+Two ways to install, and they differ only in *when* a fix reaches you:
+
 ```bash
-gh extension install paulcaron16k/gh-agile   # tracks main
+gh extension install paulcaron16k/gh-agile   # the extension: tracks main
 gh extension upgrade agile                   # whenever you like
+
+pipx install gh-agile                        # the package: a tagged release
+gh-agile install                             # ...and `gh agile` runs it too
+pipx upgrade gh-agile                        # when a new tag is published
 ```
 
-**There are no pinned installs, and `main` is the release.** A `gh` script
-extension is a clone of the default branch — `install` clones it, `upgrade`
-fast-forwards it, and no tag is ever consulted. So what you run is whatever
-`main` was when you last upgraded, and a fix reaches you on your next upgrade
-without anyone cutting anything.
+**The extension tracks `main`.** A `gh` script extension is a clone of the
+default branch — `install` clones it, `upgrade` fast-forwards it, and no tag is
+ever consulted. So what you run is whatever `main` was when you last upgraded,
+and a fix reaches you on your next upgrade without anyone cutting anything.
 
-That is a promise about `main` rather than an absence of process:
+**The package is a release.** PyPI publishes the tagged builds, and only those:
+pushing a tag runs the publish workflow, which builds the wheel from that tag.
+The package is the same single file the extension runs — no dependencies, no
+module — so the two routes differ in timing, never in behaviour. `pip install
+gh-agile` works too; `pipx` keeps it out of every other environment. A copy on
+PATH is not yet a `gh` extension, because `gh` runs only what is in its own
+extensions directory: `gh-agile install` links it in, and refuses to replace an
+`agile` extension `gh` already has.
+
+Either way, every commit to `main` is held to a promise rather than an absence of
+process:
 
 - `make lint` and the full offline suite green on **every supported
   interpreter**, 3.10 through 3.13, including the floor — a floor no job tests
@@ -66,21 +81,25 @@ That is a promise about `main` rather than an absence of process:
 - anything that **writes** to a board is run live against the sandbox before it
   merges
 
-**Tags exist so a build can be named, and nothing installs from one.** They are
-cut at points worth referring back to, so a bug report, a changelog entry or a
-`git describe` can say *which* build rather than quoting a commit:
+**Tags name builds, and PyPI publishes them.** They are cut at points worth
+referring back to, so a bug report, a changelog entry or a `git describe` can say
+*which* build rather than quoting a commit. `gh agile --version` says which you
+have — a describe for the extension, a version for the package:
 
 ```
-v0.3.0-7-g440d984
+gh-agile v0.6.0-7-g440d984  (main)
+gh-agile 0.6.0  (package)
 ```
 
 The leading `0.` says the command line may still change before 1.0; how it
 changes is the [deprecation policy](#deprecation-policy).
 The number is a counter rather than a measurement — it starts at `0.3.0` because
-nothing is gained by pretending the tool is younger than it is. **Do not pin to
-a tag.** `gh extension install --pin` works, and a pinned clone stops receiving
-fixes silently, which is how an installed extension ends up older than the git
-hook that calls it.
+nothing is gained by pretending the tool is younger than it is. **Do not pin the
+extension.** `gh extension install --pin` works, and a pinned clone stops
+receiving fixes silently, which is how an installed extension ends up older than
+the git hook that calls it. Pinning the package — `pipx install gh-agile==0.6.0`
+— is the ordinary choice it is for any package, and upgrading is how a fix
+reaches you.
 
 **Status: beta.**
 
