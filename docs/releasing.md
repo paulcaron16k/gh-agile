@@ -15,10 +15,22 @@ version, never by replacing this one. Everything below happens *before* the tag.
 No token is stored anywhere. PyPI exchanges the workflow's OIDC identity for a
 short-lived upload token, and is told in advance which workflow to trust.
 
-1. **GitHub environments.** Repository → Settings → Environments: create `pypi`
-   and `testpypi`. Give `pypi` a required reviewer (yourself), so a pushed tag
-   waits for one click before anything uploads -- a second gate that costs
-   nothing.
+1. **GitHub environments.** Repository → Settings → Environments: `pypi` and
+   `testpypi`. The workflow creates each on its first run if it is missing.
+   **`pypi` has no required reviewer, deliberately.** A reviewer would pause every
+   tag's upload for one click, and the click guards less than it appears to:
+   - With one developer, the reviewer is the person who pushed the tag.
+   - A token belonging to the reviewer -- yours, or an agent's working under it --
+     can approve the run through the API.
+   - "Prevent self-review" would close that gap, but it needs a second person.
+
+   So it stops only a stray tag push, which a yank on PyPI recovers from, at the
+   cost of a click on every release. That is the gate #262 declined for branch
+   protection: one that would only ever be clicked through. A release is guarded
+   instead by §3: the security review before the tag, with its result written
+   into the release note. The workflow then refuses a wheel that is not the
+   script, or one whose version is not the tag. Add a reviewer when a second
+   person can be it.
 2. **PyPI pending publisher.** pypi.org → Account → Publishing → *Add a pending
    publisher*: project `gh-agile`, owner `paulcaron16k`, repository `gh-agile`,
    workflow `publish.yml`, environment `pypi`. "Pending" because the project does
@@ -95,6 +107,7 @@ git push origin vX.Y.Z
 ```
 
 The workflow builds, checks the wheel holds only the script, checks the wheel's
-version *is* the tag, then waits on the `pypi` environment's reviewer. Approve it
-in the run. Then, in a clean environment: `pipx install gh-agile`,
-`gh-agile --version`, `gh-agile install`, `gh agile --version`.
+version *is* the tag, and uploads -- with no reviewer to wait on (§1), so the
+push is the last chance to stop it. Then, in a clean environment:
+`pipx install gh-agile`, `gh-agile --version`, `gh-agile install`,
+`gh agile --version`.
