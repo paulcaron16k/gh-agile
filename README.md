@@ -255,10 +255,19 @@ issue cannot, and `gh agile sprint reconcile` rebuilds the field from them.
 
 ```bash
 gh agile board view sprint        # the current sprint
+gh agile sync                     # add issues created manually (not this tool) to Project boards
 gh agile board view backlog       # everything not in a sprint yet
 gh agile board view roadmap       # the epics, by when their work began
 gh agile issue status             # stand-up: yours, waiting on review, unassigned
 ```
+
+**A board shows only the issues added to its project.** A Jira board is a query:
+its JQL filter runs over every issue, so a new issue appears on its own. A GitHub
+Project is a collection, and its boards filter what is in it. An issue filed in
+the web UI, with `gh issue create`, or in another repository of the profile is
+on no board until something adds it. GitHub's *Auto-add* covers one repository,
+and only issues created or updated after it is turned on. `sync` adds the rest;
+issues this tool creates are added as they are made.
 
 **Any unique part of a board's name is enough** — `sprint` finds *Sprint
 board*, `backlog` finds *Backlog*. A part that matches two boards is refused,
