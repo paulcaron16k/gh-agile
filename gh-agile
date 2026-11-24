@@ -913,6 +913,42 @@ def find_config(explicit: str | None = None) -> pathlib.Path | None:
     return None
 
 
+def profile_pointer(path: pathlib.Path | None) -> str | None:
+    """The `config_from` this file holds, or None -- read from the file itself.
+
+    `args._config` cannot answer it: `read_config` has already followed the
+    pointer and returns the main repository's profile with `config_from`
+    removed, which is exactly what made every writer save that profile over the
+    pointer (#324).
+    """
+    if path is None or not path.is_file():
+        return None
+    try:
+        return (json.loads(path.read_text()) or {}).get("config_from")
+    except (json.JSONDecodeError, AttributeError):
+        return None
+
+
+def pointer_refusal(path: pathlib.Path, pointer: str) -> str:
+    return (f"{path} is a pointer to {pointer}'s profile, so the profile is edited "
+            f"there, not here.\n"
+            f"  Run this from a clone of {pointer}. Writing it here would replace "
+            f"the pointer with\n  a copy, and a copy drifts from the profile it "
+            f"was copied from.")
+
+
+def profile_target(args) -> pathlib.Path:
+    """Where a command that changes the profile writes it, refusing a pointer.
+
+    Called before the command does anything else, so a refusal costs nothing:
+    `board create --save` would otherwise have created the board first.
+    """
+    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    if pointer := profile_pointer(target):
+        sys.exit(pointer_refusal(target, pointer))
+    return target
+
+
 def config_from_problem(found, pointer: str) -> str:
     """Why a `config_from` pointer could not be followed -- told apart properly.
 
@@ -2022,6 +2058,26 @@ def cmd_init(args) -> int:
     target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
     declared = (config.get("project") or {}).get("number")
 
+    # **A supporting repository's profile is a pointer, and `init` leaves it
+    # one** (#324). The config above is the main repository's, followed; writing
+    # it back here replaced `{"config_from": ...}` with a copy that then drifted.
+    # A bare `init` is still what a fresh clone runs -- it installs the hook and
+    # converges the project from the main profile -- but a flag that would
+    # change the profile is a change to make in the main repository.
+    pointer = profile_pointer(target)
+    if pointer:
+        given = [flag for flag, value in (
+            ("--key", args.key), ("--title", args.title),
+            ("--sprint-template", args.sprint_template),
+            ("--title-prefix", args.title_prefix)) if value is not None]
+        if given or not declared:
+            why = (f"{', '.join(given)} would change the profile"
+                   if given else f"{pointer}'s profile names no project yet")
+            sys.exit(f"{why}.\n" + pointer_refusal(target, pointer)
+                     + "\n  Here, a bare `gh agile init` installs this clone's hook "
+                       "and converges the project.")
+    resolved = json.loads(json.dumps(config))
+
     # Every refusal first, before anything is created. An issue number is never
     # reused and a project is awkward to delete; a run that fails at step four
     # should not have written steps one to three.
@@ -2048,7 +2104,7 @@ def cmd_init(args) -> int:
     if args.title_prefix is not None:
         title_prefix_mode({"project": {"issue_title_prefix": args.title_prefix}})
 
-    print(f"  profile: {target}")
+    print(f"  profile: {target}" + (f" -> {pointer}" if pointer else ""))
 
     # 1. The project. `project create` writes number, owner, name and key.
     if declared:
@@ -2094,9 +2150,16 @@ def cmd_init(args) -> int:
         if not any(b.get("name") == board["name"]
                    for b in (config.get("boards") or [])):
             config.setdefault("boards", []).append(dict(board))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-    print(f"  keys, cadence and {len(boards)} board(s) recorded")
+    if not pointer:
+        save_profile(config, target)
+        print(f"  keys, cadence and {len(boards)} board(s) recorded")
+    elif config != resolved:
+        # Defaults `init` would have written -- an owner, a prefix, a starter
+        # board -- belong in the main profile, and are used from memory here.
+        print(f"  {pointer}'s profile is missing defaults `init` writes; "
+              f"run `gh agile init` there to record them")
+    else:
+        print(f"  {target} left pointing at {pointer}")
 
     # 3. Fields, labels and the boards -- `setup` converges all three, so there
     #    is one mechanism for creating a board rather than two.
@@ -6885,6 +6948,9 @@ def cmd_board(args) -> int:
                                    f"/views/{view['number']}")
         return cmd_board_show(args)
 
+    # Asked before the board is made: a refusal after it would leave a board
+    # nobody recorded (#324).
+    target = profile_target(args) if args.save else None
     result = make_board(args.owner, args.project, args.name, args.type,
                         resolve_filter_initiatives(args._config, args.filter, current_repo()))
     print(f"  {result['action']} #{result['number']}: {result['name']} "
@@ -6896,8 +6962,7 @@ def cmd_board(args) -> int:
         boards.append({"name": args.name, "type": args.type,
                        **({"filter": args.filter} if args.filter else {})})
         config["boards"] = boards
-        target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
-        target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        save_profile(config, target)
         print(f"  saved to {target}; `gh agile init` will keep it in step")
     return 0
 
@@ -6908,8 +6973,7 @@ def write_sprint_template(config: dict, template: str, path) -> dict:
     settings.setdefault("name_template", SPRINT_DEFAULTS["name_template"])
     settings.setdefault("autocreate", True)
     config["sprint"] = settings
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+    save_profile(config, path)
     return settings
 
 
@@ -6970,6 +7034,14 @@ def backfill_titles(args, config: dict, mode: str) -> int:
 
 
 def save_profile(config: dict, target: pathlib.Path) -> None:
+    """Write the profile -- the one place it is written.
+
+    Refuses a `config_from` pointer as a backstop: each command that writes
+    already asked `profile_target`, before doing anything, and this catches one
+    that forgets. The pointer is the point of a supporting repository (#324).
+    """
+    if pointer := profile_pointer(target):
+        sys.exit(pointer_refusal(target, pointer))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
 
@@ -7046,7 +7118,7 @@ def cmd_project_edit(args) -> int:
     until #203; the flag names are now `init`'s, which sets the same two.
     """
     config = args._config
-    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    target = profile_target(args)
     if not args.sprint_template and not args.title_prefix:
         sys.exit("nothing to change. Give --sprint-template, --title-prefix, or both.")
     if (args.backfill or args.dry_run) and not args.title_prefix:
@@ -7124,7 +7196,7 @@ def cmd_key_add(args) -> int:
     reads the config file.
     """
     config = args._config
-    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    target = profile_target(args)
     if problem := key_problem(args.key):
         sys.exit(f"{args.key!r}: {problem}")
     entries = [e for e in profile_keys(config) if e.get("key") != args.key]
@@ -7179,7 +7251,7 @@ def cmd_key_delete(args) -> int:
     `label:key:KEY` keeps showing work nothing will ever file again.
     """
     config = args._config
-    target = find_config(getattr(args, "config", None)) or pathlib.Path(CONFIG_PATH)
+    target = profile_target(args)
     entries = profile_keys(config)
     if not any(e.get("key") == args.key for e in entries):
         known = ", ".join(e.get("key") for e in entries) or "none"

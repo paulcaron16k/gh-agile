@@ -291,6 +291,14 @@ already holds, and cannot rot into a dead raw-content URL. One hop only: a
 pointer to a pointer is a loop waiting to happen, so the tool ignores
 `config_from` in a profile it has already followed.
 
+**A pointer stays a pointer** (#324). Every command that changes the profile --
+`init` with a flag, `key add`, `key delete`, `project edit`, `board create
+--save` -- refuses in a supporting repository, before it acts, and names the main
+one to run it from. It used to write the main profile it had read back over the
+pointer, leaving a copy that drifted. A bare `gh agile init` there still runs: it
+installs the clone's post-merge hook and converges the project from the main
+profile, and leaves the file as it was.
+
 Resolution order, first match wins: `.github/agile.json` → `agile.json` →
 `.gh_agile.json`.
 
