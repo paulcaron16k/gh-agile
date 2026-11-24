@@ -137,8 +137,9 @@ gh agile key add PARTS --repo acme/widget-parts --name "Widget parts"
 
 One profile, so the project, keys and cadence cannot drift between copies. The
 pointer is read through the API, so it works for private repositories.
-Change the profile from the main repository only. Commands that write it, `init`
-and `key add` among them, would replace a pointer with a full copy.
+The profile is changed from the main repository: in a supporting one, `init`'s
+flags, `key add` and the rest refuse and name it. A bare `gh agile init` there
+installs the post-merge hook and leaves the pointer alone.
 
 `gh agile sync` then puts every key's issues on the one board. Full details:
 [Where to check it in when a project spans repositories](https://github.com/paulcaron16k/gh-agile/blob/main/USER_GUIDE.md#where-to-check-it-in-when-a-project-spans-repositories)
