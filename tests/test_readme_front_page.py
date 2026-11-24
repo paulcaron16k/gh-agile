@@ -28,8 +28,9 @@ SECTIONS = ["Contents", "What it does", "Install", "Set up a project: `gh agile 
             "Get the data out", "Commands", "Learn more", "License"]
 
 #: Long enough for the example and the samples, short enough to be a front page.
-#: The README it replaced was 1,175 lines.
-MAX_LINES = 450
+#: The README it replaced was 1,175 lines. Folded `<details>` count too: closed,
+#: they cost a reader one line, but the cap is what keeps them from growing.
+MAX_LINES = 500
 
 
 @pytest.fixture(scope="module")
