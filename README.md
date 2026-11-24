@@ -107,8 +107,44 @@ That one command creates:
 
 </details>
 
-Run it again whenever you like: it converges rather than duplicating. A
-teammate's fresh clone needs only `gh agile init`.
+Run it again whenever you like: it converges rather than duplicating.
+
+**A teammate runs it with no flags.** The flags' answers are saved in the
+checked-in `.github/agile.json`, so a fresh clone already has the project, keys
+and cadence. A clone does not carry `.git/hooks`, so a bare `gh agile init`
+installs the post-merge hook and checks the project still matches the profile.
+
+<details>
+<summary><strong>Setting up a multi-repo project</strong></summary>
+
+One project can span several repositories, each with its own key.
+
+**1. The main repository holds the profile** — the one the project is named
+for. Run `init` there, then add a key for each other repository. Every key must
+be unique:
+
+```bash
+gh agile init --key WIDG -t "Widgets" --sprint-template 2-week
+gh agile key add PARTS --repo acme/widget-parts --name "Widget parts"
+```
+
+**2. Every other repository carries a pointer, and nothing else**, as its own
+`.github/agile.json`:
+
+```json
+{ "config_from": "acme/widgets" }
+```
+
+One profile, so the project, keys and cadence cannot drift between copies. The
+pointer is read through the API, so it works for private repositories.
+Change the profile from the main repository only. Commands that write it, `init`
+and `key add` among them, would replace a pointer with a full copy.
+
+`gh agile sync` then puts every key's issues on the one board. Full details:
+[Where to check it in when a project spans repositories](https://github.com/paulcaron16k/gh-agile/blob/main/USER_GUIDE.md#where-to-check-it-in-when-a-project-spans-repositories)
+and [the project profile](https://github.com/paulcaron16k/gh-agile/blob/main/REFERENCE.md#the-project-profile).
+
+</details>
 
 ---
 
